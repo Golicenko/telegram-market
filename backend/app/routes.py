@@ -8,14 +8,16 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import get_current_user, require_admin
-from .bot import send_bot_notification
+from .bot import answer_pre_checkout_query, create_star_invoice_link, send_bot_notification
 from .config import Settings, get_settings
 from .database import get_session
-from .models import AccountListing, AdminAction, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, User, Wallet, WalletTransaction, WithdrawalRequest
+from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportMessage, SupportTicket, User, Wallet, WalletTransaction, WithdrawalRequest
 from .schemas import (
     AccountListingCreate,
     AccountListingOut,
     AccountListingUpdate,
+    AdvertisementOut,
+    AdvertisementUpsert,
     AdminWithdrawalOut,
     BalanceAdjustmentCreate,
     ConversationMessageOut,
@@ -32,6 +34,14 @@ from .schemas import (
     PriceOfferCreate,
     PriceOfferOut,
     ProfileOut,
+    StarPaymentIntentCreate,
+    StarPaymentIntentOut,
+    StarPaymentStatusOut,
+    SupportReplyCreate,
+    SupportMessageOut,
+    SupportStatusUpdate,
+    SupportTicketCreate,
+    SupportTicketOut,
     UniqueListingCreate,
     UserOut,
     WalletOut,
@@ -49,6 +59,7 @@ from .services import (
     create_listing,
     create_notification,
     create_price_offer,
+    create_star_payment_intent,
     create_withdrawal,
     decide_withdrawal,
     delete_account_listing,
@@ -65,6 +76,7 @@ from .services import (
     update_account_listing,
     update_listing,
     update_special_listing,
+    validate_star_pre_checkout,
 )
 
 
@@ -147,9 +159,39 @@ async def queue_counterparty_notification(
         background_tasks.add_task(send_bot_notification, recipient.telegram_id, text)
 
 
+async def support_ticket_out(session: AsyncSession, ticket: SupportTicket) -> SupportTicketOut:
+    messages = list(
+        (
+            await session.scalars(
+                select(SupportMessage)
+                .where(SupportMessage.ticket_id == ticket.id)
+                .order_by(SupportMessage.created_at)
+            )
+        ).all()
+    )
+    return SupportTicketOut.model_validate(ticket).model_copy(
+        update={"messages": [SupportMessageOut.model_validate(message) for message in messages]}
+    )
+
+
+def validate_image_content(content: bytes, content_type: str | None) -> str:
+    signatures = {
+        "image/jpeg": (b"\xff\xd8\xff", ".jpg"),
+        "image/png": (b"\x89PNG\r\n\x1a\n", ".png"),
+        "image/webp": (b"RIFF", ".webp"),
+    }
+    signature = signatures.get(content_type or "")
+    if not signature:
+        raise HTTPException(status_code=415, detail="Разрешены только JPG, PNG и WEBP")
+    prefix, extension = signature
+    if not content.startswith(prefix) or (content_type == "image/webp" and content[8:12] != b"WEBP"):
+        raise HTTPException(status_code=415, detail="Содержимое файла не соответствует изображению")
+    return extension
+
+
 @router.get("/health")
 async def health():
-    return {"status": "ok", "currency": "AF Coins", "stars_invoice_enabled": False}
+    return {"status": "ok", "currency": "AF Coins", "stars_invoice_enabled": bool(get_settings().bot_token)}
 
 
 @router.get("/me", response_model=MeOut)
@@ -163,15 +205,106 @@ async def upload_image(
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
 ):
-    allowed = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
-    if file.content_type not in allowed:
-        raise HTTPException(status_code=415, detail="Only JPG, PNG and WEBP images are supported")
-    content = await file.read(5 * 1024 * 1024 + 1)
-    if len(content) > 5 * 1024 * 1024:
+    max_bytes = get_settings().upload_max_bytes
+    content = await file.read(max_bytes + 1)
+    if len(content) > max_bytes:
         raise HTTPException(status_code=413, detail="Image exceeds 5 MB")
-    filename = f"{user.id}-{uuid.uuid4().hex}{allowed[file.content_type]}"
+    extension = validate_image_content(content, file.content_type)
+    filename = f"{user.id}-{uuid.uuid4().hex}{extension}"
     (UPLOAD_DIR / filename).write_bytes(content)
     return {"url": f"/uploads/{filename}"}
+
+
+@router.post("/admin/advertisement/upload", status_code=201)
+async def upload_advertisement_image(
+    file: UploadFile = File(...),
+    admin: User = Depends(require_admin),
+):
+    max_bytes = 2 * 1024 * 1024
+    content = await file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=413, detail="Рекламное изображение не должно превышать 2 МБ")
+    extension = validate_image_content(content, file.content_type)
+    filename = f"advertisement-{admin.id}-{uuid.uuid4().hex}{extension}"
+    (UPLOAD_DIR / filename).write_bytes(content)
+    return {"url": f"/uploads/{filename}"}
+
+
+@router.get("/advertisement", response_model=AdvertisementOut | None)
+async def active_advertisement(session: AsyncSession = Depends(get_session)):
+    return await session.scalar(
+        select(Advertisement)
+        .where(Advertisement.is_active.is_(True))
+        .order_by(Advertisement.updated_at.desc())
+        .limit(1)
+    )
+
+
+@router.get("/admin/advertisement", response_model=AdvertisementOut | None)
+async def get_advertisement(
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    return await session.scalar(select(Advertisement).order_by(Advertisement.updated_at.desc()).limit(1))
+
+
+@router.put("/admin/advertisement", response_model=AdvertisementOut)
+async def upsert_advertisement(
+    payload: AdvertisementUpsert,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    async with session.begin():
+        advertisement = await session.scalar(
+            select(Advertisement).order_by(Advertisement.updated_at.desc()).with_for_update().limit(1)
+        )
+        if advertisement:
+            advertisement.image_url = payload.image_url
+            advertisement.link_url = payload.link_url
+            advertisement.is_active = payload.is_active
+            advertisement.admin_id = admin.id
+        else:
+            advertisement = Advertisement(
+                image_url=payload.image_url,
+                link_url=payload.link_url,
+                is_active=payload.is_active,
+                admin_id=admin.id,
+            )
+            session.add(advertisement)
+            await session.flush()
+        session.add(
+            AdminAction(
+                admin_id=admin.id,
+                action="advertisement_upsert",
+                target_type="advertisement",
+                target_id=advertisement.id,
+            )
+        )
+    await session.refresh(advertisement)
+    return advertisement
+
+
+@router.delete("/admin/advertisement", status_code=204)
+async def delete_advertisement(
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    async with session.begin():
+        advertisement = await session.scalar(
+            select(Advertisement).order_by(Advertisement.updated_at.desc()).with_for_update().limit(1)
+        )
+        if not advertisement:
+            raise HTTPException(status_code=404, detail="Реклама не найдена")
+        advertisement_id = advertisement.id
+        await session.delete(advertisement)
+        session.add(
+            AdminAction(
+                admin_id=admin.id,
+                action="advertisement_delete",
+                target_type="advertisement",
+                target_id=advertisement_id,
+            )
+        )
 
 
 @router.get("/listings", response_model=list[ListingOut])
@@ -208,6 +341,22 @@ async def add_regular_listing(
 ):
     listing = await create_listing(session, user, payload, listing_type="regular")
     return await listing_out(session, listing)
+
+
+@router.get("/listings/{listing_id}", response_model=ListingOut)
+async def get_listing_details(
+    listing_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    listing = await session.get(Listing, listing_id)
+    if not listing or listing.status == "deleted":
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if listing.seller_id != user.id:
+        listing.views_count += 1
+        await session.commit()
+        await session.refresh(listing)
+    return await listing_out(session, listing, user.id)
 
 
 @router.patch("/listings/{listing_id}", response_model=ListingOut)
@@ -539,9 +688,27 @@ async def wallet(user: User = Depends(get_current_user), session: AsyncSession =
     return await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
 
 
-@router.post("/wallet/star-payments/intent", status_code=501)
-async def create_star_payment_intent(user: User = Depends(get_current_user)):
-    raise HTTPException(status_code=501, detail="Telegram Stars invoice creation is intentionally deferred to the next stage")
+@router.post("/wallet/star-payments/intent", response_model=StarPaymentIntentOut, status_code=201)
+async def add_star_payment_intent(
+    payload: StarPaymentIntentCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    intent = await create_star_payment_intent(session, user, payload.amount, create_star_invoice_link)
+    return StarPaymentIntentOut(id=intent.id, invoice_url=intent.invoice_link, amount=intent.xtr_amount, status=intent.status)
+
+
+@router.get("/wallet/star-payments/intents/{intent_id}", response_model=StarPaymentStatusOut)
+async def star_payment_status(
+    intent_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    intent = await session.get(StarPaymentIntent, intent_id)
+    if not intent or intent.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Счёт не найден")
+    wallet_value = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
+    return StarPaymentStatusOut(id=intent.id, status=intent.status, amount=intent.xtr_amount, wallet=wallet_value)
 
 
 @router.get("/withdrawals", response_model=list[WithdrawalOut])
@@ -750,6 +917,158 @@ async def read_notification(notification_id: uuid.UUID, user: User = Depends(get
     await session.commit()
 
 
+@router.get("/support/tickets", response_model=list[SupportTicketOut])
+async def support_tickets(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    tickets = list(
+        (
+            await session.scalars(
+                select(SupportTicket)
+                .where(SupportTicket.user_id == user.id)
+                .order_by(SupportTicket.updated_at.desc())
+            )
+        ).all()
+    )
+    return [await support_ticket_out(session, ticket) for ticket in tickets]
+
+
+@router.post("/support/tickets", response_model=SupportTicketOut, status_code=201)
+async def create_support_ticket(
+    payload: SupportTicketCreate,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    async with session.begin():
+        ticket = SupportTicket(
+            user_id=user.id,
+            topic=payload.topic.strip(),
+            status="open",
+            screenshot_url=payload.screenshot_url,
+        )
+        session.add(ticket)
+        await session.flush()
+        session.add(SupportMessage(ticket_id=ticket.id, sender_id=user.id, body=payload.message.strip()))
+        administrators = list(
+            (
+                await session.scalars(
+                    select(User).where(User.role == "admin", User.bot_started.is_(True))
+                )
+            ).all()
+        )
+        for administrator in administrators:
+            await create_notification(
+                session,
+                administrator.id,
+                "support_ticket",
+                "Новое обращение в поддержку",
+                payload.topic.strip(),
+                {"ticket_id": str(ticket.id)},
+            )
+    for administrator in administrators:
+        background_tasks.add_task(
+            send_bot_notification,
+            administrator.telegram_id,
+            "Новое обращение в поддержку AUTOFLOW MARKET",
+        )
+    return await support_ticket_out(session, ticket)
+
+
+@router.post("/support/tickets/{ticket_id}/messages", response_model=SupportMessageOut, status_code=201)
+async def reply_to_support_ticket(
+    ticket_id: uuid.UUID,
+    payload: SupportReplyCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    ticket = await session.get(SupportTicket, ticket_id)
+    if not ticket or ticket.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Обращение не найдено")
+    if ticket.status == "closed":
+        raise HTTPException(status_code=409, detail="Закрытое обращение нельзя дополнить")
+    message = SupportMessage(ticket_id=ticket.id, sender_id=user.id, body=payload.message.strip())
+    ticket.status = "open"
+    session.add(message)
+    await session.commit()
+    await session.refresh(message)
+    return message
+
+
+@router.get("/admin/support/tickets", response_model=list[SupportTicketOut])
+async def admin_support_tickets(
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    tickets = list(
+        (
+            await session.scalars(
+                select(SupportTicket).order_by(SupportTicket.updated_at.desc())
+            )
+        ).all()
+    )
+    return [await support_ticket_out(session, ticket) for ticket in tickets]
+
+
+@router.post("/admin/support/tickets/{ticket_id}/messages", response_model=SupportMessageOut, status_code=201)
+async def admin_reply_to_support_ticket(
+    ticket_id: uuid.UUID,
+    payload: SupportReplyCreate,
+    background_tasks: BackgroundTasks,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    ticket = await session.get(SupportTicket, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Обращение не найдено")
+    owner = await session.get(User, ticket.user_id)
+    message = SupportMessage(ticket_id=ticket.id, sender_id=admin.id, body=payload.message.strip())
+    ticket.status = "in_progress"
+    session.add(message)
+    await create_notification(
+        session,
+        ticket.user_id,
+        "support_reply",
+        "Ответ поддержки",
+        payload.message.strip()[:240],
+        {"ticket_id": str(ticket.id)},
+    )
+    await session.commit()
+    await session.refresh(message)
+    if owner and owner.bot_started:
+        background_tasks.add_task(
+            send_bot_notification,
+            owner.telegram_id,
+            "Поддержка AUTOFLOW MARKET ответила на ваше обращение",
+        )
+    return message
+
+
+@router.patch("/admin/support/tickets/{ticket_id}", response_model=SupportTicketOut)
+async def update_support_ticket_status(
+    ticket_id: uuid.UUID,
+    payload: SupportStatusUpdate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    ticket = await session.get(SupportTicket, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Обращение не найдено")
+    ticket.status = payload.status
+    session.add(
+        AdminAction(
+            admin_id=admin.id,
+            action=f"support_{payload.status}",
+            target_type="support_ticket",
+            target_id=ticket.id,
+        )
+    )
+    await session.commit()
+    await session.refresh(ticket)
+    return await support_ticket_out(session, ticket)
+
+
 @router.get("/profile", response_model=ProfileOut)
 async def profile(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     wallet_value = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
@@ -797,6 +1116,18 @@ async def telegram_webhook(
 ):
     if settings.telegram_webhook_secret and x_telegram_bot_api_secret_token != settings.telegram_webhook_secret:
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
+    pre_checkout = update.get("pre_checkout_query") or {}
+    if pre_checkout.get("id"):
+        sender = pre_checkout.get("from") or {}
+        accepted, error_message = await validate_star_pre_checkout(
+            session,
+            int(sender.get("id") or 0),
+            str(pre_checkout.get("invoice_payload") or ""),
+            str(pre_checkout.get("currency") or ""),
+            int(pre_checkout.get("total_amount") or 0),
+        )
+        await answer_pre_checkout_query(pre_checkout["id"], accepted, error_message)
+        return {"ok": True}
     message = update.get("message") or {}
     sender = message.get("from") or {}
     if message.get("text") == "/start" and sender.get("id"):
@@ -823,19 +1154,3 @@ async def telegram_webhook(
         if credited:
             background_tasks.add_task(send_bot_notification, int(sender["id"]), f"Баланс AUTOFLOW MARKET пополнен на {payment['total_amount']} AF Coins")
     return {"ok": True}
-    CounterOfferCreate,
-    DealResolution,
-    PriceOfferCreate,
-    PriceOfferOut,
-    create_account_listing,
-    create_price_offer,
-    delete_account_listing,
-    delete_listing,
-    get_or_create_conversation,
-    promote_listing,
-    resolve_dispute,
-    respond_price_offer,
-    send_conversation_message,
-    set_listing_publication,
-    update_account_listing,
-    update_listing,

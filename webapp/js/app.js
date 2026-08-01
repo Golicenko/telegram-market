@@ -12,6 +12,8 @@
     unique: [],
     accounts: [],
     cart: [],
+    advertisement: null,
+    supportTickets: [],
     profile: null,
     catalog: { brands: [] },
     photoFiles: [],
@@ -68,6 +70,13 @@
     adminListings: document.getElementById("adminListings"),
     adminDeals: document.getElementById("adminDeals"),
     adminUserHistory: document.getElementById("adminUserHistory"),
+    marketAdvertisement: document.getElementById("marketAdvertisement"),
+    marketAdvertisementImage: document.getElementById("marketAdvertisementImage"),
+    supportForm: document.getElementById("supportForm"),
+    supportTickets: document.getElementById("supportTickets"),
+    adminSupportTickets: document.getElementById("adminSupportTickets"),
+    advertisementForm: document.getElementById("advertisementForm"),
+    advertisementPreview: document.getElementById("advertisementPreview"),
   };
 
   initTelegram();
@@ -86,10 +95,8 @@
 
   function bindEvents() {
     document.addEventListener("click", handleClick);
-    document.getElementById("closeButton").addEventListener("click", closeApp);
     document.getElementById("infoButton").addEventListener("click", () => openDialog(elements.infoModal));
     document.getElementById("settingsButton").addEventListener("click", () => notify("Настройки появятся в следующей версии"));
-    document.querySelectorAll("[data-ad-banner]").forEach((button) => button.addEventListener("click", () => notify("Размещение рекламы будет подключено позже")));
     elements.extraFiltersButton.addEventListener("click", toggleExtraFilters);
     document.getElementById("resetFiltersButton").addEventListener("click", resetFilters);
     document.getElementById("applyFiltersButton").addEventListener("click", renderListings);
@@ -103,13 +110,16 @@
     elements.chatForm.addEventListener("submit", sendChatMessage);
     elements.withdrawForm.addEventListener("submit", createWithdrawal);
     document.getElementById("accountDraftForm").addEventListener("submit", submitAccountListing);
+    elements.supportForm.addEventListener("submit", submitSupportTicket);
+    elements.advertisementForm.addEventListener("submit", submitAdvertisement);
+    document.getElementById("deleteAdvertisementButton").addEventListener("click", deleteAdvertisement);
     document.getElementById("balanceAdjustmentForm").addEventListener("submit", createBalanceAdjustment);
     document.getElementById("adminUserSearch").addEventListener("submit", searchAdminUsers);
   }
 
   async function bootstrap() {
     try {
-      const [catalog, me, regular, unique, accounts, cart, profile] = await Promise.all([
+      const [catalog, me, regular, unique, accounts, cart, profile, advertisement] = await Promise.all([
         fetch("data/vehicle_catalog.json").then((response) => response.json()),
         api.request("/me"),
         api.request("/listings?type=regular"),
@@ -117,6 +127,7 @@
         api.request("/accounts"),
         api.request("/cart"),
         api.request("/profile"),
+        api.request("/advertisement"),
       ]);
       state.catalog = catalog;
       state.me = me;
@@ -125,6 +136,7 @@
       state.accounts = accounts;
       state.cart = cart;
       state.profile = profile;
+      state.advertisement = advertisement;
       state.serverAvailable = true;
       applyRole();
       renderUser();
@@ -139,13 +151,14 @@
 
   async function refreshMarketplace() {
     if (!state.serverAvailable) return;
-    const [regular, unique, accounts, cart, profile, me] = await Promise.all([
+    const [regular, unique, accounts, cart, profile, me, advertisement] = await Promise.all([
       api.request("/listings?type=regular"),
       api.request("/listings?type=unique"),
       api.request("/accounts"),
       api.request("/cart"),
       api.request("/profile"),
       api.request("/me"),
+      api.request("/advertisement"),
     ]);
     state.regular = regular;
     state.unique = unique;
@@ -153,6 +166,7 @@
     state.cart = cart;
     state.profile = profile;
     state.me = me;
+    state.advertisement = advertisement;
     applyRole();
     renderUser();
     updateFilterOptions();
@@ -169,9 +183,16 @@
     if (target.closest("[data-open-cart]")) return void openSecondary("cart");
     if (target.closest("[data-open-topup]")) return void openSecondary("topup");
     if (target.closest("[data-open-withdraw]")) return void openSecondary("withdraw");
+    if (target.closest("[data-open-support]")) return void openSupport();
     if (target.closest("[data-open-admin]")) return void openAdminPanel();
     if (target.closest("[data-open-frozen]")) return void openFrozenDeals();
     if (target.closest("[data-open-info]")) return void openDialog(elements.infoModal);
+    const topupAmount = target.closest("[data-topup-amount]");
+    if (topupAmount) return void (document.getElementById("topupAmount").value = topupAmount.dataset.topupAmount);
+    if (target.closest("[data-ad-banner]") && !state.advertisement?.link_url) {
+      event.preventDefault();
+      return void notify("Для баннера не указана ссылка");
+    }
     if (target.closest("[data-back]")) return void navigate(state.previousView || "market");
 
     const closeDialog = target.closest("[data-close-dialog]");
@@ -190,6 +211,8 @@
     if (deleteListingButton) return void deleteListing(deleteListingButton.dataset.deleteListing);
     const promoteListingButton = target.closest("[data-promote-listing]");
     if (promoteListingButton) return void promoteListing(promoteListingButton.dataset.promoteListing);
+    const openListingButton = target.closest("[data-open-listing]");
+    if (openListingButton) return void openListingDetails(openListingButton.dataset.openListing);
     const cartRemove = target.closest("[data-cart-remove]");
     if (cartRemove) return void removeFromCart(cartRemove.dataset.cartRemove);
     const profileTab = target.closest("[data-profile-tab]");
@@ -219,6 +242,10 @@
     if (listingAction) return void adminListingAction(listingAction);
     const resolveAction = target.closest("[data-resolve-deal]");
     if (resolveAction) return void resolveAdminDeal(resolveAction);
+    const supportReply = target.closest("[data-support-reply]");
+    if (supportReply) return void replySupportTicket(supportReply.dataset.supportReply, supportReply.dataset.adminReply === "true");
+    const supportStatus = target.closest("[data-support-status]");
+    if (supportStatus) return void setSupportTicketStatus(supportStatus.dataset.ticketId, supportStatus.dataset.supportStatus);
   }
 
   async function navigate(viewName) {
@@ -230,13 +257,13 @@
       view.hidden = !active;
       view.classList.toggle("is-active", active);
     });
-    const navView = ["add", "cart", "deal-chat"].includes(viewName) ? "market" : ["topup", "withdraw"].includes(viewName) ? "profile" : viewName === "admin" ? "more" : viewName;
+    const navView = ["add", "cart", "deal-chat"].includes(viewName) ? "market" : ["topup", "withdraw"].includes(viewName) ? "profile" : ["admin", "support"].includes(viewName) ? "more" : viewName;
     elements.navButtons.forEach((button) => {
       const active = button.dataset.navTarget === navView;
       button.classList.toggle("is-active", active);
       active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
     });
-    elements.shell.classList.toggle("is-focused", ["add", "topup", "cart", "profile", "deal-chat", "withdraw", "account-draft", "admin"].includes(viewName));
+    elements.shell.classList.toggle("is-focused", ["add", "topup", "cart", "profile", "deal-chat", "withdraw", "support", "account-draft", "admin"].includes(viewName));
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (state.serverAvailable && ["market", "unique", "accounts", "profile", "cart"].includes(viewName)) {
       try { await refreshMarketplace(); } catch (error) { notify(error.message); }
@@ -244,7 +271,7 @@
   }
 
   function openSecondary(viewName) {
-    state.previousView = ["add", "topup", "cart", "deal-chat", "withdraw", "account-draft", "admin"].includes(state.currentView) ? "market" : state.currentView;
+    state.previousView = ["add", "topup", "cart", "deal-chat", "withdraw", "support", "account-draft", "admin"].includes(state.currentView) ? "market" : state.currentView;
     navigate(viewName);
   }
 
@@ -257,7 +284,7 @@
     elements.photoPreview.replaceChildren();
     document.getElementById("listingType").value = mode;
     document.getElementById("addTitle").textContent = mode === "unique" ? "Добавить уникальную машину" : "Добавить автомобиль";
-    document.getElementById("publicationNote").textContent = mode === "unique" ? "Уникальная машина публикуется администратором бесплатно." : "Первое обычное объявление бесплатно. Стоимость следующих публикаций пока не подключена.";
+    document.getElementById("publicationNote").textContent = mode === "unique" ? "Уникальная машина публикуется администратором бесплатно." : "Публикация, редактирование и удаление объявлений всегда бесплатны.";
     document.getElementById("promoteLabel").textContent = mode === "unique" ? "📌 Закрепить объявление бесплатно" : "📌 Закрепить объявление — 15 AF Coins";
     document.getElementById("promotionNote").hidden = mode === "unique";
     elements.modelInput.disabled = true;
@@ -271,11 +298,20 @@
     openSecondary("account-draft");
   }
 
+  async function openSupport() {
+    openSecondary("support");
+    if (!state.serverAvailable) return;
+    try {
+      state.supportTickets = await api.request("/support/tickets");
+      renderSupportTickets();
+    } catch (error) { notify(error.message); }
+  }
+
   async function openAdminPanel() {
     if (state.me?.user.role !== "admin") return notify("Требуется роль администратора");
     openSecondary("admin");
     try {
-      await Promise.all([loadAdminUsers(), loadAdminListings(), loadAdminDeals(), loadAdminWithdrawals()]);
+      await Promise.all([loadAdminUsers(), loadAdminListings(), loadAdminDeals(), loadAdminWithdrawals(), loadAdminSupport(), loadAdvertisementAdmin()]);
     } catch (error) { notify(error.message); }
   }
 
@@ -290,6 +326,21 @@
     renderCart();
     renderProfile();
     renderBalance();
+    renderAdvertisement();
+  }
+
+  function renderAdvertisement() {
+    const advertisement = state.advertisement;
+    const visible = Boolean(advertisement?.is_active && advertisement.image_url);
+    elements.marketAdvertisement.hidden = !visible;
+    if (!visible) {
+      elements.marketAdvertisement.removeAttribute("href");
+      elements.marketAdvertisementImage.removeAttribute("src");
+      return;
+    }
+    elements.marketAdvertisementImage.src = absoluteMediaUrl(advertisement.image_url);
+    if (advertisement.link_url) elements.marketAdvertisement.href = advertisement.link_url;
+    else elements.marketAdvertisement.removeAttribute("href");
   }
 
   function getFilteredRegular() {
@@ -359,13 +410,18 @@
     }
     const stats = document.createElement("div");
     stats.className = "car-stats";
-    [`${listing.power_hp} л.с.`, `${listing.max_speed_kph} км/ч`, statusLabel(listing.status)].forEach((value) => {
+    [`${listing.power_hp} л.с.`, `${listing.max_speed_kph} км/ч`, `Просмотров: ${listing.views_count || 0}`, statusLabel(listing.status)].forEach((value) => {
       const chip = document.createElement("span");
       chip.textContent = value;
       stats.append(chip);
     });
     const actions = document.createElement("div");
     actions.className = "card-actions";
+    const openButton = document.createElement("button");
+    openButton.className = "card-message";
+    openButton.dataset.openListing = listing.id;
+    openButton.textContent = "Открыть";
+    actions.append(openButton);
     const isOwner = state.me?.user.id === listing.seller_id;
     const inCart = state.cart.some((item) => item.id === listing.id);
     const cartButton = document.createElement("button");
@@ -390,7 +446,7 @@
     if (isOwner) {
       const ownerActions = document.createElement("div"); ownerActions.className = "owner-actions";
       const edit = document.createElement("button"); edit.dataset.editListing = listing.id; edit.textContent = "Изменить";
-      const promote = document.createElement("button"); promote.dataset.promoteListing = listing.id; promote.textContent = listing.pinned ? "Закреплено" : (state.me.user.role === "admin" ? "Закрепить бесплатно" : "Закрепить · 15 AF"); promote.disabled = listing.pinned || listing.status !== "active";
+      const promote = document.createElement("button"); promote.dataset.promoteListing = listing.id; promote.textContent = listing.pinned ? "Закреплено" : (state.me.user.role === "admin" && listing.listing_type === "unique" ? "Закрепить бесплатно" : "Закрепить · 15 AF"); promote.disabled = listing.pinned || listing.status !== "active";
       const remove = document.createElement("button"); remove.dataset.deleteListing = listing.id; remove.textContent = "Удалить"; remove.className = "is-danger";
       ownerActions.append(edit, promote, remove); actions.append(ownerActions);
     }
@@ -407,13 +463,14 @@
       else media.textContent = "AF";
       const body = document.createElement("div"); body.className = "account-card__body";
       const title = document.createElement("h3"); title.textContent = account.title;
-      const facts = document.createElement("p"); facts.textContent = `${account.cars_count} машин · ${account.game_currency}${account.extra_currency ? ` · ${account.extra_currency}` : ""}`;
+      const facts = document.createElement("p"); facts.textContent = `Уровень ${account.level} · ${account.cars_count} машин · ${account.game_currency}${account.extra_currency ? ` · ${account.extra_currency}` : ""}`;
       const email = document.createElement("small"); email.textContent = `Email: ${{linked: "привязана", unlinked: "не привязана", unknown: "не указано"}[account.email_binding]}`;
       const description = document.createElement("p"); description.textContent = account.description;
+      const assets = document.createElement("p"); assets.textContent = `${account.game_assets || "Игровые активы не указаны"} · ${account.auto_delivery ? "Автовыдача" : "Ручная передача"}`;
       const footer = document.createElement("div"); footer.className = "account-card__footer";
       const price = document.createElement("strong"); price.append(document.createTextNode(`${formatNumber(account.price_af_coins)} `), coin("af-coin--small")); footer.append(price);
       if (state.me?.user.role === "admin") { const remove = document.createElement("button"); remove.dataset.deleteAccount = account.id; remove.textContent = "Удалить"; footer.append(remove); }
-      body.append(title, facts, email, description, footer); card.append(media, body); return card;
+      body.append(title, facts, email, assets, description, footer); card.append(media, body); return card;
     }));
     elements.accountsEmpty.hidden = state.accounts.length > 0;
   }
@@ -509,8 +566,10 @@
   async function submitListing(event) {
     event.preventDefault();
     if (!state.serverAvailable) return notify("Сервер недоступен");
-    const formData = new FormData(elements.carForm);
-    const button = elements.carForm.querySelector("button[type=submit]");
+    const form = elements.carForm;
+    const formData = new FormData(form);
+    const button = form.querySelector("button[type=submit]");
+    if (button.disabled) return;
     button.disabled = true;
     try {
       const imageUrls = [];
@@ -523,25 +582,69 @@
         model: String(formData.get("model")).trim(),
         power_hp: Number(formData.get("power_hp")),
         max_speed_kph: Number(formData.get("max_speed_kph")),
+        description: String(formData.get("description") || "").trim(),
         price_af_coins: Number(formData.get("price_af_coins")),
-        promote_for_24h: formData.get("promote_for_24h") === "on",
       };
+      if (!state.editingListingId && imageUrls.length !== 1) throw new Error("Добавьте одну фотографию автомобиля");
       if (!state.editingListingId || imageUrls.length) payload.image_urls = imageUrls;
-      if (payload.promote_for_24h && state.listingMode === "regular" && !(await confirmAction("Закрепить объявление на 24 часа за 15 AF Coins?"))) return;
+      const promotionSelected = formData.get("promote_for_24h") === "on";
+      const shouldPromote = promotionSelected && (state.listingMode === "unique" || await confirmAction("Закрепить объявление за 15 AF Coins?"));
       const path = state.editingListingId ? `/listings/${state.editingListingId}` : state.listingMode === "unique" ? "/admin/listings/unique" : "/listings";
-      if (state.listingMode === "unique") payload.pinned = payload.promote_for_24h;
-      await api.request(path, { method: state.editingListingId ? "PATCH" : "POST", body: JSON.stringify(payload) });
-      elements.carForm.reset();
+      if (state.listingMode === "unique") payload.pinned = shouldPromote;
+      const savedListing = await api.request(path, { method: state.editingListingId ? "PATCH" : "POST", body: JSON.stringify(payload) });
+      let promotionError = null;
+      if (shouldPromote && !savedListing.pinned) {
+        try {
+          const promotionPath = state.listingMode === "unique" ? `/admin/listings/${savedListing.id}/promote` : `/listings/${savedListing.id}/promote`;
+          await api.request(promotionPath, { method: "POST" });
+        } catch (error) { promotionError = error; }
+      }
+      form.reset();
       elements.photoPreview.replaceChildren();
       state.photoFiles = [];
+      const wasEditing = Boolean(state.editingListingId);
+      state.editingListingId = null;
       await refreshMarketplace();
       navigate(state.listingMode === "unique" ? "unique" : "market");
-      notify(state.editingListingId ? "Объявление обновлено" : "Объявление опубликовано");
+      if (promotionError) notify(`Объявление опубликовано бесплатно, но не закреплено: ${promotionError.message}`);
+      else notify(wasEditing ? "Объявление обновлено бесплатно" : "Объявление опубликовано бесплатно");
     } catch (error) { notify(error.message); }
     finally { button.disabled = false; }
   }
 
   function findListing(id) { return [...state.regular, ...state.unique, ...(state.profile?.active_listings || [])].find((item) => item.id === id); }
+
+  async function openListingDetails(id) {
+    try {
+      const listing = await api.request(`/listings/${id}`);
+      const existing = document.getElementById("listingDetailsModal");
+      if (existing) existing.remove();
+      const dialog = document.createElement("dialog");
+      dialog.className = "modal";
+      dialog.id = "listingDetailsModal";
+      const head = document.createElement("div");
+      head.className = "modal-head";
+      const heading = document.createElement("div");
+      const eyebrow = document.createElement("span"); eyebrow.className = "eyebrow"; eyebrow.textContent = listing.listing_type === "unique" ? "Уникальная машина" : "Объявление";
+      const title = document.createElement("h2"); title.textContent = `${listing.brand} ${listing.model}`;
+      heading.append(eyebrow, title);
+      const close = document.createElement("button"); close.type = "button"; close.textContent = "×"; close.addEventListener("click", () => dialog.close());
+      head.append(heading, close);
+      const description = document.createElement("p"); description.textContent = listing.description;
+      const stats = document.createElement("p"); stats.textContent = `${listing.power_hp} л.с. · ${listing.max_speed_kph} км/ч · ${listing.views_count} просмотров`;
+      const price = document.createElement("p"); price.append(document.createTextNode(`${formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins)} `), coin("af-coin--small"));
+      dialog.append(head, description, stats, price);
+      if (listing.seller_id !== state.me?.user.id) {
+        const message = document.createElement("button"); message.className = "publish-button"; message.type = "button"; message.textContent = "Написать продавцу";
+        message.addEventListener("click", async () => { dialog.close(); await startConversation(listing.id); });
+        dialog.append(message);
+      }
+      document.body.append(dialog);
+      dialog.addEventListener("close", () => dialog.remove(), { once: true });
+      openDialog(dialog);
+      const local = findListing(id); if (local) local.views_count = listing.views_count;
+    } catch (error) { notify(error.message); }
+  }
 
   function editListing(id) {
     const listing = findListing(id); if (!listing) return;
@@ -550,11 +653,12 @@
     state.photoFiles = [];
     elements.carForm.reset(); elements.photoPreview.replaceChildren();
     elements.brandInput.value = listing.brand; elements.modelInput.value = listing.model; elements.modelInput.disabled = false;
-    elements.carForm.elements.power_hp.value = listing.power_hp; elements.carForm.elements.max_speed_kph.value = listing.max_speed_kph; elements.priceInput.value = listing.price_af_coins;
+    elements.carForm.elements.power_hp.value = listing.power_hp; elements.carForm.elements.max_speed_kph.value = listing.max_speed_kph; elements.carForm.elements.description.value = listing.description; elements.priceInput.value = listing.price_af_coins;
     document.getElementById("listingType").value = listing.listing_type;
     document.getElementById("addTitle").textContent = "Редактировать объявление";
-    document.getElementById("promoteLabel").textContent = state.me.user.role === "admin" ? "📌 Закрепить бесплатно" : "📌 Закрепить — 15 AF Coins";
-    document.getElementById("promotionNote").hidden = state.me.user.role === "admin";
+    const freeAdminPromotion = state.me.user.role === "admin" && listing.listing_type === "unique";
+    document.getElementById("promoteLabel").textContent = freeAdminPromotion ? "📌 Закрепить бесплатно" : "📌 Закрепить — 15 AF Coins";
+    document.getElementById("promotionNote").hidden = freeAdminPromotion;
     openSecondary("add");
   }
 
@@ -565,14 +669,27 @@
   }
 
   async function promoteListing(id) {
-    const isAdmin = state.me?.user.role === "admin";
-    if (!isAdmin && !(await confirmAction("Закрепить объявление на 24 часа за 15 AF Coins?"))) return;
-    try { await api.request(isAdmin ? `/admin/listings/${id}/promote` : `/listings/${id}/promote`, { method: "POST" }); await refreshMarketplace(); notify("Объявление закреплено на 24 часа"); }
+    const source = findListing(id);
+    const freeAdminPromotion = state.me?.user.role === "admin" && source?.listing_type === "unique";
+    if (!freeAdminPromotion && !(await confirmAction("Закрепить объявление за 15 AF Coins?"))) return;
+    try { const listing = await api.request(freeAdminPromotion ? `/admin/listings/${id}/promote` : `/listings/${id}/promote`, { method: "POST" }); await refreshMarketplace(); notify(`Объявление закреплено до ${formatDate(listing.pinned_until)}`); }
     catch (error) { notify(error.message); }
   }
 
   function previewPhotos(event) {
-    state.photoFiles = [...event.target.files].slice(0, 10);
+    const file = event.target.files?.[0];
+    if (!file) { state.photoFiles = []; elements.photoPreview.replaceChildren(); return; }
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      event.target.value = "";
+      state.photoFiles = [];
+      return notify("Разрешены только JPG, PNG и WEBP");
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      event.target.value = "";
+      state.photoFiles = [];
+      return notify("Фотография не должна превышать 5 МБ");
+    }
+    state.photoFiles = [file];
     elements.photoPreview.replaceChildren(...state.photoFiles.map((file, index) => {
       const image = document.createElement("img");
       image.src = URL.createObjectURL(file);
@@ -872,13 +989,55 @@
 
   async function requestStarInvoice(event) {
     event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button[type=submit]");
+    if (button.disabled) return;
     elements.paymentResult.textContent = "";
-    try {
-      await api.request("/wallet/star-payments/intent", { method: "POST", body: JSON.stringify({ amount: Number(document.getElementById("topupAmount").value) }) });
-    } catch (error) {
-      elements.paymentResult.className = "payment-result is-cancelled";
-      elements.paymentResult.textContent = error.status === 501 ? "Настоящий Telegram Stars invoice будет подключён отдельным этапом. Баланс не изменён." : error.message;
+    if (!telegram?.initData || typeof telegram.openInvoice !== "function") {
+      elements.paymentResult.className = "payment-result is-error";
+      elements.paymentResult.textContent = "Откройте AUTOFLOW MARKET внутри Telegram, чтобы оплатить счёт";
+      return;
     }
+    button.disabled = true;
+    try {
+      const amount = Number(document.getElementById("topupAmount").value);
+      const intent = await api.request("/wallet/star-payments/intent", { method: "POST", body: JSON.stringify({ amount }) });
+      elements.paymentResult.className = "payment-result";
+      elements.paymentResult.textContent = "Счёт открыт в Telegram";
+      const invoiceStatus = await new Promise((resolve, reject) => {
+        try { telegram.openInvoice(intent.invoice_url, resolve); }
+        catch (error) { reject(error); }
+      });
+      if (invoiceStatus === "cancelled") {
+        elements.paymentResult.className = "payment-result is-cancelled";
+        elements.paymentResult.textContent = "Оплата отменена. Баланс не изменён";
+        return;
+      }
+      if (invoiceStatus === "failed") {
+        elements.paymentResult.className = "payment-result is-error";
+        elements.paymentResult.textContent = "Telegram не завершил оплату. Баланс не изменён";
+        return;
+      }
+      const payment = await waitForStarPayment(intent.id);
+      if (payment.status !== "paid") throw new Error("Подтверждение оплаты ещё не получено сервером. Проверьте баланс через несколько секунд");
+      state.me.wallet = payment.wallet;
+      await refreshMarketplace();
+      elements.paymentResult.className = "payment-result is-success";
+      elements.paymentResult.textContent = "Оплата успешно завершена";
+    } catch (error) {
+      elements.paymentResult.className = "payment-result is-error";
+      elements.paymentResult.textContent = error.message;
+    } finally { button.disabled = false; }
+  }
+
+  async function waitForStarPayment(intentId) {
+    let status = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      status = await api.request(`/wallet/star-payments/intents/${intentId}`);
+      if (status.status !== "pending") return status;
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+    return status;
   }
 
   async function createWithdrawal(event) {
@@ -890,11 +1049,12 @@
   }
 
   async function submitAccountListing(event) {
-    event.preventDefault(); const form = new FormData(event.currentTarget); const button = event.currentTarget.querySelector("button[type=submit]"); button.disabled = true;
+    event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const button = formElement.querySelector("button[type=submit]"); if (button.disabled) return; button.disabled = true;
     try {
       let imageUrl = null; const photo = form.get("photo"); if (photo?.size) imageUrl = (await api.upload(photo)).url;
-      await api.request("/admin/accounts", { method: "POST", body: JSON.stringify({ title: form.get("title"), cars_count: Number(form.get("cars_count")), game_currency: form.get("game_currency"), extra_currency: form.get("extra_currency") || null, email_binding: form.get("email_binding"), description: form.get("description"), price_af_coins: Number(form.get("price_af_coins")), image_url: imageUrl }) });
-      event.currentTarget.reset(); await refreshMarketplace(); navigate("accounts"); notify("Аккаунт опубликован без хранения учётных данных");
+      if (!imageUrl) throw new Error("Добавьте одну фотографию аккаунта");
+      await api.request("/admin/accounts", { method: "POST", body: JSON.stringify({ title: form.get("title"), level: Number(form.get("level")), cars_count: Number(form.get("cars_count")), game_currency: form.get("game_currency"), extra_currency: form.get("extra_currency") || null, game_assets: form.get("game_assets") || null, email_binding: form.get("email_binding"), auto_delivery: form.get("auto_delivery") === "on", description: form.get("description"), price_af_coins: Number(form.get("price_af_coins")), image_url: imageUrl }) });
+      formElement.reset(); await refreshMarketplace(); navigate("accounts"); notify("Аккаунт опубликован без хранения учётных данных");
     } catch (error) { notify(error.message); } finally { button.disabled = false; }
   }
 
@@ -902,6 +1062,140 @@
     if (!(await confirmAction("Удалить объявление аккаунта?"))) return;
     try { await api.request(`/admin/accounts/${id}`, { method: "DELETE" }); await refreshMarketplace(); notify("Объявление аккаунта удалено"); }
     catch (error) { notify(error.message); }
+  }
+
+  async function submitSupportTicket(event) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const data = new FormData(formElement);
+    const button = formElement.querySelector("button[type=submit]");
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      const screenshot = data.get("screenshot");
+      let screenshotUrl = null;
+      if (screenshot?.size) screenshotUrl = (await api.upload(screenshot)).url;
+      await api.request("/support/tickets", {
+        method: "POST",
+        body: JSON.stringify({ topic: data.get("topic"), message: data.get("message"), screenshot_url: screenshotUrl }),
+      });
+      formElement.reset();
+      state.supportTickets = await api.request("/support/tickets");
+      renderSupportTickets();
+      notify("Обращение отправлено");
+    } catch (error) { notify(error.message); }
+    finally { button.disabled = false; }
+  }
+
+  function renderSupportTickets() {
+    if (!state.supportTickets.length) {
+      elements.supportTickets.textContent = "Обращений пока нет";
+      return;
+    }
+    elements.supportTickets.replaceChildren(...state.supportTickets.map((ticket) => createSupportTicketCard(ticket, false)));
+  }
+
+  function createSupportTicketCard(ticket, adminMode) {
+    const card = document.createElement("article"); card.className = "support-ticket";
+    const head = document.createElement("div"); head.className = "support-ticket__head";
+    const title = document.createElement("strong"); title.textContent = ticket.topic;
+    const status = document.createElement("small"); status.textContent = supportStatusLabel(ticket.status);
+    head.append(title, status); card.append(head);
+    ticket.messages.forEach((item) => {
+      const message = document.createElement("div");
+      const isAdminMessage = adminMode ? item.sender_id === state.me?.user.id : item.sender_id !== state.me?.user.id;
+      message.className = `support-message${isAdminMessage ? " is-admin" : ""}`;
+      message.textContent = item.body;
+      card.append(message);
+    });
+    const actions = document.createElement("div"); actions.className = "support-ticket__actions";
+    if (ticket.status !== "closed") {
+      const reply = document.createElement("button"); reply.type = "button"; reply.dataset.supportReply = ticket.id; reply.dataset.adminReply = String(adminMode); reply.textContent = "Ответить"; actions.append(reply);
+    }
+    if (adminMode) {
+      ["resolved", "closed"].forEach((nextStatus) => { const button = document.createElement("button"); button.type = "button"; button.dataset.supportStatus = nextStatus; button.dataset.ticketId = ticket.id; button.textContent = nextStatus === "resolved" ? "Решено" : "Закрыть"; actions.append(button); });
+    }
+    card.append(actions);
+    return card;
+  }
+
+  async function replySupportTicket(ticketId, adminMode) {
+    const message = window.prompt("Введите ответ");
+    if (!message?.trim()) return;
+    const path = adminMode ? `/admin/support/tickets/${ticketId}/messages` : `/support/tickets/${ticketId}/messages`;
+    try {
+      await api.request(path, { method: "POST", body: JSON.stringify({ message: message.trim() }) });
+      if (adminMode) await loadAdminSupport();
+      else { state.supportTickets = await api.request("/support/tickets"); renderSupportTickets(); }
+    } catch (error) { notify(error.message); }
+  }
+
+  async function setSupportTicketStatus(ticketId, status) {
+    try {
+      await api.request(`/admin/support/tickets/${ticketId}`, { method: "PATCH", body: JSON.stringify({ status }) });
+      await loadAdminSupport();
+    } catch (error) { notify(error.message); }
+  }
+
+  async function loadAdminSupport() {
+    const tickets = await api.request("/admin/support/tickets");
+    if (!tickets.length) { elements.adminSupportTickets.textContent = "Обращений пока нет"; return; }
+    elements.adminSupportTickets.replaceChildren(...tickets.map((ticket) => createSupportTicketCard(ticket, true)));
+  }
+
+  async function loadAdvertisementAdmin() {
+    const advertisement = await api.request("/admin/advertisement");
+    state.advertisement = advertisement;
+    const form = elements.advertisementForm;
+    form.elements.link_url.value = advertisement?.link_url || "";
+    form.elements.is_active.checked = advertisement?.is_active ?? true;
+    renderAdvertisementAdmin(advertisement);
+    renderAdvertisement();
+  }
+
+  function renderAdvertisementAdmin(advertisement) {
+    if (!advertisement?.image_url) {
+      elements.advertisementPreview.textContent = "Баннер пока не загружен";
+      return;
+    }
+    const image = document.createElement("img"); image.src = absoluteMediaUrl(advertisement.image_url); image.alt = "Предпросмотр рекламы";
+    elements.advertisementPreview.replaceChildren(image);
+  }
+
+  async function submitAdvertisement(event) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const data = new FormData(formElement);
+    const button = formElement.querySelector("button[type=submit]");
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      let imageUrl = state.advertisement?.image_url || null;
+      const image = data.get("image");
+      if (image?.size) imageUrl = (await api.upload(image, "/admin/advertisement/upload")).url;
+      if (!imageUrl) throw new Error("Загрузите рекламное изображение");
+      state.advertisement = await api.request("/admin/advertisement", {
+        method: "PUT",
+        body: JSON.stringify({ image_url: imageUrl, link_url: data.get("link_url") || null, is_active: data.get("is_active") === "on" }),
+      });
+      formElement.elements.image.value = "";
+      renderAdvertisementAdmin(state.advertisement);
+      renderAdvertisement();
+      notify("Реклама сохранена");
+    } catch (error) { notify(error.message); }
+    finally { button.disabled = false; }
+  }
+
+  async function deleteAdvertisement() {
+    if (!(await confirmAction("Удалить рекламный баннер?"))) return;
+    try {
+      await api.request("/admin/advertisement", { method: "DELETE" });
+      state.advertisement = null;
+      elements.advertisementForm.reset();
+      renderAdvertisementAdmin(null);
+      renderAdvertisement();
+      notify("Реклама удалена");
+    } catch (error) { notify(error.message); }
   }
 
   async function loadAdminWithdrawals() { renderAdminWithdrawals(await api.request("/admin/withdrawals")); }
@@ -1007,10 +1301,10 @@
   }
 
   async function createBalanceAdjustment(event) {
-    event.preventDefault(); const form = new FormData(event.currentTarget);
+    event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement);
     try {
       await api.request("/admin/balance-adjustments", { method: "POST", body: JSON.stringify({ user_id: form.get("user_id"), amount: Number(form.get("amount")), reason: form.get("reason") }) });
-      event.currentTarget.reset(); notify("Корректировка записана отдельной транзакцией");
+      formElement.reset(); notify("Корректировка записана отдельной транзакцией");
     } catch (error) { notify(error.message); }
   }
 
@@ -1038,7 +1332,6 @@
     document.querySelector('[data-view="market"]').prepend(notice);
   }
 
-  function closeApp() { if (telegram?.initData) telegram.close(); else notify("Внутри Telegram эта кнопка закроет приложение"); }
   function openDialog(dialog) { typeof dialog.showModal === "function" ? dialog.showModal() : dialog.setAttribute("open", ""); }
   function confirmAction(message) {
     return new Promise((resolve) => {
@@ -1055,4 +1348,5 @@
   function statusLabel(status) { return ({ active: "Доступно", reserved: "Зарезервировано", sold: "Уже продано", paused: "Снято с публикации", deleted: "Удалено" })[status] || status; }
   function dealStatusLabel(status) { return ({ pending_payment: "Ожидает оплаты", paid: "Оплачено", seller_contacted: "Продавец на связи", transfer_in_progress: "Передача", buyer_confirmed: "Получение подтверждено", completed: "Завершена", disputed: "Спор", cancelled: "Отменена" })[status] || status; }
   function withdrawalStatusLabel(status) { return ({ pending: "Ожидает проверки", approved: "Одобрена", paid: "Выплачена", rejected: "Отклонена", cancelled: "Отменена" })[status] || status; }
+  function supportStatusLabel(status) { return ({ open: "Открыто", in_progress: "В работе", resolved: "Решено", closed: "Закрыто" })[status] || status; }
 })();
