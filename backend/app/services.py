@@ -516,11 +516,8 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
             raise HTTPException(status_code=404, detail="Deal not found")
         if deal.status != "transfer_in_progress" or not deal.transfer_started_at:
             raise HTTPException(status_code=409, detail="Transfer has not started")
-      if datetime.now(UTC) - deal.transfer_started_at < timedelta(seconds=60):
-        raise HTTPException(
-        status_code=409,
-        detail="Подтверждение станет доступно через 60 секунд после начала передачи",
-    )
+        if datetime.now(UTC) - deal.transfer_started_at < timedelta(seconds=60):
+            raise HTTPException(status_code=409, detail="Подтверждение станет доступно через 60 секунд после начала передачи")
         listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
         buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
         seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.seller_id).with_for_update())
