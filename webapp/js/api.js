@@ -37,10 +37,10 @@
     return response.json();
   }
 
-  async function upload(file) {
+  async function upload(file, path = "/uploads") {
     const body = new FormData();
     body.append("file", file);
-    return request("/uploads", { method: "POST", body });
+    return request(path, { method: "POST", body });
   }
 
   window.AutoFlowApi = Object.freeze({ request, upload, ApiError, baseUrl: API_BASE });

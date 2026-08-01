@@ -1,32 +1,35 @@
 # AUTOFLOW MARKET
 
-Telegram Mini App автомобильного маркетплейса с мобильным чёрно-оранжевым интерфейсом, FastAPI API и PostgreSQL. Внутри приложения цены и баланс выражены только в **AF Coins**. Telegram Stars (`XTR`) предусмотрены исключительно как внешний способ пополнения 1:1 и пока не выставляются реальным invoice.
+Telegram Mini App для автомобильного маркетплейса: мобильный чёрно-оранжевый интерфейс, FastAPI API и PostgreSQL. Внутри сервиса цены, покупки и баланс выражены только в **AF Coins**. Telegram Stars (`XTR`) используются только для пополнения: после подтверждённого сервером платежа 1 XTR начисляет 1 AF Coin.
 
-## Структура
+## Структура проекта
 
 ```text
 telegram-market/
-├─ Dockerfile             # production image: backend + Mini App
-├─ start.sh               # migrations, then Uvicorn on Railway PORT
-├─ railway.json           # Docker build, pre-deploy migration, healthcheck
-├─ compose.yaml
+├─ Dockerfile
+├─ railway.json                 # Railway build, migration и healthcheck
+├─ start.sh                     # запуск Uvicorn на Railway PORT
+├─ compose.yaml                 # локальный PostgreSQL
 ├─ backend/
 │  ├─ .env.example
 │  ├─ requirements.txt
+│  ├─ requirements-dev.txt
 │  ├─ alembic.ini
-│  ├─ app/
-│  │  ├─ main.py          # FastAPI, CORS, раздача загруженных фото
-│  │  ├─ auth.py          # серверная проверка Telegram initData и ролей
-│  │  ├─ models.py        # SQLAlchemy-модели PostgreSQL
-│  │  ├─ schemas.py       # входные и выходные схемы API
-│  │  ├─ services.py      # транзакции кошелька, объявления, диалоги, сделки, вывод
-│  │  ├─ routes.py        # HTTP API и Telegram webhook
-│  │  └─ bot.py           # уведомления продавцу и покупателю через Bot API
-│  ├─ migrations/
-│  │  └─ versions/
-│  │     ├─ 0001_initial.py
-│  │     └─ 0002_market_features.py
-│  └─ uploads/
+│  ├─ scripts/migrate.py        # проверка DATABASE_URL и Alembic с retry
+│  ├─ migrations/versions/
+│  │  ├─ 0001_initial.py
+│  │  ├─ 0002_market_features.py
+│  │  └─ 0003_payments_support_and_listing_details.py
+│  ├─ tests/test_core_workflows.py
+│  └─ app/
+│     ├─ main.py                # FastAPI и раздача Mini App/uploads
+│     ├─ auth.py                # проверка Telegram initData и роли
+│     ├─ models.py              # SQLAlchemy-модели
+│     ├─ schemas.py             # входные/выходные схемы API
+│     ├─ services.py            # транзакции, сделки, кошельки, Stars
+│     ├─ routes.py              # HTTP API и Telegram webhook
+│     └─ bot.py                 # Telegram Bot API
+├─ docs/screenshots/market-390.png
 └─ webapp/
    ├─ index.html
    ├─ css/style.css
@@ -45,60 +48,91 @@ docker compose up -d db
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 Copy-Item .env.example .env
 alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
-Откройте `http://127.0.0.1:8000`: FastAPI раздаёт и API, и Mini App из одного origin. В `.env.example` включён локальный debug-пользователь.
+Приложение доступно на `http://127.0.0.1:8000`: FastAPI раздаёт API и Mini App с одного origin. Локальная авторизация разрешена только при `DEBUG=true`.
 
-## Деплой в Railway
+Проверки:
 
-Railway автоматически обнаруживает корневой `Dockerfile`. Перед деплоем `railway.json` запускает `python /app/backend/scripts/migrate.py`: runner проверяет `DATABASE_URL`, ожидает готовности PostgreSQL и применяет Alembic-миграции. После успешной миграции `/app/start.sh` запускает Uvicorn на выданном Railway порту `0.0.0.0:$PORT`. Healthcheck: `/api/health`.
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m compileall app migrations
+.\.venv\Scripts\python.exe -m alembic upgrade head --sql
+```
 
-В Variables сервиса приложения нужны:
+## Railway
+
+Railway использует корневой `Dockerfile` и конфигурацию `railway.json`.
+
+Точные команды:
 
 ```text
-BOT_TOKEN=<токен от BotFather>
-ADMIN_ID=<ваш числовой Telegram ID>
+Pre-deploy command: python /app/backend/scripts/migrate.py
+Start Command:      /app/start.sh
+```
+
+Migration runner проверяет `DATABASE_URL`, преобразует Railway URL для `asyncpg`, ждёт PostgreSQL и применяет все Alembic-миграции. Не добавляйте второй `alembic upgrade` в Start Command.
+
+Обязательные Variables сервиса приложения:
+
+```text
+BOT_TOKEN=<токен BotFather>
+ADMIN_ID=<числовой Telegram ID администратора>
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 ```
 
-`DATABASE_URL` формата `postgres://` или `postgresql://` автоматически преобразуется для драйвера `asyncpg`. Если у сервиса создан публичный Railway domain, приложение использует `RAILWAY_PUBLIC_DOMAIN` и само регистрирует `https://<domain>/api/telegram/webhook` в Telegram. Опционально задайте случайный `TELEGRAM_WEBHOOK_SECRET`.
+Полезные дополнительные Variables:
 
-Если PostgreSQL запускается одновременно с приложением, runner повторяет подключение до 12 раз с интервалом 5 секунд. Эти значения можно изменить переменными `MIGRATION_MAX_ATTEMPTS` и `MIGRATION_RETRY_SECONDS`. В Start Command не нужно повторно запускать Alembic: миграция выполняется только в Pre-deploy.
+```text
+TELEGRAM_WEBHOOK_SECRET=<случайная строка>
+UPLOAD_DIR=/data/uploads
+LISTING_PROMOTION_COST_AF_COINS=15
+LISTING_PROMOTION_HOURS=24
+SELLER_PAYOUT_PERCENT=70
+STAR_TOPUP_MIN=100
+STAR_TOPUP_MAX=1000
+```
 
-Загруженные фотографии по умолчанию лежат в файловой системе контейнера. Для сохранения между деплоями подключите Railway Volume к `/data` и задайте `UPLOAD_DIR=/data/uploads`; позже это можно заменить объектным хранилищем.
+Если имя PostgreSQL-сервиса отличается от `Postgres`, исправьте ссылку `${{<имя сервиса>.DATABASE_URL}}`. Railway предоставляет `RAILWAY_PUBLIC_DOMAIN`; приложение регистрирует `https://<domain>/api/telegram/webhook` автоматически. Можно явно задать `PUBLIC_BASE_URL`.
 
-После первого успешного деплоя укажите публичный HTTPS URL приложения в BotFather как Menu Button / Mini App URL. Секреты не добавляйте в GitHub.
+Для постоянного хранения фотографий подключите Railway Volume к `/data` и задайте `UPLOAD_DIR=/data/uploads`. Без Volume файлы внутри контейнера исчезнут при новом деплое. Healthcheck: `GET /api/health`.
+
+После первого успешного деплоя укажите публичный HTTPS URL в BotFather как Menu Button / Mini App URL. Секреты не добавляйте в GitHub.
 
 ## Схема данных
 
 | Таблица | Назначение |
 |---|---|
-| `users` | Telegram-профиль, роль `user/admin`, активность Mini App |
-| `listings`, `listing_images` | объявления строго типа `regular` или `unique`, фотографии и закрепление на 24 часа |
-| `account_listings` | разрешённые администратором карточки аккаунтов без логинов и паролей |
+| `users` | Telegram-профиль, роль `user/admin`, блокировка и активность Mini App |
+| `listings`, `listing_images` | объявления строго типа `regular` или `unique`, одна фотография, просмотры, срок закрепления |
+| `account_listings` | управляемые администратором карточки аккаунтов без логинов и паролей |
 | `favorites`, `cart_items` | избранное и серверная корзина |
-| `conversations`, `conversation_messages`, `price_offers` | постоянные диалоги до и после покупки, сообщения и торг |
-| `deals`, `deal_messages` | резервирование и статусы сделки; `deal_messages` сохранена для обратной совместимости |
+| `conversations`, `conversation_messages`, `price_offers` | постоянный диалог и торг до/после покупки |
+| `deals`, `deal_messages` | резерв средств и жизненный цикл сделки |
 | `wallets` | `available_balance`, `frozen_balance`, `total_earned` |
-| `wallet_transactions` | append-only история с балансами до/после |
-| `star_payments` | уникальный Telegram charge ID и конвертация XTR → AF Coins |
-| `withdrawal_requests` | ручной вывод и его статусы |
-| `notifications` | уведомления внутри приложения |
-| `admin_balance_adjustments`, `admin_actions` | аудит администраторских операций |
+| `wallet_transactions` | неизменяемая история с балансами до/после |
+| `star_payment_intents`, `star_payments` | XTR invoice, статус и уникальный Telegram charge ID |
+| `withdrawal_requests` | ручной вывод и статусы заявки |
+| `notifications` | уведомления внутри приложения и постановка Bot API уведомлений |
+| `support_tickets`, `support_messages` | обращения пользователя и переписка с администратором |
+| `advertisements` | единственный управляемый из БД баннер Market |
+| `admin_balance_adjustments`, `admin_actions` | аудит администраторских действий |
 
-Все траты, резервы, расчёты, возвраты, выводы и корректировки выполняются в транзакциях PostgreSQL с `SELECT ... FOR UPDATE`. Цена, продавец, комиссия и итоговый баланс берутся только из базы. История кошелька защищена от `UPDATE` и `DELETE` триггером миграции.
+Все траты, резервы, расчёты, возвраты, выводы и корректировки выполняются в транзакциях PostgreSQL с блокировкой нужных строк. Цена, продавец, комиссия и итоговый баланс берутся из БД, а не из запроса браузера. История кошелька защищена от `UPDATE` и `DELETE` триггером миграции.
 
-## API
+## Основные API-маршруты
 
-Все персональные и изменяющие данные маршруты используют проверенный `X-Telegram-Init-Data`; чтение активного каталога доступно без авторизации. Режим разработки доступен только при `DEBUG=true`.
+Персональные и изменяющие данные маршруты требуют проверенный заголовок `X-Telegram-Init-Data`. Роль администратора проверяется сервером.
 
 - `GET /api/health`, `GET /api/me`, `GET /api/profile`
 - `POST /api/uploads`
-- `GET /api/listings?type=regular|unique`, `POST /api/listings`
+- `GET /api/advertisement`
+- `GET /api/listings?type=regular|unique`, `GET /api/listings/{id}`, `POST /api/listings`
 - `PATCH|DELETE /api/listings/{id}`, `POST /api/listings/{id}/promote`
 - `POST /api/admin/listings/unique`, `PATCH|DELETE /api/admin/listings/{id}`
 - `GET /api/accounts`, `POST /api/admin/accounts`, `PATCH|DELETE /api/admin/accounts/{id}`
@@ -108,40 +142,60 @@ DATABASE_URL=${{Postgres.DATABASE_URL}}
 - `GET /api/conversations/{id}`, `GET|POST /api/conversations/{id}/messages`
 - `POST /api/conversations/{id}/offers`, `POST /api/conversations/{id}/offers/counter`
 - `POST /api/offers/{id}/{accept|reject}`
-- `GET /api/deals`, `GET /api/deals/{id}`
-- `GET|POST /api/deals/{id}/messages`
-- `POST /api/deals/{id}/seller-contacted|transfer|confirm|dispute|cancel`
+- `GET /api/deals`, `GET /api/deals/{id}`, `GET|POST /api/deals/{id}/messages`
+- `POST /api/deals/{id}/{seller-contacted|transfer|confirm|dispute|cancel}`
 - `GET /api/wallet`, `POST /api/wallet/star-payments/intent`
+- `GET /api/wallet/star-payments/intents/{intent_id}`
 - `GET|POST /api/withdrawals`, `POST /api/withdrawals/{id}/cancel`
-- `GET /api/admin/withdrawals`, `POST /api/admin/withdrawals/{id}/{approve|paid|reject}`
+- `GET|POST /api/support/tickets`, `POST /api/support/tickets/{id}/messages`
+- `GET /api/notifications`, `POST /api/notifications/{id}/read`
+- `GET|PUT|DELETE /api/admin/advertisement`, `POST /api/admin/advertisement/upload`
 - `GET /api/admin/users`, `GET /api/admin/users/{id}`, `POST /api/admin/users/{id}/{block|unblock}`
 - `GET /api/admin/listings`, `POST /api/admin/listings/{id}/{promote|publish|unpublish}`
-- `GET /api/admin/deals`, `POST /api/admin/deals/{id}/resolve`, `GET /api/admin/conversations/{id}`
+- `GET /api/admin/deals`, `POST /api/admin/deals/{id}/resolve`
+- `GET /api/admin/withdrawals`, `POST /api/admin/withdrawals/{id}/{approve|paid|reject}`
 - `GET /api/admin/users/{id}/financial-history`, `POST /api/admin/balance-adjustments`
-- `GET /api/notifications`, `POST /api/notifications/{id}/read`
+- `GET /api/admin/support/tickets`, `POST|PATCH /api/admin/support/tickets/{id}...`
 - `POST /api/telegram/webhook`
 
-## Что работает сейчас
+## Публикация и продвижение объявлений
 
-- серверное разделение Market (`regular`) и «Уникальные» (`unique`);
-- роль администратора по `ADMIN_ID` (также поддерживается список `ADMIN_TELEGRAM_IDS`); уникальные машины и аккаунты создаются только через защищённые сервером admin API;
-- пустой каталог без выдуманных объявлений, фильтры, подсказки марки/модели из отдельного тестового JSON;
-- редактирование, удаление и платное закрепление своего объявления на 24 часа за 15 AF Coins; для администратора закрепление бесплатно;
-- серверная корзина, повторная проверка доступности и баланса перед покупкой;
-- постоянный диалог начинается до покупки, хранится в PostgreSQL и поддерживает предложение, отклонение, принятие и встречную цену;
-- резерв AF Coins, блокировка объявления, перевод диалога в сделку, спор, отмена, подтверждение через пять минут, расчёт 70/30;
-- профиль, управление объявлениями, покупки, активные сделки, диалоги, история кошелька и пояснение замороженных средств;
-- админ-панель с пользователями, блокировками, объявлениями, сделками/спорами, выводами и аудируемой корректировкой баланса;
-- заявки на ручной вывод, заморозка средств, admin approve/paid/reject и обязательная причина отказа;
-- Mini App initData HMAC-проверка, роли только на сервере, уведомления через Bot API;
-- idempotent обработчик `successful_payment` с уникальным `telegram_payment_charge_id` и конвертацией 1:1.
+Публикация обычных объявлений полностью бесплатна и не ограничена оплатой. Создание, повторное создание, редактирование, изменение цены/описания, удаление и загрузка одной фотографии не списывают AF Coins.
 
-## Намеренно отложено
+Поля обычного объявления: одна фотография, марка, модель, мощность, максимальная скорость, описание и цена. Марка и модель поддерживают поиск с подсказками. Минимальная цена — 100 AF Coins; быстрые значения: 100, 150, 200, 300, 400 и 500.
 
-- реальное создание invoice XTR и `pre_checkout_query`: `/wallet/star-payments/intent` отвечает `501`, баланс не меняется;
-- автоматическая внешняя выплата: администратор только фиксирует ручную выплату;
-- покупка и автоматическая передача аккаунтов; сейчас публикуются только описательные карточки, логины и пароли не хранятся;
-- полный каталог марок/моделей — в JSON только небольшой явно помеченный тестовый набор;
-- правила оплаты второго и последующих обычных объявлений отключены настройкой.
+Единственная платная операция — закрепление обычного объявления на 24 часа за 15 AF Coins. До запроса интерфейс спрашивает: «Закрепить объявление за 15 AF Coins?». Backend проверяет владельца и статус объявления, блокирует кошелёк, списывает ровно 15 AF Coins один раз, пишет транзакцию и возвращает `pinned_until`. Повторный запрос во время активного закрепления не списывает деньги повторно. После истечения срока объявление остаётся активным и возвращается в обычную сортировку. Администратор бесплатно закрепляет только собственные уникальные автомобили и аккаунты; его обычные объявления подчиняются общей цене.
 
-Никакие настоящие балансы, покупки или сделки не сохраняются в `localStorage`.
+Проверить бесплатное создание нескольких объявлений и отдельное платное закрепление одного объявления за 15 AF Coins.
+
+## Что работает реально
+
+- Market (`regular`) и «Уникальные» (`unique`) разделены на сервере; уникальные объявления создаёт только администратор.
+- Каталог не содержит выдуманных машин; фильтры и подсказки используют отдельный небольшой тестовый JSON.
+- Создание нескольких обычных объявлений бесплатно; редактирование, удаление и продвижение проверяются сервером.
+- Корзина хранится в PostgreSQL, а доступность и баланс повторно проверяются непосредственно перед покупкой.
+- Покупка резервирует AF Coins, блокирует объявление, создаёт сделку и постоянный внутренний диалог.
+- Сделка поддерживает статусы, торг, сообщения, отмену, спор, подтверждение через пять минут и расчёт продавцу 70% / платформе 30%.
+- Профиль показывает объявления, покупки, активные сделки, диалоги и неизменяемую историю кошелька.
+- Заявка на ручной вывод замораживает средства; администратор может approve/paid/reject с обязательной причиной отказа.
+- Telegram `initData` проверяется по HMAC на сервере; роли нельзя подменить через CSS или JavaScript.
+- Пополнение создаёт настоящий XTR invoice через Bot API. `pre_checkout_query` проверяется сервером; AF Coins начисляются только после `successful_payment`. Уникальный `telegram_payment_charge_id` предотвращает двойное начисление.
+- Обращения в поддержку, ответы администратора и один рекламный баннер хранятся в PostgreSQL.
+- Верхний блок Market адаптирован под 320, 360, 390 и 430 px без горизонтальной прокрутки всей страницы.
+
+## Что остаётся ручным или отложено
+
+- Реальный XTR-платёж нужно принять двумя Telegram-аккаунтами после деплоя: автоматические тесты проверяют подпись, pre-checkout/успешное начисление и идемпотентность, но не заменяют платёж в клиенте Telegram.
+- Внешняя выплата продавцу не автоматизирована: администратор вручную выплачивает средства и фиксирует статус `paid`.
+- Автоматическая продажа и выдача логинов/паролей аккаунтов не реализована; приложение хранит только описательные карточки, пока не подтверждены правила игры/платформы.
+- Полный справочник марок и моделей будет добавлен после выбора подтверждённого источника; сейчас JSON содержит небольшой тестовый набор.
+- Для фотографий в Railway требуется подключённый Volume или последующая интеграция объектного хранилища.
+- Обновление чата выполняется при открытии/перезагрузке экрана; WebSocket/push-синхронизация сообщений в открытом Mini App пока не добавлена.
+
+Настоящие балансы, покупки, сделки, обращения и объявления не сохраняются в `localStorage`.
+
+## Мобильный результат
+
+Скриншот пустого Market на ширине 390 px: [docs/screenshots/market-390.png](docs/screenshots/market-390.png).
+
+По сравнению с референсом сохранены компактный фирменный логотип, тёмный фон, оранжевые акценты, аватар, баланс, фильтры и закреплённая нижняя навигация. Демонстрационные машины удалены; баннер выводится только когда администратор активировал запись в БД; внутренняя кнопка «Закрыть» удалена, потому что Mini App закрывается нативной кнопкой Telegram.

@@ -1,9 +1,10 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Awaitable, Callable
 
 from fastapi import HTTPException, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
@@ -21,6 +22,9 @@ from .models import (
     Notification,
     PriceOffer,
     StarPayment,
+    StarPaymentIntent,
+    SupportMessage,
+    SupportTicket,
     User,
     Wallet,
     WalletTransaction,
@@ -33,6 +37,12 @@ AF = Decimal("0.01")
 
 def money(value) -> Decimal:
     return Decimal(value).quantize(AF, rounding=ROUND_HALF_UP)
+
+
+def settlement_amounts(price: Decimal) -> tuple[Decimal, Decimal]:
+    seller_percent = Decimal(get_settings().seller_payout_percent) / Decimal("100")
+    seller_payout = money(money(price) * seller_percent)
+    return seller_payout, money(money(price) - seller_payout)
 
 
 def wallet_transaction(
@@ -81,15 +91,8 @@ async def create_listing(
         raise HTTPException(status_code=403, detail="Only administrators can create unique listings")
 
     async with session.begin():
-        if listing_type == "regular" and settings.enable_regular_listing_fees:
-            existing_count = await session.scalar(
-                select(func.count(Listing.id)).where(Listing.seller_id == seller.id, Listing.listing_type == "regular")
-            )
-            if existing_count and settings.regular_listing_fee_after_first > 0:
-                raise HTTPException(status_code=409, detail="Publication fee is configured but payment is not enabled yet")
-
         now = datetime.now(UTC)
-        admin_pinned = seller.role == "admin" and (pinned or payload.promote_for_24h)
+        admin_pinned = seller.role == "admin" and listing_type == "unique" and pinned
         listing = Listing(
             seller_id=seller.id,
             listing_type=listing_type,
@@ -98,14 +101,13 @@ async def create_listing(
             model=payload.model,
             power_hp=payload.power_hp,
             max_speed_kph=payload.max_speed_kph,
+            description=payload.description.strip(),
             price_af_coins=money(payload.price_af_coins),
             pinned=admin_pinned,
             pinned_until=now + timedelta(hours=settings.listing_promotion_hours) if admin_pinned else None,
         )
         session.add(listing)
         await session.flush()
-        if payload.promote_for_24h and seller.role != "admin":
-            await charge_listing_promotion(session, seller, listing)
         for position, url in enumerate(payload.image_urls):
             session.add(ListingImage(listing_id=listing.id, url=url, position=position))
         if listing_type == "unique":
@@ -117,21 +119,35 @@ async def create_listing(
 async def charge_listing_promotion(session: AsyncSession, actor: User, listing: Listing) -> None:
     settings = get_settings()
     now = datetime.now(UTC)
+    if listing.seller_id != actor.id:
+        raise HTTPException(status_code=403, detail="Вы можете закреплять только свои объявления")
+    if listing.status != "active":
+        raise HTTPException(status_code=409, detail="Можно закрепить только активное непроданное объявление")
+    if listing.pinned and listing.pinned_until and listing.pinned_until > now:
+        return
     listing.pinned = True
     listing.pinned_until = now + timedelta(hours=settings.listing_promotion_hours)
-    if actor.role == "admin":
+    if actor.role == "admin" and listing.listing_type == "unique":
         session.add(AdminAction(admin_id=actor.id, action="pin_listing_free", target_type="listing", target_id=listing.id))
         return
-    if listing.seller_id != actor.id:
-        raise HTTPException(status_code=403, detail="You can promote only your own listing")
     cost = money(settings.listing_promotion_cost_af_coins)
     wallet = await session.scalar(select(Wallet).where(Wallet.user_id == actor.id).with_for_update())
     if not wallet or wallet.available_balance < cost:
-        raise HTTPException(status_code=402, detail="Недостаточно средств для закрепления")
+        raise HTTPException(status_code=402, detail="Недостаточно AF Coins. Пополните баланс, чтобы закрепить объявление.")
     before_available, before_frozen = wallet.available_balance, wallet.frozen_balance
     wallet.available_balance = money(wallet.available_balance - cost)
     wallet.version += 1
-    session.add(wallet_transaction(wallet, "listing_promotion", -cost, before_available, before_frozen, "Закрепление объявления на 24 часа"))
+    session.add(
+        wallet_transaction(
+            wallet,
+            "listing_promotion",
+            -cost,
+            before_available,
+            before_frozen,
+            f"Закрепление объявления до {listing.pinned_until.isoformat()}",
+            external_reference=f"listing-promotion:{listing.id}:{listing.pinned_until.isoformat()}",
+        )
+    )
 
 
 async def promote_listing(session: AsyncSession, actor: User, listing_id: uuid.UUID) -> Listing:
@@ -139,8 +155,6 @@ async def promote_listing(session: AsyncSession, actor: User, listing_id: uuid.U
         listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
         if not listing or listing.status != "active":
             raise HTTPException(status_code=404, detail="Active listing not found")
-        if actor.role != "admin" and listing.seller_id != actor.id:
-            raise HTTPException(status_code=403, detail="You can promote only your own listing")
         await charge_listing_promotion(session, actor, listing)
     return listing
 
@@ -154,7 +168,7 @@ async def update_listing(session: AsyncSession, actor: User, listing_id: uuid.UU
             raise HTTPException(status_code=403, detail="You cannot edit this listing")
         if listing.status == "reserved":
             raise HTTPException(status_code=409, detail="Reserved listing cannot be edited")
-        changes = payload.model_dump(exclude_unset=True, exclude={"image_urls", "promote_for_24h"})
+        changes = payload.model_dump(exclude_unset=True, exclude={"image_urls"})
         for field, value in changes.items():
             if field == "price_af_coins":
                 value = money(value)
@@ -163,8 +177,6 @@ async def update_listing(session: AsyncSession, actor: User, listing_id: uuid.UU
             await session.execute(delete(ListingImage).where(ListingImage.listing_id == listing.id))
             for position, url in enumerate(payload.image_urls):
                 session.add(ListingImage(listing_id=listing.id, url=url, position=position))
-        if payload.promote_for_24h:
-            await charge_listing_promotion(session, actor, listing)
         if actor.role == "admin":
             session.add(AdminAction(admin_id=actor.id, action="update_listing", target_type="listing", target_id=listing.id))
     return listing
@@ -213,10 +225,13 @@ async def create_account_listing(session: AsyncSession, admin: User, payload) ->
             seller_id=admin.id,
             status="active",
             title=payload.title.strip(),
+            level=payload.level,
             cars_count=payload.cars_count,
             game_currency=payload.game_currency.strip(),
             extra_currency=payload.extra_currency.strip() if payload.extra_currency else None,
+            game_assets=payload.game_assets.strip() if payload.game_assets else None,
             email_binding=payload.email_binding,
+            auto_delivery=payload.auto_delivery,
             description=payload.description.strip(),
             price_af_coins=money(payload.price_af_coins),
             image_url=payload.image_url,
@@ -414,8 +429,7 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
         deals: list[Deal] = []
         for listing in ordered:
             agreed_price = effective_prices[listing.id]
-            payout = money(agreed_price * Decimal("0.70"))
-            commission = money(agreed_price - payout)
+            payout, commission = settlement_amounts(agreed_price)
             deal = Deal(
                 listing_id=listing.id,
                 buyer_id=buyer.id,
@@ -526,7 +540,8 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
         listing.sold_at = now
         listing.reserved_by_deal_id = None
         session.add(wallet_transaction(buyer_wallet, "purchase_completed", Decimal("0"), buyer_avail_before, buyer_frozen_before, "Покупка завершена", deal_id=deal.id))
-        session.add(wallet_transaction(seller_wallet, "sale_income", deal.seller_payout, seller_avail_before, seller_frozen_before, "70% стоимости сделки начислено продавцу", deal_id=deal.id))
+        session.add(wallet_transaction(seller_wallet, "sale_income", deal.seller_payout, seller_avail_before, seller_frozen_before, f"{get_settings().seller_payout_percent}% стоимости сделки начислено продавцу", deal_id=deal.id))
+        session.add(wallet_transaction(buyer_wallet, "platform_commission", -deal.platform_commission, buyer_wallet.available_balance, buyer_wallet.frozen_balance, f"Комиссия платформы {100 - get_settings().seller_payout_percent}%", deal_id=deal.id))
         await create_notification(session, deal.seller_id, "deal_completed", "Сделка завершена", f"Начислено {deal.seller_payout} AF Coins", {"deal_id": str(deal.id)})
     return deal
 
@@ -612,7 +627,8 @@ async def resolve_dispute(session: AsyncSession, admin: User, deal_id: uuid.UUID
             listing.sold_at = now
             listing.reserved_by_deal_id = None
             session.add(wallet_transaction(buyer_wallet, "dispute_completed", Decimal("0"), buyer_available_before, buyer_frozen_before, f"Сделка завершена администратором: {reason}", deal_id=deal.id))
-            session.add(wallet_transaction(seller_wallet, "sale_income", deal.seller_payout, seller_available_before, seller_frozen_before, f"70% начислено после решения спора: {reason}", deal_id=deal.id))
+            session.add(wallet_transaction(seller_wallet, "sale_income", deal.seller_payout, seller_available_before, seller_frozen_before, f"{get_settings().seller_payout_percent}% начислено после решения спора: {reason}", deal_id=deal.id))
+            session.add(wallet_transaction(buyer_wallet, "platform_commission", -deal.platform_commission, buyer_wallet.available_balance, buyer_wallet.frozen_balance, f"Комиссия платформы {100 - get_settings().seller_payout_percent}% после решения спора", deal_id=deal.id))
             buyer_body = "Сделка завершена решением администратора"
             seller_body = f"Сделка завершена, начислено {deal.seller_payout} AF Coins"
         session.add(AdminAction(admin_id=admin.id, action=f"resolve_dispute_{outcome}", target_type="deal", target_id=deal.id, reason=reason))
@@ -736,45 +752,120 @@ async def adjust_balance(session: AsyncSession, admin: User, payload) -> Wallet:
     return wallet
 
 
+async def create_star_payment_intent(
+    session: AsyncSession,
+    user: User,
+    amount: int,
+    invoice_factory: Callable[[int, str], Awaitable[str]],
+) -> StarPaymentIntent:
+    settings = get_settings()
+    if amount < settings.star_topup_min or amount > settings.star_topup_max:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Количество Stars должно быть от {settings.star_topup_min} до {settings.star_topup_max}",
+        )
+    intent_id = uuid.uuid4()
+    invoice_payload = f"autoflow_topup:{intent_id}"
+    invoice_link = await invoice_factory(amount, invoice_payload)
+    intent = StarPaymentIntent(
+        id=intent_id,
+        user_id=user.id,
+        invoice_payload=invoice_payload,
+        invoice_link=invoice_link,
+        xtr_amount=amount,
+        status="pending",
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+    )
+    async with session.begin():
+        session.add(intent)
+    return intent
+
+
+async def validate_star_pre_checkout(
+    session: AsyncSession,
+    telegram_id: int,
+    invoice_payload: str,
+    currency: str,
+    total_amount: int,
+) -> tuple[bool, str | None]:
+    if currency != "XTR":
+        return False, "Поддерживаются только платежи Telegram Stars"
+    intent = await session.scalar(select(StarPaymentIntent).where(StarPaymentIntent.invoice_payload == invoice_payload))
+    user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    if not intent or not user or intent.user_id != user.id:
+        return False, "Счёт не найден или принадлежит другому пользователю"
+    if intent.status != "pending":
+        return False, "Этот счёт уже обработан"
+    if intent.expires_at <= datetime.now(UTC):
+        intent.status = "expired"
+        await session.commit()
+        return False, "Срок действия счёта истёк"
+    if intent.xtr_amount != total_amount:
+        return False, "Сумма счёта не совпадает"
+    return True, None
+
+
 async def process_successful_payment(session: AsyncSession, telegram_id: int, payment: dict) -> bool:
     if payment.get("currency") != "XTR":
         raise HTTPException(status_code=400, detail="Only XTR top-ups are accepted")
     invoice_payload = str(payment.get("invoice_payload") or "")
-    if not invoice_payload.startswith("autoflow_topup:"):
-        raise HTTPException(status_code=400, detail="Unknown invoice payload")
-    charge_id = payment["telegram_payment_charge_id"]
-    xtr_amount = int(payment["total_amount"])
-    try:
-        expected_amount = int(invoice_payload.rsplit(":", 1)[1])
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid invoice payload") from exc
-    if xtr_amount <= 0 or xtr_amount != expected_amount:
-        raise HTTPException(status_code=400, detail="Invoice amount mismatch")
+    charge_id = str(payment.get("telegram_payment_charge_id") or "")
+    xtr_amount = int(payment.get("total_amount") or 0)
+    if not invoice_payload.startswith("autoflow_topup:") or not charge_id or xtr_amount <= 0:
+        raise HTTPException(status_code=400, detail="Invalid successful_payment payload")
+
     async with session.begin():
         if await session.scalar(select(StarPayment.id).where(StarPayment.telegram_payment_charge_id == charge_id)):
             return False
+        intent = await session.scalar(
+            select(StarPaymentIntent).where(StarPaymentIntent.invoice_payload == invoice_payload).with_for_update()
+        )
         user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+        if not intent or not user or intent.user_id != user.id:
+            raise HTTPException(status_code=400, detail="Payment intent does not belong to this user")
+        if intent.status == "paid":
+            return False
+        if intent.status != "pending" or intent.xtr_amount != xtr_amount:
+            raise HTTPException(status_code=400, detail="Invoice amount or status mismatch")
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id).with_for_update())
         if not wallet:
             raise HTTPException(status_code=409, detail="Wallet not found")
+
         amount = money(xtr_amount)
         before_available, before_frozen = wallet.available_balance, wallet.frozen_balance
         wallet.available_balance = money(wallet.available_balance + amount)
         wallet.version += 1
-        record = StarPayment(
-            user_id=user.id,
-            telegram_payment_charge_id=charge_id,
-            provider_payment_charge_id=payment.get("provider_payment_charge_id"),
-            xtr_amount=xtr_amount,
-            af_coin_amount=amount,
-            status="credited",
-            raw_payload=payment,
-            processed_at=datetime.now(UTC),
+        intent.status = "paid"
+        intent.paid_at = datetime.now(UTC)
+        session.add(
+            StarPayment(
+                user_id=user.id,
+                telegram_payment_charge_id=charge_id,
+                provider_payment_charge_id=payment.get("provider_payment_charge_id"),
+                xtr_amount=xtr_amount,
+                af_coin_amount=amount,
+                status="credited",
+                raw_payload=payment,
+                processed_at=datetime.now(UTC),
+            )
         )
-        session.add(record)
-        session.add(wallet_transaction(wallet, "star_payment_credit", amount, before_available, before_frozen, "Telegram Stars converted to AF Coins 1:1", external_reference=charge_id))
-        await create_notification(session, user.id, "wallet_topup", "Баланс пополнен", f"Начислено {amount} AF Coins", {"payment_id": charge_id})
+        session.add(
+            wallet_transaction(
+                wallet,
+                "star_payment_credit",
+                amount,
+                before_available,
+                before_frozen,
+                "Telegram Stars converted to AF Coins 1:1",
+                external_reference=charge_id,
+            )
+        )
+        await create_notification(
+            session,
+            user.id,
+            "wallet_topup",
+            "Баланс пополнен",
+            f"Начислено {amount} AF Coins",
+            {"payment_id": charge_id, "intent_id": str(intent.id)},
+        )
     return True
-    PriceOffer,

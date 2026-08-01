@@ -41,7 +41,9 @@ class Listing(Base, TimestampMixin):
     model: Mapped[str] = mapped_column(String(96), nullable=False, index=True)
     power_hp: Mapped[int] = mapped_column(Integer, nullable=False)
     max_speed_kph: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     price_af_coins: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    views_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     pinned_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     reserved_by_deal_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -52,6 +54,7 @@ class Listing(Base, TimestampMixin):
         CheckConstraint("status IN ('active','paused','reserved','sold','deleted')", name="ck_listings_status"),
         CheckConstraint("price_af_coins >= 100", name="ck_listings_min_price"),
         CheckConstraint("power_hp > 0 AND max_speed_kph > 0", name="ck_listings_positive_stats"),
+        CheckConstraint("views_count >= 0", name="ck_listings_views_nonnegative"),
         Index("ix_listings_type_status_created", "listing_type", "status", "created_at"),
     )
 
@@ -72,10 +75,13 @@ class AccountListing(Base, TimestampMixin):
     seller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", index=True)
     title: Mapped[str] = mapped_column(String(160), nullable=False)
+    level: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cars_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     game_currency: Mapped[str] = mapped_column(String(160), nullable=False)
     extra_currency: Mapped[str | None] = mapped_column(String(160))
+    game_assets: Mapped[str | None] = mapped_column(Text)
     email_binding: Mapped[str] = mapped_column(String(32), nullable=False)
+    auto_delivery: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     price_af_coins: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     image_url: Mapped[str | None] = mapped_column(Text)
@@ -83,6 +89,7 @@ class AccountListing(Base, TimestampMixin):
         CheckConstraint("status IN ('active','paused','deleted')", name="ck_account_listings_status"),
         CheckConstraint("price_af_coins >= 100", name="ck_account_listings_min_price"),
         CheckConstraint("cars_count >= 0", name="ck_account_listings_cars_count"),
+        CheckConstraint("level >= 0", name="ck_account_listings_level"),
     )
 
 
@@ -236,6 +243,23 @@ class StarPayment(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class StarPaymentIntent(Base):
+    __tablename__ = "star_payment_intents"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    invoice_payload: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    invoice_link: Mapped[str | None] = mapped_column(Text)
+    xtr_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        CheckConstraint("xtr_amount BETWEEN 100 AND 1000", name="ck_star_payment_intent_amount"),
+        CheckConstraint("status IN ('pending','paid','cancelled','expired')", name="ck_star_payment_intent_status"),
+    )
+
+
 class WithdrawalRequest(Base, TimestampMixin):
     __tablename__ = "withdrawal_requests"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -272,3 +296,31 @@ class AdminAction(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class SupportTicket(Base, TimestampMixin):
+    __tablename__ = "support_tickets"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    topic: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="open", index=True)
+    screenshot_url: Mapped[str | None] = mapped_column(Text)
+    __table_args__ = (CheckConstraint("status IN ('open','in_progress','resolved','closed')", name="ck_support_ticket_status"),)
+
+
+class SupportMessage(Base):
+    __tablename__ = "support_messages"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("support_tickets.id", ondelete="CASCADE"), nullable=False, index=True)
+    sender_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class Advertisement(Base, TimestampMixin):
+    __tablename__ = "advertisements"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    image_url: Mapped[str] = mapped_column(Text, nullable=False)
+    link_url: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
