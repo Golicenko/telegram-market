@@ -37,7 +37,7 @@ class ListingCreate(BaseModel):
     power_hp: int = Field(gt=0, le=5000)
     max_speed_kph: int = Field(gt=0, le=2000)
     description: str = Field(min_length=1, max_length=3000)
-    price_af_coins: Decimal = Field(ge=100, decimal_places=2)
+    price_af_coins: Decimal = Field(gt=0, decimal_places=2)
     image_urls: list[str] = Field(min_length=1, max_length=1)
 
     @field_validator("brand", "model")
@@ -56,7 +56,7 @@ class ListingUpdate(BaseModel):
     power_hp: int | None = Field(default=None, gt=0, le=5000)
     max_speed_kph: int | None = Field(default=None, gt=0, le=2000)
     description: str | None = Field(default=None, min_length=1, max_length=3000)
-    price_af_coins: Decimal | None = Field(default=None, ge=100, decimal_places=2)
+    price_af_coins: Decimal | None = Field(default=None, gt=0, decimal_places=2)
     image_urls: list[str] | None = Field(default=None, min_length=1, max_length=1)
 
 
@@ -113,7 +113,7 @@ class AccountListingCreate(BaseModel):
     email_binding: str = Field(pattern="^(linked|unlinked|unknown)$")
     auto_delivery: bool = False
     description: str = Field(min_length=5, max_length=5000)
-    price_af_coins: Decimal = Field(ge=100, decimal_places=2)
+    price_af_coins: Decimal = Field(gt=0, decimal_places=2)
     image_url: str = Field(min_length=1, max_length=2000)
 
 
@@ -127,7 +127,7 @@ class AccountListingUpdate(BaseModel):
     email_binding: str | None = Field(default=None, pattern="^(linked|unlinked|unknown)$")
     auto_delivery: bool | None = None
     description: str | None = Field(default=None, min_length=5, max_length=5000)
-    price_af_coins: Decimal | None = Field(default=None, ge=100, decimal_places=2)
+    price_af_coins: Decimal | None = Field(default=None, gt=0, decimal_places=2)
     image_url: str | None = None
     status: str | None = Field(default=None, pattern="^(active|paused|deleted)$")
 
@@ -160,7 +160,7 @@ class ConversationMessageOut(ORMModel):
 
 
 class PriceOfferCreate(BaseModel):
-    amount_af_coins: Decimal = Field(ge=100, decimal_places=2)
+    amount_af_coins: Decimal = Field(gt=0, decimal_places=2)
 
 
 class CounterOfferCreate(PriceOfferCreate):
@@ -226,7 +226,7 @@ class NotificationOut(ORMModel):
 
 
 class StarPaymentIntentCreate(BaseModel):
-    amount: int = Field(ge=100, le=1000)
+    amount: int = Field(gt=0, le=1000)
 
 
 class StarPaymentIntentOut(BaseModel):
