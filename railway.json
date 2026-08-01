@@ -5,7 +5,8 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "preDeployCommand": "cd /app/backend && alembic upgrade head",
+    "preDeployCommand": "python /app/backend/scripts/migrate.py",
+    "startCommand": "/app/start.sh",
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
