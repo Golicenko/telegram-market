@@ -52,7 +52,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.CheckConstraint("listing_type IN ('regular','unique')", name="ck_listings_type"),
         sa.CheckConstraint("status IN ('active','reserved','sold','deleted')", name="ck_listings_status"),
-        sa.CheckConstraint("price_af_coins >= 100", name="ck_listings_min_price"),
+        sa.CheckConstraint("price_af_coins >= 0", name="ck_listings_min_price"),
         sa.CheckConstraint("power_hp > 0 AND max_speed_kph > 0", name="ck_listings_positive_stats"),
     )
     op.create_index("ix_listings_seller_id", "listings", ["seller_id"])
