@@ -938,13 +938,47 @@
       }
       const transfer = document.createElement("button"); transfer.className = "deal-confirm"; transfer.dataset.dealAction = "transfer"; transfer.textContent = "Передали машину"; elements.dealControls.append(transfer);
     }
-    if (isBuyer && deal.status === "transfer_in_progress") {
-      const warning = document.createElement("p"); warning.textContent = "Подтверждайте получение только после того, как действительно получили товар. После подтверждения сделка будет завершена";
-      const confirm = document.createElement("button"); confirm.className = "deal-confirm"; confirm.dataset.dealAction = "confirm"; confirm.textContent = "Машина передана мне";
-      const availableAt = new Date(new Date(deal.transfer_started_at).getTime() + 5 * 60 * 1000);
-      confirm.disabled = Date.now() < availableAt.getTime(); if (confirm.disabled) confirm.title = `Доступно после ${availableAt.toLocaleTimeString("ru-RU")}`;
-      elements.dealControls.append(warning, confirm);
+   if (isBuyer && deal.status === "transfer_in_progress") {
+  const warning = document.createElement("p");
+  warning.textContent =
+    "Подтверждайте получение только после того, как действительно получили машину.";
+
+  const timer = document.createElement("p");
+  timer.className = "deal-timer";
+
+  const confirm = document.createElement("button");
+  confirm.className = "deal-confirm";
+  confirm.dataset.dealAction = "confirm";
+  confirm.textContent = "Машина передана мне";
+  confirm.hidden = true;
+
+  const availableAt =
+    new Date(deal.transfer_started_at).getTime() + 60 * 1000;
+
+  const updateTimer = () => {
+    const remainingMs = availableAt - Date.now();
+    const remainingSeconds = Math.max(
+      0,
+      Math.ceil(remainingMs / 1000)
+    );
+
+    if (remainingSeconds > 0) {
+      timer.textContent =
+        `Подтвердить получение можно через ${remainingSeconds} сек.`;
+      confirm.hidden = true;
+      return;
     }
+
+    timer.textContent = "Теперь можно подтвердить получение машины.";
+    confirm.hidden = false;
+    clearInterval(timer.intervalId);
+  };
+
+  updateTimer();
+  timer.intervalId = window.setInterval(updateTimer, 1000);
+
+  elements.dealControls.append(warning, timer, confirm);
+}
     const dispute = document.createElement("button"); dispute.className = "deal-dispute"; dispute.dataset.dealAction = "dispute"; dispute.textContent = "Возникла проблема"; elements.dealControls.append(dispute);
     if (["paid", "seller_contacted"].includes(deal.status)) {
       const cancel = document.createElement("button"); cancel.className = "deal-secondary"; cancel.dataset.dealAction = "cancel"; cancel.textContent = "Отменить сделку"; elements.dealControls.append(cancel);
