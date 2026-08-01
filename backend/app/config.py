@@ -1,13 +1,46 @@
+import os
 from functools import lru_cache
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DEFAULT_DATABASE_URL = "postgresql+asyncpg://autoflow:autoflow@localhost:5432/autoflow"
+
+
+def normalize_database_url(value: str) -> str:
+    """Return a SQLAlchemy URL that uses the asyncpg driver."""
+    value = value.strip()
+    if value.startswith("postgres://"):
+        return value.replace("postgres://", "postgresql+asyncpg://", 1)
+    if value.startswith("postgresql://"):
+        return value.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return value
+
+
+def migration_database_url() -> str:
+    """Read only the database setting so unrelated app variables cannot block Alembic."""
+    value = os.getenv("DATABASE_URL", "").strip()
+    if not value:
+        raise RuntimeError(
+            "DATABASE_URL is missing. Add it to the AUTOFLOW application service "
+            "as a Railway reference, for example ${{Postgres.DATABASE_URL}}."
+        )
+    if value.startswith("${{") or "DATABASE_URL}}" in value:
+        raise RuntimeError(
+            "DATABASE_URL contains an unresolved Railway reference. Check the exact "
+            "PostgreSQL service name in ${{<service>.DATABASE_URL}}."
+        )
+    value = normalize_database_url(value)
+    if not value.startswith(("postgresql+asyncpg://", "postgresql+psycopg://")):
+        raise RuntimeError("DATABASE_URL must be a PostgreSQL connection URL.")
+    return value
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://autoflow:autoflow@localhost:5432/autoflow"
+    database_url: str = DEFAULT_DATABASE_URL
     bot_token: str = ""
     telegram_webhook_secret: str = ""
     admin_id: int | None = None
@@ -30,10 +63,7 @@ class Settings(BaseSettings):
     def normalize_database_url(cls, value):
         """Railway exposes postgres:// URLs; the app uses SQLAlchemy's asyncpg driver."""
         if isinstance(value, str):
-            if value.startswith("postgres://"):
-                return value.replace("postgres://", "postgresql+asyncpg://", 1)
-            if value.startswith("postgresql://"):
-                return value.replace("postgresql://", "postgresql+asyncpg://", 1)
+            return normalize_database_url(value)
         return value
 
     @field_validator("admin_telegram_ids", mode="before")

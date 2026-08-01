@@ -5,12 +5,12 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from app.config import get_settings
+from app.config import migration_database_url
 from app.models import Base
 
 
 config = context.config
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+config.set_main_option("sqlalchemy.url", migration_database_url())
 if config.config_file_name:
     fileConfig(config.config_file_name)
 target_metadata = Base.metadata

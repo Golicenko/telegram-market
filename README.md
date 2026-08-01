@@ -55,7 +55,7 @@ uvicorn app.main:app --reload --port 8000
 
 ## Деплой в Railway
 
-Railway автоматически обнаруживает корневой `Dockerfile`. Миграции выполняются командой `alembic upgrade head` перед деплоем и повторно безопасно проверяются в `start.sh`; затем Uvicorn слушает выданный Railway порт `0.0.0.0:$PORT`. Healthcheck: `/api/health`.
+Railway автоматически обнаруживает корневой `Dockerfile`. Перед деплоем `railway.json` запускает `python /app/backend/scripts/migrate.py`: runner проверяет `DATABASE_URL`, ожидает готовности PostgreSQL и применяет Alembic-миграции. После успешной миграции `/app/start.sh` запускает Uvicorn на выданном Railway порту `0.0.0.0:$PORT`. Healthcheck: `/api/health`.
 
 В Variables сервиса приложения нужны:
 
@@ -66,6 +66,8 @@ DATABASE_URL=${{Postgres.DATABASE_URL}}
 ```
 
 `DATABASE_URL` формата `postgres://` или `postgresql://` автоматически преобразуется для драйвера `asyncpg`. Если у сервиса создан публичный Railway domain, приложение использует `RAILWAY_PUBLIC_DOMAIN` и само регистрирует `https://<domain>/api/telegram/webhook` в Telegram. Опционально задайте случайный `TELEGRAM_WEBHOOK_SECRET`.
+
+Если PostgreSQL запускается одновременно с приложением, runner повторяет подключение до 12 раз с интервалом 5 секунд. Эти значения можно изменить переменными `MIGRATION_MAX_ATTEMPTS` и `MIGRATION_RETRY_SECONDS`. В Start Command не нужно повторно запускать Alembic: миграция выполняется только в Pre-deploy.
 
 Загруженные фотографии по умолчанию лежат в файловой системе контейнера. Для сохранения между деплоями подключите Railway Volume к `/data` и задайте `UPLOAD_DIR=/data/uploads`; позже это можно заменить объектным хранилищем.
 
