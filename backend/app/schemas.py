@@ -1,0 +1,226 @@
+import uuid
+from datetime import datetime
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class ORMModel(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserOut(ORMModel):
+    id: uuid.UUID
+    telegram_id: int
+    role: str
+    first_name: str
+    last_name: str | None
+    username: str | None
+    photo_url: str | None
+    is_blocked: bool
+
+
+class WalletOut(ORMModel):
+    available_balance: Decimal
+    frozen_balance: Decimal
+    total_earned: Decimal
+
+
+class MeOut(BaseModel):
+    user: UserOut
+    wallet: WalletOut
+
+
+class ListingCreate(BaseModel):
+    brand: str = Field(min_length=1, max_length=96)
+    model: str = Field(min_length=1, max_length=96)
+    power_hp: int = Field(gt=0, le=5000)
+    max_speed_kph: int = Field(gt=0, le=2000)
+    price_af_coins: Decimal = Field(ge=100, decimal_places=2)
+    image_urls: list[str] = Field(default_factory=list, max_length=10)
+    promote_for_24h: bool = False
+
+    @field_validator("brand", "model")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class UniqueListingCreate(ListingCreate):
+    pinned: bool = False
+
+
+class ListingUpdate(BaseModel):
+    brand: str | None = Field(default=None, min_length=1, max_length=96)
+    model: str | None = Field(default=None, min_length=1, max_length=96)
+    power_hp: int | None = Field(default=None, gt=0, le=5000)
+    max_speed_kph: int | None = Field(default=None, gt=0, le=2000)
+    price_af_coins: Decimal | None = Field(default=None, ge=100, decimal_places=2)
+    promote_for_24h: bool = False
+    image_urls: list[str] | None = Field(default=None, max_length=10)
+
+
+class ListingOut(ORMModel):
+    id: uuid.UUID
+    seller_id: uuid.UUID
+    listing_type: str
+    status: str
+    brand: str
+    model: str
+    power_hp: int
+    max_speed_kph: int
+    price_af_coins: Decimal
+    pinned: bool
+    pinned_until: datetime | None
+    effective_price_af_coins: Decimal | None = None
+    created_at: datetime
+    images: list[str] = Field(default_factory=list)
+
+
+class DealOut(ORMModel):
+    id: uuid.UUID
+    listing_id: uuid.UUID
+    buyer_id: uuid.UUID
+    seller_id: uuid.UUID
+    status: str
+    price_af_coins: Decimal
+    transfer_started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+
+
+class MessageCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)
+
+
+class MessageOut(ORMModel):
+    id: uuid.UUID
+    deal_id: uuid.UUID
+    sender_id: uuid.UUID
+    body: str
+    created_at: datetime
+
+
+class AccountListingCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=160)
+    cars_count: int = Field(ge=0, le=100000)
+    game_currency: str = Field(min_length=1, max_length=160)
+    extra_currency: str | None = Field(default=None, max_length=160)
+    email_binding: str = Field(pattern="^(linked|unlinked|unknown)$")
+    description: str = Field(min_length=5, max_length=5000)
+    price_af_coins: Decimal = Field(ge=100, decimal_places=2)
+    image_url: str | None = None
+
+
+class AccountListingUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=160)
+    cars_count: int | None = Field(default=None, ge=0, le=100000)
+    game_currency: str | None = Field(default=None, min_length=1, max_length=160)
+    extra_currency: str | None = Field(default=None, max_length=160)
+    email_binding: str | None = Field(default=None, pattern="^(linked|unlinked|unknown)$")
+    description: str | None = Field(default=None, min_length=5, max_length=5000)
+    price_af_coins: Decimal | None = Field(default=None, ge=100, decimal_places=2)
+    image_url: str | None = None
+    status: str | None = Field(default=None, pattern="^(active|paused|deleted)$")
+
+
+class AccountListingOut(ORMModel):
+    id: uuid.UUID
+    seller_id: uuid.UUID
+    status: str
+    title: str
+    cars_count: int
+    game_currency: str
+    extra_currency: str | None
+    email_binding: str
+    description: str
+    price_af_coins: Decimal
+    image_url: str | None
+    created_at: datetime
+
+
+class ConversationMessageOut(ORMModel):
+    id: uuid.UUID
+    conversation_id: uuid.UUID
+    sender_id: uuid.UUID
+    body: str
+    message_type: str
+    created_at: datetime
+
+
+class PriceOfferCreate(BaseModel):
+    amount_af_coins: Decimal = Field(ge=100, decimal_places=2)
+
+
+class CounterOfferCreate(PriceOfferCreate):
+    parent_offer_id: uuid.UUID
+
+
+class PriceOfferOut(ORMModel):
+    id: uuid.UUID
+    conversation_id: uuid.UUID
+    offered_by_id: uuid.UUID
+    amount_af_coins: Decimal
+    status: str
+    parent_offer_id: uuid.UUID | None
+    responded_at: datetime | None
+    created_at: datetime
+
+
+class DealResolution(BaseModel):
+    outcome: str = Field(pattern="^(complete|refund)$")
+    reason: str = Field(min_length=5, max_length=2000)
+
+
+class WithdrawalCreate(BaseModel):
+    amount: Decimal = Field(gt=0, decimal_places=2)
+    payout_method: str = Field(min_length=2, max_length=64)
+    details: str = Field(min_length=2, max_length=2000)
+
+
+class WithdrawalDecision(BaseModel):
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class WithdrawalOut(ORMModel):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    amount: Decimal
+    payout_method: str
+    details: str
+    status: str
+    rejection_reason: str | None
+    created_at: datetime
+
+
+class AdminWithdrawalOut(WithdrawalOut):
+    user_telegram_id: int
+    user_name: str
+
+
+class BalanceAdjustmentCreate(BaseModel):
+    user_id: uuid.UUID
+    amount: Decimal
+    reason: str = Field(min_length=5, max_length=2000)
+
+
+class NotificationOut(ORMModel):
+    id: uuid.UUID
+    notification_type: str
+    title: str
+    body: str
+    payload: dict
+    read_at: datetime | None
+    created_at: datetime
+
+
+class ProfileOut(BaseModel):
+    user: UserOut
+    wallet: WalletOut
+    active_listings: list[ListingOut]
+    sold_listings: list[ListingOut]
+    purchases: list[ListingOut]
+    active_deals: list[DealOut]
+    conversations: list[dict]
+    wallet_transactions: list[dict]
+    withdrawals: list[WithdrawalOut]
