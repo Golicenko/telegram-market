@@ -516,8 +516,8 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
             raise HTTPException(status_code=404, detail="Deal not found")
         if deal.status != "transfer_in_progress" or not deal.transfer_started_at:
             raise HTTPException(status_code=409, detail="Transfer has not started")
-if datetime.now(UTC) - deal.transfer_started_at < timedelta(seconds=60):
-    raise HTTPException(
+      if datetime.now(UTC) - deal.transfer_started_at < timedelta(seconds=60):
+        raise HTTPException(
         status_code=409,
         detail="Подтверждение станет доступно через 60 секунд после начала передачи",
     )
