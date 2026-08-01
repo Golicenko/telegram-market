@@ -1,0 +1,8 @@
+backend/.env
+backend/.venv/
+backend/uploads/*
+!backend/uploads/.gitkeep
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store

@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: autoflow
+      POSTGRES_USER: autoflow
+      POSTGRES_PASSWORD: autoflow
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autoflow -d autoflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - autoflow_pgdata:/var/lib/postgresql/data
+
+volumes:
+  autoflow_pgdata:
