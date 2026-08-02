@@ -156,6 +156,10 @@ class ConversationMessageOut(ORMModel):
     sender_id: uuid.UUID
     body: str
     message_type: str
+
+    is_read: bool
+    read_at: datetime | None
+
     created_at: datetime
 
 
