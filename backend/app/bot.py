@@ -56,6 +56,34 @@ async def send_bot_notification(telegram_id: int, text: str) -> bool:
     except httpx.HTTPError:
         return False
 
+async def send_bot_photo(
+    telegram_id: int,
+    photo_file_id: str,
+    caption: str | None = None,
+) -> bool:
+    settings = get_settings()
+
+    if not settings.bot_token:
+        return False
+
+    url = f"https://api.telegram.org/bot{settings.bot_token}/sendPhoto"
+
+    payload = {
+        "chat_id": telegram_id,
+        "photo": photo_file_id,
+    }
+
+    if caption:
+        payload["caption"] = caption[:1024]
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(url, json=payload)
+
+        return response.is_success and bool(response.json().get("ok"))
+    except (httpx.HTTPError, ValueError):
+        return False
+
 
 async def configure_telegram_webhook() -> bool:
     """Register Railway's public HTTPS endpoint without making startup depend on Telegram."""
