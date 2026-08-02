@@ -301,7 +301,7 @@ class StarPaymentIntent(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
-        CheckConstraint("xtr_amount BETWEEN 100 AND 1000", name="ck_star_payment_intent_amount"),
+        CheckConstraint("xtr_amount BETWEEN 50 AND 10000", name="ck_star_payment_intent_amount"),
         CheckConstraint("status IN ('pending','paid','cancelled','expired')", name="ck_star_payment_intent_status"),
     )
 
