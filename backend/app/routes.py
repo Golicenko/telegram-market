@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Pat
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, UploadFile, status
 from sqlalchemy import delete, func, or_, select, update
