@@ -236,6 +236,10 @@
     const conversationButton = target.closest("[data-open-conversation]");
     if (conversationButton) return void openConversation(conversationButton.dataset.openConversation);
     const dealAction = target.closest("[data-deal-action]");
+    const hideConversationButton = target.closest("[data-hide-conversation]");
+    if (hideConversationButton) {
+    return void hideConversation(hideConversationButton.dataset.hideConversation);
+  }
     if (dealAction) return void runDealAction(dealAction.dataset.dealAction);
     const adminWithdrawal = target.closest("[data-withdrawal-action]");
     if (adminWithdrawal) return void adminWithdrawalAction(adminWithdrawal);
@@ -986,16 +990,96 @@ async function openFloatingChat() {
     }));
   }
 
-  function renderConversations(conversations) {
-    document.getElementById("conversationsEmpty").hidden = conversations.length > 0;
-    elements.conversationList.replaceChildren(...conversations.map((conversation) => {
-      const button = document.createElement("button"); button.className = "deal-row"; button.dataset.openConversation = conversation.id;
-      const copy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = `${conversation.listing.brand} ${conversation.listing.model}`;
-      const other = document.createElement("small"); other.textContent = conversation.counterparty.name || conversation.counterparty.username || "Пользователь"; copy.append(title, other);
-      const status = document.createElement("b"); status.textContent = conversation.deal ? dealStatusLabel(conversation.deal.status) : "Переписка"; button.append(copy, status); return button;
-    }));
+function renderConversations(conversations) {
+  const hiddenIds = getHiddenConversationIds();
+
+  const visibleConversations = conversations.filter(
+    (conversation) => !hiddenIds.includes(String(conversation.id))
+  );
+
+  const empty = document.getElementById("conversationsEmpty");
+
+  empty.hidden = visibleConversations.length > 0;
+  elements.conversationList.replaceChildren();
+
+  visibleConversations.forEach((conversation) => {
+    const row = document.createElement("div");
+    row.className = "conversation-row";
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "conversation-open";
+    open.dataset.openConversation = conversation.id;
+
+    const name = document.createElement("strong");
+    name.className = "conversation-name";
+    name.textContent =
+      conversation.counterparty.name ||
+      conversation.counterparty.username ||
+      "Пользователь";
+
+    open.append(name);
+
+    const unreadCount = Number(conversation.unread_count || 0);
+
+    if (unreadCount > 0) {
+      const badge = document.createElement("span");
+      badge.className = "conversation-unread";
+      badge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+      open.append(badge);
+    }
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "conversation-delete";
+    del.dataset.hideConversation = conversation.id;
+    del.textContent = "Удалить";
+
+    row.append(open, del);
+    elements.conversationList.append(row);
+  });
+}
+
+    const del = document.createElement("button");
+    del.className = "conversation-delete";
+    del.dataset.hideConversation = conversation.id;
+    del.textContent = "🗑";
+
+    row.append(open, del);
+    elements.conversationList.append(row);
+  });
+}
+function getHiddenConversationIds() {
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem("hiddenConversationIds") || "[]"
+    );
+
+    return Array.isArray(saved) ? saved.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHiddenConversationIds(ids) {
+  localStorage.setItem(
+    "hiddenConversationIds",
+    JSON.stringify(ids.map(String))
+  );
+}
+
+function hideConversation(conversationId) {
+  const hiddenIds = getHiddenConversationIds();
+  const id = String(conversationId);
+
+  if (!hiddenIds.includes(id)) {
+    hiddenIds.push(id);
+    saveHiddenConversationIds(hiddenIds);
   }
 
+  renderConversations(state.profile?.conversations || []);
+  notify("Диалог удалён из вашего списка");
+}
   function openFrozenDeals() {
     switchProfileTab("deals");
     const frozen = Number(state.profile?.wallet.frozen_balance || 0);
