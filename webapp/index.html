@@ -110,22 +110,24 @@
 
 <div class="amount-field">
     <input
-        id="topupAmount"
-        name="amount"
-        type="number"
-        min="50"
-        max="1000"
-        value="50"
-        required
-    />
+  id="topupAmount"
+  name="amount"
+  type="number"
+  min="50"
+  max="1000"
+  value="50"
+  required
+  inputmode="numeric"
+/>
     <span>XTR</span>
 </div>
 
 <div class="amount-chips">
-    <button type="button" data-topup-amount="50">50</button>
-    <button type="button" data-topup-amount="67">67</button>
-    <button type="button" data-topup-amount="150">150</button>
-    <button type="button" data-topup-amount="200">200</button>
+     <button type="button" data-topup-amount="50">50</button>
+     <button type="button" data-topup-amount="100">100</button>
+     <button type="button" data-topup-amount="200">200</button>
+     <button type="button" data-topup-amount="500">500</button>
+     <button type="button" data-topup-amount="1000">1000</button>
 </div>
 
 <button class="pay-button" type="submit">
