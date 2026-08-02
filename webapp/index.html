@@ -12,6 +12,11 @@
     <script src="js/app.js" defer></script>
   </head>
   <body>
+    <div id="introScreen">
+  <video id="introVideo" autoplay muted playsinline>
+    <source src="intro.mp4" type="video/mp4">
+  </video>
+</div>
     <div class="app-shell">
       <header class="app-header" id="appHeader">
         <button class="header-balance" type="button" data-open-topup aria-label="Пополнить баланс AF Coins"><span data-balance>0.00</span><span class="af-coin" aria-label="AF Coins"></span><span class="balance-plus">＋</span></button>
@@ -251,5 +256,18 @@
         <p id="successText"></p>
     </div>
 </div>
+    <script>
+window.addEventListener("load", () => {
+  const intro = document.getElementById("introScreen");
+  const video = document.getElementById("introVideo");
+
+  if (!intro || !video) return;
+
+  video.onended = () => {
+    intro.style.opacity = "0";
+    setTimeout(() => intro.remove(), 500);
+  };
+});
+</script>
   </body>
 </html>
