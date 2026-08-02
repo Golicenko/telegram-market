@@ -131,5 +131,34 @@
 
     <dialog class="modal" id="infoModal"><div class="modal-head"><div><span class="eyebrow">О приложении</span><h2>AUTOFLOW MARKET</h2></div><button type="button" data-close-dialog="infoModal" aria-label="Закрыть">×</button></div><p>AUTOFLOW MARKET — удобная площадка внутри Telegram для размещения и поиска автомобильных предложений. Сделки проходят через систему резервирования: средства не начисляются продавцу до подтверждения получения покупателем. Все объявления, операции и статусы сделки сохраняются в истории.</p><p>Внутри сервиса используется AF Coins. При завершённой сделке продавец получает 70% цены, комиссия платформы составляет 30%.</p><p class="security-note">Никому не передавайте пароль, коды подтверждения или доступ к Telegram. Перед подтверждением сделки убедитесь, что получили именно заявленный товар.</p><button class="publish-button" type="button" data-close-dialog="infoModal">Понятно</button></dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+     <!-- Плавающая кнопка чата -->
+<button
+    id="floatingChatButton"
+    class="floating-chat-button"
+    type="button"
+    hidden
+>
+    💬
+    <span id="chatUnreadBadge" class="chat-unread-badge" hidden>0</span>
+</button>
+
+<!-- Уведомление о новом сообщении -->
+<div id="chatNotification" class="chat-notification" hidden>
+    <strong>Новое сообщение</strong>
+    <span id="chatNotificationText">Вам пришло сообщение</span>
+</div>
+
+<!-- Экран успешной операции -->
+<div id="successOverlay" class="success-overlay" hidden>
+    <div class="success-card">
+        <div class="success-check">✓</div>
+
+        <h2 id="successTitle">
+            Покупка успешно завершена
+        </h2>
+
+        <p id="successText"></p>
+    </div>
+</div>
   </body>
 </html>
