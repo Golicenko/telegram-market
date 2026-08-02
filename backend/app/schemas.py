@@ -211,6 +211,7 @@ class WithdrawalOut(ORMModel):
 class AdminWithdrawalOut(WithdrawalOut):
     user_telegram_id: int
     user_name: str
+    user_username: str | None = None
 
 
 class BalanceAdjustmentCreate(BaseModel):
