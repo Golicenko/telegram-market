@@ -312,7 +312,7 @@ async def list_listings(
     listing_type: str = Query(alias="type", pattern="^(regular|unique)$"),
     brand: str | None = None,
     model: str | None = None,
-    max_price: Decimal | None = Query(default=None, ge=100),
+    max_price: Decimal | None = Query(default=None, ge=50),
     min_power: int | None = Query(default=None, gt=0),
     min_speed: int | None = Query(default=None, gt=0),
     session: AsyncSession = Depends(get_session),
