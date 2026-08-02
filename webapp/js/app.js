@@ -1030,17 +1030,6 @@ function renderConversations(conversations) {
     }
 
     const del = document.createElement("button");
-    del.type = "button";
-    del.className = "conversation-delete";
-    del.dataset.hideConversation = conversation.id;
-    del.textContent = "Удалить";
-
-    row.append(open, del);
-    elements.conversationList.append(row);
-  });
-}
-
-    const del = document.createElement("button");
     del.className = "conversation-delete";
     del.dataset.hideConversation = conversation.id;
     del.textContent = "🗑";
