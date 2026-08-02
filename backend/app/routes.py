@@ -1229,6 +1229,52 @@ async def telegram_webhook(
         return {"ok": True}
     message = update.get("message") or {}
     sender = message.get("from") or {}
+        # Админская рассылка
+    if sender.get("id") in settings.admin_telegram_ids:
+
+        if (message.get("text") or "").startswith("#рассылка"):
+
+            text = (message.get("text") or "").replace("#рассылка", "", 1).strip()
+
+            users = list(
+                (
+                    await session.scalars(
+                        select(User).where(User.bot_started.is_(True))
+                    )
+                ).all()
+            )
+
+            for item in users:
+                await send_bot_notification(item.telegram_id, text)
+
+            return {"ok": True}
+
+        if message.get("photo"):
+
+            caption = message.get("caption") or ""
+
+            if caption.startswith("#рассылка"):
+
+                caption = caption.replace("#рассылка", "", 1).strip()
+
+                photo = message["photo"][-1]["file_id"]
+
+                users = list(
+                    (
+                        await session.scalars(
+                            select(User).where(User.bot_started.is_(True))
+                        )
+                    ).all()
+                )
+
+                for item in users:
+                    await send_bot_photo(
+                        item.telegram_id,
+                        photo,
+                        caption,
+                    )
+
+                return {"ok": True}
     if message.get("text") == "/start" and sender.get("id"):
         user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
         if not user:
