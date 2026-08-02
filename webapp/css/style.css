@@ -186,3 +186,216 @@ input::placeholder, textarea::placeholder { color:#677381; }
 .admin-tabs{display:flex;gap:5px;overflow-x:auto;padding-bottom:3px}.admin-tabs button{flex:0 0 auto;min-height:34px;padding:0 10px;border:1px solid var(--line);border-radius:7px;color:#9faab6;background:#17212d;font-size:9px}.admin-tabs button.is-active{color:#221405;border-color:#ffad15;background:#ffad15}.admin-search{grid-template-columns:1fr auto!important}.admin-search button{padding:0 12px;border:0;border-radius:7px;color:#241504;background:#ff9b00;font-size:9px;font-weight:850}.admin-record{display:grid;gap:4px;margin:6px 0;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}.admin-record strong{font-size:10px}.admin-record small{color:var(--muted);font-size:8px}.admin-record>span{color:#ffb51d;font-size:9px}.admin-record__actions{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}.admin-record__actions button{min-height:29px;padding:0 8px;border:1px solid var(--line);border-radius:6px;color:#dce3ea;background:#18232f;font-size:8px}
 .support-list{display:grid;gap:7px;padding:0 4px 18px}.support-ticket{display:grid;gap:6px;padding:9px;border:1px solid var(--line);border-radius:9px;background:var(--panel)}.support-ticket__head{display:flex;justify-content:space-between;gap:8px}.support-ticket strong{font-size:11px}.support-ticket small{color:#ffae18;font-size:8px}.support-message{padding:7px;border-radius:7px;color:#bfc8d2;background:#111c28;font-size:9px;line-height:1.4}.support-message.is-admin{border-left:2px solid var(--orange);background:rgba(255,139,0,.06)}.support-ticket__actions{display:flex;gap:5px}.support-ticket__actions button{min-height:29px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:#18232f;font-size:8px}.advertisement-preview{aspect-ratio:3/1;overflow:hidden;border:1px dashed var(--line);border-radius:10px;display:grid;place-items:center;color:var(--muted);background:#08111b;font-size:10px}.advertisement-preview img{width:100%;height:100%;object-fit:cover}.admin-panel .ghost-button{min-height:39px;border-radius:8px;color:#ff8b91}
 @media(max-width:370px){.account-card{grid-template-columns:82px 1fr}.profile-tabs button{font-size:9px}.owner-actions{grid-template-columns:1fr}.owner-actions button{min-height:27px}}
+/* Плавающая кнопка чата */
+.floating-chat-button {
+  position: fixed;
+  right: 16px;
+  bottom: calc(95px + env(safe-area-inset-bottom));
+  z-index: 1200;
+
+  width: 58px;
+  height: 58px;
+
+  border: 1px solid rgba(255, 174, 32, 0.9);
+  border-radius: 50%;
+
+  background:
+    radial-gradient(
+      circle at 35% 25%,
+      rgba(255, 192, 70, 0.32),
+      transparent 36%
+    ),
+    linear-gradient(145deg, #172231, #050a11);
+
+  color: #ffffff;
+  font-size: 24px;
+
+  box-shadow:
+    0 0 0 4px rgba(255, 156, 0, 0.09),
+    0 12px 34px rgba(0, 0, 0, 0.55),
+    0 0 22px rgba(255, 150, 0, 0.25);
+}
+
+.floating-chat-button[hidden] {
+  display: none !important;
+}
+
+/* Красный счётчик сообщений */
+.chat-unread-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+
+  min-width: 23px;
+  height: 23px;
+  padding: 0 6px;
+
+  display: grid;
+  place-items: center;
+
+  border: 2px solid #07101a;
+  border-radius: 999px;
+
+  background: #ff3b4f;
+  color: #ffffff;
+
+  font-size: 12px;
+  font-weight: 800;
+
+  box-shadow: 0 5px 14px rgba(255, 59, 79, 0.4);
+}
+
+.chat-unread-badge[hidden] {
+  display: none !important;
+}
+
+/* Уведомление сверху */
+.chat-notification {
+  position: fixed;
+  top: calc(14px + env(safe-area-inset-top));
+  left: 14px;
+  right: 14px;
+
+  z-index: 1400;
+
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  padding: 13px 15px;
+
+  border: 1px solid rgba(255, 174, 32, 0.5);
+  border-radius: 16px;
+
+  background: rgba(7, 14, 24, 0.96);
+  color: #ffffff;
+
+  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(14px);
+}
+
+.chat-notification[hidden] {
+  display: none !important;
+}
+
+.chat-notification strong {
+  color: #ffb229;
+  font-size: 14px;
+}
+
+.chat-notification span {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Экран успешной покупки или продажи */
+.success-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+
+  display: grid;
+  place-items: center;
+
+  padding: 24px;
+
+  background: rgba(1, 5, 10, 0.82);
+  backdrop-filter: blur(10px);
+}
+
+.success-overlay[hidden] {
+  display: none !important;
+}
+
+.success-card {
+  width: min(310px, 90vw);
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 11px;
+
+  padding: 30px 22px;
+
+  border: 1px solid rgba(255, 174, 32, 0.55);
+  border-radius: 24px;
+
+  background:
+    radial-gradient(
+      circle at 50% 0%,
+      rgba(255, 171, 35, 0.18),
+      transparent 52%
+    ),
+    #08111d;
+
+  color: #ffffff;
+  text-align: center;
+
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.65),
+    0 0 28px rgba(255, 153, 0, 0.18);
+
+  animation: success-card-show 0.35s ease;
+}
+
+.success-check {
+  width: 76px;
+  height: 76px;
+
+  display: grid;
+  place-items: center;
+
+  border: 3px solid #ffae23;
+  border-radius: 50%;
+
+  background: rgba(255, 168, 22, 0.12);
+  color: #ffbf45;
+
+  font-size: 45px;
+  font-weight: 900;
+
+  box-shadow: 0 0 28px rgba(255, 163, 22, 0.34);
+
+  animation: success-check-show 0.52s ease;
+}
+
+.success-card h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.success-card p {
+  margin: 0;
+  color: #aeb9c7;
+  font-size: 14px;
+}
+
+@keyframes success-card-show {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.94);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes success-check-show {
+  0% {
+    opacity: 0;
+    transform: scale(0.35) rotate(-18deg);
+  }
+
+  65% {
+    opacity: 1;
+    transform: scale(1.13) rotate(4deg);
+  }
+
+  100% {
+    transform: scale(1) rotate(0);
+  }
+}
