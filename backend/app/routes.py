@@ -1244,10 +1244,31 @@ async def telegram_webhook(
                 ).all()
             )
 
-            for item in users:
-                await send_bot_notification(item.telegram_id, text)
+           sent_count = 0
+failed_count = 0
 
-            return {"ok": True}
+for item in users:
+    sent = await send_bot_notification(item.telegram_id, text)
+
+    if sent:
+        sent_count += 1
+    else:
+        failed_count += 1
+
+await send_bot_notification(
+    int(sender["id"]),
+    (
+        "✅ Рассылка завершена.\n\n"
+        f"Получили: {sent_count}\n"
+        f"Не удалось отправить: {failed_count}"
+    ),
+)
+
+return {
+    "ok": True,
+    "sent": sent_count,
+    "failed": failed_count,
+}
 
         if message.get("photo"):
 
@@ -1267,14 +1288,35 @@ async def telegram_webhook(
                     ).all()
                 )
 
-                for item in users:
-                    await send_bot_photo(
-                        item.telegram_id,
-                        photo,
-                        caption,
-                    )
+sent_count = 0
+failed_count = 0
 
-                return {"ok": True}
+for item in users:
+    sent = await send_bot_photo(
+        item.telegram_id,
+        photo,
+        caption,
+    )
+
+    if sent:
+        sent_count += 1
+    else:
+        failed_count += 1
+
+await send_bot_notification(
+    int(sender["id"]),
+    (
+        "✅ Рассылка завершена.\n\n"
+        f"Получили: {sent_count}\n"
+        f"Не удалось отправить: {failed_count}"
+    ),
+)
+
+return {
+    "ok": True,
+    "sent": sent_count,
+    "failed": failed_count,
+}
     if message.get("text") == "/start" and sender.get("id"):
         user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
         if not user:
