@@ -519,7 +519,63 @@ async def list_conversations(user: User = Depends(get_current_user), session: As
     )
     return [await conversation_details(session, item, user) for item in values]
 
+@router.get("/conversations/unread-summary")
+async def conversation_unread_summary(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    conversations = list(
+        (
+            await session.scalars(
+                select(Conversation).where(
+                    or_(
+                        Conversation.buyer_id == user.id,
+                        Conversation.seller_id == user.id,
+                    )
+                )
+            )
+        ).all()
+    )
 
+    conversation_ids = [conversation.id for conversation in conversations]
+
+    if not conversation_ids:
+        return {
+            "total_unread": 0,
+            "conversations": [],
+        }
+
+    unread_rows = (
+        await session.execute(
+            select(
+                ConversationMessage.conversation_id,
+                func.count(ConversationMessage.id),
+            )
+            .where(
+                ConversationMessage.conversation_id.in_(conversation_ids),
+                ConversationMessage.sender_id != user.id,
+                ConversationMessage.is_read.is_(False),
+            )
+            .group_by(ConversationMessage.conversation_id)
+        )
+    ).all()
+
+    unread_by_conversation = {
+        str(conversation_id): unread_count
+        for conversation_id, unread_count in unread_rows
+    }
+
+    return {
+        "total_unread": sum(unread_by_conversation.values()),
+        "conversations": [
+            {
+                "conversation_id": conversation_id,
+                "unread_count": unread_count,
+            }
+            for conversation_id, unread_count in unread_by_conversation.items()
+        ],
+    }
+    
 @router.get("/conversations/{conversation_id}")
 async def get_conversation(conversation_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     conversation = await session.get(Conversation, conversation_id)
@@ -534,6 +590,38 @@ async def get_conversation_messages(conversation_id: uuid.UUID, user: User = Dep
     if not conversation or user.id not in {conversation.buyer_id, conversation.seller_id}:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return list((await session.scalars(select(ConversationMessage).where(ConversationMessage.conversation_id == conversation.id).order_by(ConversationMessage.created_at))).all())
+    
+@router.post("/conversations/{conversation_id}/read", status_code=204)
+async def mark_conversation_as_read(
+    conversation_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    conversation = await session.get(Conversation, conversation_id)
+
+    if not conversation or user.id not in {
+        conversation.buyer_id,
+        conversation.seller_id,
+    }:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found",
+        )
+
+    await session.execute(
+        update(ConversationMessage)
+        .where(
+            ConversationMessage.conversation_id == conversation.id,
+            ConversationMessage.sender_id != user.id,
+            ConversationMessage.is_read.is_(False),
+        )
+        .values(
+            is_read=True,
+            read_at=datetime.now(UTC),
+        )
+    )
+
+    await session.commit()
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=ConversationMessageOut, status_code=201)
