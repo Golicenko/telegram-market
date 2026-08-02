@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Pat
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, UploadFile, status
 from sqlalchemy import delete, func, or_, select, update
@@ -932,13 +932,14 @@ async def admin_withdrawals(admin: User = Depends(require_admin), session: Async
     ).all()
     return [
         AdminWithdrawalOut(
-            **WithdrawalOut.model_validate(request).model_dump(),
-            user_telegram_id=user.telegram_id,
-            user_name=" ".join(filter(None, [user.first_name, user.last_name])),
-        )
-        for request, user in rows
+    **WithdrawalOut.model_validate(withdrawal).model_dump(),
+    user_telegram_id=user.telegram_id,
+    user_name=" ".join(
+        filter(None, [user.first_name, user.last_name])
+    ),
+    user_username=user.username,
+)
     ]
-
 
 @router.post("/admin/withdrawals/{withdrawal_id}/{action}", response_model=WithdrawalOut)
 async def admin_withdrawal_action(
