@@ -97,7 +97,44 @@
 
         <section class="view form-view" data-view="topup" aria-labelledby="topupTitle" hidden>
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="topupTitle">Пополнить AF Coins</h1></div>
-          <form class="topup-form" id="topupForm"><div class="currency-hero"><span class="af-coin af-coin--hero"></span><strong>1 Telegram Star = 1 AF Coin</strong></div><label for="topupAmount">Количество Telegram Stars<br /><small>сумма счёта в валюте XTR</small></label><div class="amount-field"><input id="topupAmount" name="amount" type="number" min="0" max="1000" value="100" required /><span>XTR</span></div><div class="amount-chips"><button type="button" data-topup-amount="100">100</button><button type="button" data-topup-amount="200">200</button><button type="button" data-topup-amount="500">500</button><button type="button" data-topup-amount="1000">1000</button></div><button class="pay-button" type="submit">Оплатить через Telegram Stars<small>Начисление только после successful_payment на сервере</small></button><p class="balance-disclaimer">AF Coins — внутренний баланс AUTOFLOW MARKET. Он не является личным балансом Telegram Stars и используется только внутри сервиса.</p><div class="payment-result" id="paymentResult"></div></form>
+      <form class="topup-form" id="topupForm">
+
+<div class="currency-hero">
+    <span class="af-coin af-coin--hero"></span>
+    <small>1 ⭐ = 1 AF Coin</small>
+</div>
+
+<div class="topup-info">
+    <button type="button" class="info-circle">?</button>
+</div>
+
+<div class="amount-field">
+    <input
+        id="topupAmount"
+        name="amount"
+        type="number"
+        min="50"
+        max="1000"
+        value="50"
+        required
+    />
+    <span>XTR</span>
+</div>
+
+<div class="amount-chips">
+    <button type="button" data-topup-amount="50">50</button>
+    <button type="button" data-topup-amount="67">67</button>
+    <button type="button" data-topup-amount="150">150</button>
+    <button type="button" data-topup-amount="200">200</button>
+</div>
+
+<button class="pay-button" type="submit">
+    Оплатить через Telegram Stars
+</button>
+
+<div class="payment-result" id="paymentResult"></div>
+
+</form>
         </section>
 
         <section class="view form-view" data-view="cart" aria-labelledby="cartTitle" hidden>
@@ -121,7 +158,7 @@
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="accountDraftTitle">Добавить аккаунт</h1></div><form class="account-form" id="accountDraftForm"><label>Название<input name="title" required minlength="2" /></label><label>Уровень<input name="level" type="number" min="0" required /></label><label>Количество машин<input name="cars_count" type="number" min="0" required /></label><label>Игровая валюта<input name="game_currency" required /></label><label>Дополнительная валюта<input name="extra_currency" /></label><label>Дома и другие игровые активы<textarea name="game_assets" rows="3"></textarea></label><label>Привязка электронной почты<select name="email_binding" required><option value="unknown">Не указано</option><option value="linked">Привязана</option><option value="unlinked">Не привязана</option></select></label><label class="switch-row"><span>Автовыдача</span><input name="auto_delivery" type="checkbox" /><i aria-hidden="true"></i></label><label>Описание и условия передачи<textarea name="description" rows="4" required minlength="5"></textarea></label><label>Цена в AF Coins<input name="price_af_coins" type="number" min="0" required /></label><label>Одна фотография<input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required /></label><div class="account-warning">Перед публикацией убедитесь, что передача аккаунта разрешена правилами соответствующей платформы или игры. Логины и пароли приложение не хранит.</div><button class="publish-button" type="submit">Опубликовать</button></form>
         </section>
 
-        <section class="view form-view" data-view="admin" aria-labelledby="adminTitle" hidden>
+        <section class="view form-view" data-view="admin" aria-labelledby="adminTitle" hidden>++
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="adminTitle">Администрирование</h1></div><div class="admin-panel"><div class="admin-tabs"><button class="is-active" type="button" data-admin-tab="users">Пользователи</button><button type="button" data-admin-tab="listings">Объявления</button><button type="button" data-admin-tab="deals">Сделки</button><button type="button" data-admin-tab="withdrawals">Выводы</button><button type="button" data-admin-tab="support">Поддержка</button><button type="button" data-admin-tab="advertisement">Реклама</button></div><section data-admin-panel="users"><form class="admin-search" id="adminUserSearch"><input name="q" placeholder="Имя, username или Telegram ID" /><button type="submit">Найти</button></form><div id="adminUsers"></div><div class="admin-user-history" id="adminUserHistory" hidden></div><h2>Корректировка баланса</h2><form id="balanceAdjustmentForm"><input name="user_id" placeholder="UUID пользователя" required /><input name="amount" type="number" step="0.01" placeholder="Сумма со знаком" required /><textarea name="reason" placeholder="Обязательная причина" required></textarea><button class="publish-button" type="submit">Создать операцию</button></form></section><section data-admin-panel="listings" hidden><div id="adminListings"></div></section><section data-admin-panel="deals" hidden><div id="adminDeals"></div></section><section data-admin-panel="withdrawals" hidden><h2>Заявки на вывод</h2><div id="adminWithdrawals"></div></section><section data-admin-panel="support" hidden><div id="adminSupportTickets"></div></section><section data-admin-panel="advertisement" hidden><form id="advertisementForm"><label>Изображение 1200 × 400, до 2 МБ<input name="image" type="file" accept="image/jpeg,image/png,image/webp" /></label><label>Ссылка перехода<input name="link_url" type="url" placeholder="https://..." /></label><label class="switch-row"><span>Показывать баннер</span><input name="is_active" type="checkbox" checked /><i aria-hidden="true"></i></label><div class="advertisement-preview" id="advertisementPreview">Баннер пока не загружен</div><button class="publish-button" type="submit">Сохранить рекламу</button><button class="ghost-button" id="deleteAdvertisementButton" type="button">Удалить рекламу</button></form></section></div>
         </section>
       </main>
