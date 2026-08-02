@@ -146,17 +146,17 @@
       state.profile = profile;
       state.advertisement = advertisement;
       state.serverAvailable = true;
-      applyRole();
-      renderUser();
-      updateFilterOptions();
-      renderAll();
+     applyRole();
+     renderUser();
+     updateFilterOptions();
+     renderAll();
+     updateFloatingChatVisibility();
     } catch (error) {
-      state.serverAvailable = false;
-      updateFloatingChatVisibility();
-      renderAll();
-      updateFloatingChatVisibility();
-      showServerState(error);
-    }
+  state.serverAvailable = false;
+  renderAll();
+  updateFloatingChatVisibility();
+  showServerState(error);
+}
   }
 
   async function refreshMarketplace() {
