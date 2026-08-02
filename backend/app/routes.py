@@ -1229,12 +1229,12 @@ async def telegram_webhook(
         return {"ok": True}
     message = update.get("message") or {}
     sender = message.get("from") or {}
-        # Админская рассылка
+    # Админская рассылка
     if sender.get("id") in settings.admin_telegram_ids:
+        text_value = message.get("text") or ""
 
-        if (message.get("text") or "").startswith("#рассылка"):
-
-            text = (message.get("text") or "").replace("#рассылка", "", 1).strip()
+        if text_value.startswith("#рассылка"):
+            text = text_value.replace("#рассылка", "", 1).strip()
 
             users = list(
                 (
@@ -1244,39 +1244,44 @@ async def telegram_webhook(
                 ).all()
             )
 
-           sent_count = 0
-failed_count = 0
+            sent_count = 0
+            failed_count = 0
 
-for item in users:
-    sent = await send_bot_notification(item.telegram_id, text)
+            for item in users:
+                sent = await send_bot_notification(
+                    item.telegram_id,
+                    text,
+                )
 
-    if sent:
-        sent_count += 1
-    else:
-        failed_count += 1
+                if sent:
+                    sent_count += 1
+                else:
+                    failed_count += 1
 
-await send_bot_notification(
-    int(sender["id"]),
-    (
-        "✅ Рассылка завершена.\n\n"
-        f"Получили: {sent_count}\n"
-        f"Не удалось отправить: {failed_count}"
-    ),
-)
+            await send_bot_notification(
+                int(sender["id"]),
+                (
+                    "✅ Рассылка завершена.\n\n"
+                    f"Получили: {sent_count}\n"
+                    f"Не удалось отправить: {failed_count}"
+                ),
+            )
 
-return {
-    "ok": True,
-    "sent": sent_count,
-    "failed": failed_count,
-}
+            return {
+                "ok": True,
+                "sent": sent_count,
+                "failed": failed_count,
+            }
 
         if message.get("photo"):
+            caption_value = message.get("caption") or ""
 
-            caption = message.get("caption") or ""
-
-            if caption.startswith("#рассылка"):
-
-                caption = caption.replace("#рассылка", "", 1).strip()
+            if caption_value.startswith("#рассылка"):
+                caption = caption_value.replace(
+                    "#рассылка",
+                    "",
+                    1,
+                ).strip()
 
                 photo = message["photo"][-1]["file_id"]
 
@@ -1288,35 +1293,35 @@ return {
                     ).all()
                 )
 
-sent_count = 0
-failed_count = 0
+                sent_count = 0
+                failed_count = 0
 
-for item in users:
-    sent = await send_bot_photo(
-        item.telegram_id,
-        photo,
-        caption,
-    )
+                for item in users:
+                    sent = await send_bot_photo(
+                        item.telegram_id,
+                        photo,
+                        caption,
+                    )
 
-    if sent:
-        sent_count += 1
-    else:
-        failed_count += 1
+                    if sent:
+                        sent_count += 1
+                    else:
+                        failed_count += 1
 
-await send_bot_notification(
-    int(sender["id"]),
-    (
-        "✅ Рассылка завершена.\n\n"
-        f"Получили: {sent_count}\n"
-        f"Не удалось отправить: {failed_count}"
-    ),
-)
+                await send_bot_notification(
+                    int(sender["id"]),
+                    (
+                        "✅ Рассылка завершена.\n\n"
+                        f"Получили: {sent_count}\n"
+                        f"Не удалось отправить: {failed_count}"
+                    ),
+                )
 
-return {
-    "ok": True,
-    "sent": sent_count,
-    "failed": failed_count,
-}
+                return {
+                    "ok": True,
+                    "sent": sent_count,
+                    "failed": failed_count,
+                }
     if message.get("text") == "/start" and sender.get("id"):
         user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
         if not user:
