@@ -4,7 +4,7 @@ from alembic import op
 
 
 revision = "0004_star_topup_min_50"
-down_revision = "0003_payments_support"
+down_revision = "0005_message_read_status"
 branch_labels = None
 depends_on = None
 
