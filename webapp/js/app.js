@@ -152,6 +152,7 @@
       renderAll();
     } catch (error) {
       state.serverAvailable = false;
+      updateFloatingChatVisibility();
       renderAll();
       updateFloatingChatVisibility();
       showServerState(error);
