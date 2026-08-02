@@ -1577,20 +1577,59 @@ function hideConversation(conversationId) {
     document.querySelectorAll("[data-admin-panel]").forEach((panel) => { panel.hidden = panel.dataset.adminPanel !== tab; });
   }
 
-  function renderAdminWithdrawals(withdrawals) {
-    if (!withdrawals.length) { elements.adminWithdrawals.textContent = "Заявок пока нет"; return; }
-    elements.adminWithdrawals.replaceChildren(...withdrawals.map((item) => {
-      const card = document.createElement("div"); card.className = "admin-withdrawal";
-      const title = document.createElement("strong"); title.textContent = `${formatNumber(item.amount)} AF Coins · ${item.status}`;
-      const user = document.createElement("span"); user.textContent = `${item.user_name || "Пользователь"} · Telegram ID ${item.user_telegram_id}`;
-      const details = document.createElement("small"); details.textContent = item.details;
-      const actions = document.createElement("div"); actions.className = "admin-withdrawal__actions";
-      if (item.status === "pending") actions.append(adminActionButton(item.id, "approve", "Одобрить"), adminActionButton(item.id, "reject", "Отклонить"));
-      if (item.status === "approved") actions.append(adminActionButton(item.id, "paid", "Отметить выплаченной"), adminActionButton(item.id, "reject", "Отклонить"));
-      const history = document.createElement("button"); history.dataset.financialHistory = item.user_id; history.textContent = "Финансовая история"; actions.append(history);
-      card.append(title, user, details, actions); return card;
-    }));
+ function renderAdminWithdrawals(withdrawals) {
+  if (!withdrawals.length) {
+    elements.adminWithdrawals.textContent = "Заявок пока нет";
+    return;
   }
+
+  elements.adminWithdrawals.replaceChildren(
+    ...withdrawals.map((item) => {
+      const card = document.createElement("div");
+      card.className = "admin-withdrawal";
+
+      const title = document.createElement("strong");
+      title.textContent = `${formatNumber(item.amount)} AF Coins · ${withdrawalStatusLabel(item.status)}`;
+
+      const user = document.createElement("span");
+      const username = item.user_username
+        ? `@${item.user_username}`
+        : "username не указан";
+
+      user.textContent =
+        `${item.user_name || "Пользователь"} · ${username} · Telegram ID ${item.user_telegram_id}`;
+
+      const details = document.createElement("small");
+      details.textContent =
+        `${item.payout_method} · ${item.details}`;
+
+      const actions = document.createElement("div");
+      actions.className = "admin-withdrawal__actions";
+
+      if (item.status === "pending") {
+        actions.append(
+          adminActionButton(item.id, "approve", "Одобрить"),
+          adminActionButton(item.id, "reject", "Отклонить")
+        );
+      }
+
+      if (item.status === "approved") {
+        actions.append(
+          adminActionButton(item.id, "paid", "Завершено"),
+          adminActionButton(item.id, "reject", "Отклонить")
+        );
+      }
+
+      const history = document.createElement("button");
+      history.dataset.financialHistory = item.user_id;
+      history.textContent = "Финансовая история";
+      actions.append(history);
+
+      card.append(title, user, details, actions);
+      return card;
+    })
+  );
+}
 
   function adminActionButton(id, action, label) { const button = document.createElement("button"); button.dataset.withdrawalAction = action; button.dataset.withdrawalId = id; button.textContent = label; return button; }
 
