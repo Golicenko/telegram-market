@@ -77,6 +77,13 @@
     adminSupportTickets: document.getElementById("adminSupportTickets"),
     advertisementForm: document.getElementById("advertisementForm"),
     advertisementPreview: document.getElementById("advertisementPreview"),
+    floatingChatButton: document.getElementById("floatingChatButton"),
+    chatUnreadBadge: document.getElementById("chatUnreadBadge"),
+    chatNotification: document.getElementById("chatNotification"),
+    chatNotificationText: document.getElementById("chatNotificationText"),
+    successOverlay: document.getElementById("successOverlay"),
+    successTitle: document.getElementById("successTitle"),
+    successText: document.getElementById("successText"),
   };
 
   initTelegram();
@@ -115,6 +122,7 @@
     document.getElementById("deleteAdvertisementButton").addEventListener("click", deleteAdvertisement);
     document.getElementById("balanceAdjustmentForm").addEventListener("submit", createBalanceAdjustment);
     document.getElementById("adminUserSearch").addEventListener("submit", searchAdminUsers);
+    elements.floatingChatButton.addEventListener("click", openFloatingChat);
   }
 
   async function bootstrap() {
@@ -145,6 +153,7 @@
     } catch (error) {
       state.serverAvailable = false;
       renderAll();
+      updateFloatingChatVisibility();
       showServerState(error);
     }
   }
@@ -252,6 +261,7 @@
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
     state.currentView = viewName;
+    updateFloatingChatVisibility();
     elements.views.forEach((view) => {
       const active = view === next;
       view.hidden = !active;
@@ -269,7 +279,20 @@
       try { await refreshMarketplace(); } catch (error) { notify(error.message); }
     }
   }
+function updateFloatingChatVisibility() {
+  const visibleViews = ["market", "unique", "accounts", "profile"];
+  const shouldShow = visibleViews.includes(state.currentView);
 
+  elements.floatingChatButton.hidden = !shouldShow;
+}
+
+function openFloatingChat() {
+  navigate("profile");
+
+  window.setTimeout(() => {
+    switchProfileTab("chats");
+  }, 150);
+}
   function openSecondary(viewName) {
     state.previousView = ["add", "topup", "cart", "deal-chat", "withdraw", "support", "account-draft", "admin"].includes(state.currentView) ? "market" : state.currentView;
     navigate(viewName);
