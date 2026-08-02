@@ -234,12 +234,18 @@
     const profileSection = target.closest("[data-profile-section]");
     if (profileSection) return void toggleProfileSection(profileSection.dataset.profileSection);
     const conversationButton = target.closest("[data-open-conversation]");
-    if (conversationButton) return void openConversation(conversationButton.dataset.openConversation);
-    const dealAction = target.closest("[data-deal-action]");
+    if (conversationButton) {
+      return void openConversation(conversationButton.dataset.openConversation);
+    }
+
     const hideConversationButton = target.closest("[data-hide-conversation]");
     if (hideConversationButton) {
-    return void hideConversation(hideConversationButton.dataset.hideConversation);
-  }
+      return void hideConversation(
+        hideConversationButton.dataset.hideConversation
+      );
+    }
+
+    const dealAction = target.closest("[data-deal-action]");
     if (dealAction) return void runDealAction(dealAction.dataset.dealAction);
     const adminWithdrawal = target.closest("[data-withdrawal-action]");
     if (adminWithdrawal) return void adminWithdrawalAction(adminWithdrawal);
@@ -1020,7 +1026,12 @@ function renderConversations(conversations) {
 
     open.append(name);
 
-    const unreadCount = Number(conversation.unread_count || 0);
+    const unreadSummary = state.unreadConversations.find(
+      (item) => String(item.conversation_id) === String(conversation.id)
+    );
+    const unreadCount = Number(
+      conversation.unread_count || unreadSummary?.unread_count || 0
+    );
 
     if (unreadCount > 0) {
       const badge = document.createElement("span");
