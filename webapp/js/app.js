@@ -154,6 +154,7 @@
      updateFilterOptions();
      renderAll();
      updateFloatingChatVisibility();
+     startMessagePolling();
     } catch (error) {
   state.serverAvailable = false;
   renderAll();
