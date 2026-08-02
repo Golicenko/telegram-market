@@ -8,7 +8,12 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import get_current_user, require_admin
-from .bot import answer_pre_checkout_query, create_star_invoice_link, send_bot_notification
+from .bot import (
+    answer_pre_checkout_query,
+    create_star_invoice_link,
+    send_bot_notification,
+    send_bot_photo,
+)
 from .config import Settings, get_settings
 from .database import get_session
 from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportMessage, SupportTicket, User, Wallet, WalletTransaction, WithdrawalRequest
