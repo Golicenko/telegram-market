@@ -187,27 +187,85 @@
     renderAll();
   }
 
-  function handleClick(event) {
-    const target = event.target;
-    const navButton = target.closest("[data-nav-target]");
-    if (navButton) return void navigate(navButton.dataset.navTarget);
-    if (target.closest("[data-open-add]")) return void openListingForm("regular");
-    if (target.closest("[data-open-unique]")) return void openListingForm("unique");
-    if (target.closest("[data-open-account]")) return void openAdminAccountDraft();
-    if (target.closest("[data-open-cart]")) return void openSecondary("cart");
-    if (target.closest("[data-open-topup]")) return void openSecondary("topup");
-    if (target.closest("[data-open-withdraw]")) return void openSecondary("withdraw");
-    if (target.closest("[data-open-support]")) return void openSupport();
-    if (target.closest("[data-open-admin]")) return void openAdminPanel();
-    if (target.closest("[data-open-frozen]")) return void openFrozenDeals();
-    if (target.closest("[data-open-info]")) return void openDialog(elements.infoModal);
-    const topupAmount = target.closest("[data-topup-amount]");
-    if (topupAmount) return void (document.getElementById("topupAmount").value = topupAmount.dataset.topupAmount);
-    if (target.closest("[data-ad-banner]") && !state.advertisement?.link_url) {
-      event.preventDefault();
-      return void notify("Для баннера не указана ссылка");
+function handleClick(event) {
+  const target = event.target;
+
+  const navButton = target.closest("[data-nav-target]");
+  if (navButton) {
+    return void navigate(navButton.dataset.navTarget);
+  }
+
+  if (target.closest("[data-open-add]")) {
+    return void openListingForm("regular");
+  }
+
+  if (target.closest("[data-open-unique]")) {
+    return void openListingForm("unique");
+  }
+
+  if (target.closest("[data-open-account]")) {
+    return void openAdminAccountDraft();
+  }
+
+  if (target.closest("[data-open-cart]")) {
+    return void openSecondary("cart");
+  }
+
+  if (target.closest("[data-open-topup]")) {
+    return void openSecondary("topup");
+  }
+
+  if (target.closest("[data-open-withdraw]")) {
+    return void openSecondary("withdraw");
+  }
+
+  if (target.closest("[data-open-support]")) {
+    return void openSupport();
+  }
+
+  if (target.closest("[data-open-admin]")) {
+    return void openAdminPanel();
+  }
+
+  if (target.closest("[data-open-frozen]")) {
+    return void openFrozenDeals();
+  }
+
+  if (target.closest("[data-open-info]")) {
+    return void openDialog(elements.infoModal);
+  }
+
+  if (target.closest("[data-open-topup-info]")) {
+    return void openDialog(
+      document.getElementById("topupInfoModal")
+    );
+  }
+
+  const topupAmount = target.closest("[data-topup-amount]");
+
+  if (topupAmount) {
+    const amount = Number(topupAmount.dataset.topupAmount);
+    const input = document.getElementById("topupAmount");
+
+    if (amount < 50 || amount > 1000) {
+      return void notify("Сумма должна быть от 50 до 1000 Stars");
     }
-    if (target.closest("[data-back]")) return void navigate(state.previousView || "market");
+
+    input.value = String(amount);
+    return;
+  }
+
+  if (
+    target.closest("[data-ad-banner]") &&
+    !state.advertisement?.link_url
+  ) {
+    event.preventDefault();
+    return void notify("Для баннера не указана ссылка");
+  }
+
+  if (target.closest("[data-back]")) {
+    return void navigate(state.previousView || "market");
+  }
 
     const closeDialog = target.closest("[data-close-dialog]");
     if (closeDialog) return void document.getElementById(closeDialog.dataset.closeDialog).close();
