@@ -283,6 +283,110 @@
       try { await refreshMarketplace(); } catch (error) { notify(error.message); }
     }
   }
+async function refreshUnreadMessages() {
+  if (!state.serverAvailable || document.hidden) return;
+
+  try {
+    const summary = await api.request("/conversations/unread-summary");
+
+    const previousTotal = state.totalUnread;
+
+    state.totalUnread = Number(summary.total_unread || 0);
+    state.unreadConversations = summary.conversations || [];
+
+    renderUnreadBadge();
+
+    if (state.totalUnread > previousTotal) {
+      showNewMessageNotification();
+    }
+
+    if (
+      state.currentView === "deal-chat" &&
+      state.currentConversation?.id
+    ) {
+      await refreshOpenConversation();
+    }
+  } catch (error) {
+    console.error("Не удалось обновить сообщения", error);
+  }
+}
+
+function renderUnreadBadge() {
+  const count = state.totalUnread;
+
+  elements.chatUnreadBadge.textContent =
+    count > 99 ? "99+" : String(count);
+
+  elements.chatUnreadBadge.hidden = count === 0;
+}
+
+function showNewMessageNotification() {
+  elements.chatNotificationText.textContent =
+    state.totalUnread === 1
+      ? "Вам пришло новое сообщение"
+      : `У вас ${state.totalUnread} непрочитанных сообщений`;
+
+  elements.chatNotification.hidden = false;
+
+  window.clearTimeout(showNewMessageNotification.timeoutId);
+
+  showNewMessageNotification.timeoutId = window.setTimeout(() => {
+    elements.chatNotification.hidden = true;
+  }, 4000);
+}
+
+async function refreshOpenConversation() {
+  const conversationId = state.currentConversation?.id;
+
+  if (!conversationId) return;
+
+  const messages = await api.request(
+    `/conversations/${conversationId}/messages`
+  );
+
+  const oldLastMessageId = state.messages.at(-1)?.id;
+  const newLastMessageId = messages.at(-1)?.id;
+
+  if (oldLastMessageId !== newLastMessageId) {
+    state.messages = messages;
+    renderConversation();
+  }
+
+  await markConversationRead(conversationId);
+}
+
+async function markConversationRead(conversationId) {
+  await api.request(
+    `/conversations/${conversationId}/read`,
+    { method: "POST" }
+  );
+
+  state.unreadConversations =
+    state.unreadConversations.filter(
+      (item) => item.conversation_id !== conversationId
+    );
+
+  state.totalUnread = state.unreadConversations.reduce(
+    (total, item) => total + Number(item.unread_count || 0),
+    0
+  );
+
+  renderUnreadBadge();
+}
+
+function startMessagePolling() {
+  if (state.messagePollingId) {
+    window.clearInterval(state.messagePollingId);
+  }
+
+  refreshUnreadMessages();
+
+  state.messagePollingId = window.setInterval(
+    refreshUnreadMessages,
+    2000
+  );
+}
+  
 function updateFloatingChatVisibility() {
   const visibleViews = ["market", "unique", "accounts", "profile"];
   const shouldShow = visibleViews.includes(state.currentView);
