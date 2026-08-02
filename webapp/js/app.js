@@ -20,6 +20,9 @@
     currentConversation: null,
     editingListingId: null,
     messages: [],
+    unreadConversations: [],
+    totalUnread: 0,
+    messagePollingId: null,
     serverAvailable: true,
   };
 
@@ -287,12 +290,18 @@ function updateFloatingChatVisibility() {
   elements.floatingChatButton.hidden = !shouldShow;
 }
 
-function openFloatingChat() {
-  navigate("profile");
+async function openFloatingChat() {
+  elements.chatNotification.hidden = true;
 
-  window.setTimeout(() => {
-    switchProfileTab("chats");
-  }, 150);
+  if (state.unreadConversations.length === 1) {
+    await openConversation(
+      state.unreadConversations[0].conversation_id
+    );
+    return;
+  }
+
+  await navigate("profile");
+  switchProfileTab("chats");
 }
   function openSecondary(viewName) {
     state.previousView = ["add", "topup", "cart", "deal-chat", "withdraw", "support", "account-draft", "admin"].includes(state.currentView) ? "market" : state.currentView;
