@@ -95,50 +95,102 @@
           </form>
         </section>
 
-        <section class="view form-view" data-view="topup" aria-labelledby="topupTitle" hidden>
-          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="topupTitle">Пополнить AF Coins</h1></div>
-      <form class="topup-form" id="topupForm">
+<section
+  class="view form-view"
+  data-view="topup"
+  aria-labelledby="topupTitle"
+  hidden
+>
+  <div class="screen-heading screen-heading--back topup-heading">
+    <button
+      class="back-button"
+      type="button"
+      data-back
+      aria-label="Назад"
+    >
+      ‹
+    </button>
 
-<div class="currency-hero">
-    <span class="af-coin af-coin--hero"></span>
-    <small>1 ⭐ = 1 AF Coin</small>
-</div>
+    <h1 id="topupTitle">Пополнить AF Coins</h1>
 
-<div class="topup-info">
-    <button type="button" class="info-circle">?</button>
-</div>
+    <button
+      class="topup-help-button"
+      type="button"
+      data-open-topup-info
+      aria-label="Информация об AF Coins"
+    >
+      ?
+    </button>
+  </div>
 
-<div class="amount-field">
-    <input
-  id="topupAmount"
-  name="amount"
-  type="number"
-  min="50"
-  max="1000"
-  value="50"
-  required
-  inputmode="numeric"
-/>
-    <span>XTR</span>
-</div>
+  <form class="topup-form" id="topupForm">
+    <div class="currency-hero">
+      <span class="af-coin af-coin--hero"></span>
+      <small>1 ⭐ = 1 AF Coin</small>
+    </div>
 
-<div class="amount-chips">
-     <button type="button" data-topup-amount="50">50</button>
-     <button type="button" data-topup-amount="100">100</button>
-     <button type="button" data-topup-amount="200">200</button>
-     <button type="button" data-topup-amount="500">500</button>
-     <button type="button" data-topup-amount="1000">1000</button>
-</div>
+    <div class="amount-field">
+      <input
+        id="topupAmount"
+        name="amount"
+        type="number"
+        min="50"
+        max="1000"
+        value="100"
+        required
+        inputmode="numeric"
+      />
+    </div>
 
-<button class="pay-button" type="submit">
-    Оплатить через Telegram Stars
-</button>
+    <div class="amount-chips">
+      <button type="button" data-topup-amount="50">50</button>
+      <button type="button" data-topup-amount="200">200</button>
+      <button type="button" data-topup-amount="500">500</button>
+      <button type="button" data-topup-amount="1000">1000</button>
+    </div>
 
-<div class="payment-result" id="paymentResult"></div>
+    <button class="pay-button" type="submit">
+      Оплатить через Telegram Stars
+    </button>
 
-</form>
-        </section>
+    <div class="payment-result" id="paymentResult"></div>
+  </form>
+</section>
 
+        <dialog class="modal topup-info-modal" id="topupInfoModal">
+  <div class="modal-head">
+    <div>
+      <span class="eyebrow">AF Coins</span>
+      <h2>Виртуальная валюта сервиса</h2>
+    </div>
+
+    <button
+      type="button"
+      data-close-dialog="topupInfoModal"
+      aria-label="Закрыть"
+    >
+      ×
+    </button>
+  </div>
+
+  <p>
+    AF Coins — внутренняя виртуальная валюта AutoFlow Market.
+  </p>
+
+  <p>
+    При пополнении действует курс: 1 Telegram Star = 1 AF Coin.
+  </p>
+
+  <p>
+    AF Coins используются для покупок и услуг только внутри сервиса.
+  </p>
+
+  <p>
+    Вывод оформляется отдельной заявкой и обрабатывается администрацией
+    по правилам сервиса.
+  </p>
+</dialog>
+        
         <section class="view form-view" data-view="cart" aria-labelledby="cartTitle" hidden>
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="cartTitle">Корзина</h1><span class="cart-heading-icon">🛒</span></div><div class="compact-cart-list" id="cartList"></div><div class="empty-state empty-state--tall" id="cartEmptyState"><div class="empty-cart">⌑</div><h2>Корзина пуста</h2><p>Добавьте автомобиль из каталога</p></div><div class="cart-summary" id="cartSummary" hidden><div><span>Итого</span><strong><span id="cartTotal">0</span> <i class="af-coin"></i></strong></div><button class="publish-button" id="checkoutButton" type="button">Купить</button><button class="topup-inline" id="cartTopupButton" type="button" data-open-topup hidden>Недостаточно средств — пополнить</button></div>
         </section>
