@@ -922,7 +922,10 @@ async def admin_conversation(conversation_id: uuid.UUID, admin: User = Depends(r
 
 
 @router.get("/admin/withdrawals", response_model=list[AdminWithdrawalOut])
-async def admin_withdrawals(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+async def admin_withdrawals(
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
     rows = (
         await session.execute(
             select(WithdrawalRequest, User)
@@ -930,15 +933,17 @@ async def admin_withdrawals(admin: User = Depends(require_admin), session: Async
             .order_by(WithdrawalRequest.created_at.desc())
         )
     ).all()
+
     return [
         AdminWithdrawalOut(
-    **WithdrawalOut.model_validate(withdrawal).model_dump(),
-    user_telegram_id=user.telegram_id,
-    user_name=" ".join(
-        filter(None, [user.first_name, user.last_name])
-    ),
-    user_username=user.username,
-)
+            **WithdrawalOut.model_validate(withdrawal).model_dump(),
+            user_telegram_id=user.telegram_id,
+            user_name=" ".join(
+                filter(None, [user.first_name, user.last_name])
+            ),
+            user_username=user.username,
+        )
+        for withdrawal, user in rows
     ]
 
 @router.post("/admin/withdrawals/{withdrawal_id}/{action}", response_model=WithdrawalOut)
