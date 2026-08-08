@@ -119,6 +119,7 @@
       telegramSdk?.addEventListener("error", () => reportClientError("telegram_sdk_load", new Error("Telegram SDK load failed")));
       initTelegram();
       bindEvents();
+      installChatViewport();
       renderAll();
       void bootstrap();
     } catch (error) {
@@ -131,6 +132,7 @@
     if (!telegram) return;
     safeTelegramCall("ready", () => telegram.ready());
     safeTelegramCall("expand", () => telegram.expand());
+    safeTelegramCall("viewport", () => telegram.onEvent?.("viewportChanged", updateChatViewport));
     safeTelegramCall("theme", () => {
       if (typeof telegram.isVersionAtLeast !== "function" || telegram.isVersionAtLeast("6.1")) {
         telegram.setHeaderColor?.("#030912");
@@ -154,6 +156,9 @@
     bind(document.getElementById("checkoutButton"), "click", checkout, "checkoutButton");
     bind(document.getElementById("topupForm"), "submit", requestStarInvoice, "topupForm");
     bind(elements.chatForm, "submit", sendChatMessage, "chatForm");
+    bind(document.getElementById("chatHideButton"), "click", hideCurrentConversation, "chatHideButton");
+    bind(document.getElementById("chatInput"), "input", resizeChatInput, "chatInput");
+    bind(elements.chatListing, "click", openChatListing, "chatListing");
     bind(elements.withdrawForm, "submit", createWithdrawal, "withdrawForm");
     bind(document.getElementById("accountDraftForm"), "submit", submitAccountListing, "accountDraftForm");
     bind(elements.supportForm, "submit", submitSupportTicket, "supportForm");
@@ -421,6 +426,8 @@ function handleClick(event) {
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
     state.currentView = viewName;
+    document.body.classList.toggle("chat-open", viewName === "deal-chat");
+    if (viewName === "deal-chat") updateChatViewport();
     updateFloatingChatVisibility();
     elements.views.forEach((view) => {
       const active = view === next;
@@ -1158,12 +1165,7 @@ function handleClick(event) {
   }
 
 function renderConversations(conversations) {
-  const hiddenIds = getHiddenConversationIds();
-
-  const visibleConversations = conversations.filter(
-    (conversation) => !hiddenIds.includes(String(conversation.id))
-  );
-
+  const visibleConversations = conversations;
   const empty = document.getElementById("conversationsEmpty");
 
   empty.hidden = visibleConversations.length > 0;
@@ -1178,14 +1180,18 @@ function renderConversations(conversations) {
     open.className = "conversation-open";
     open.dataset.openConversation = conversation.id;
 
-    const name = document.createElement("strong");
-    name.className = "conversation-name";
-    name.textContent =
-      conversation.counterparty.name ||
-      conversation.counterparty.username ||
-      "Пользователь";
-
-    open.append(name);
+    const avatar = document.createElement("span"); avatar.className = "conversation-avatar";
+    const avatarFallback = document.createElement("span"); avatarFallback.textContent = (conversation.counterparty.name || conversation.counterparty.username || "A").slice(0, 1).toUpperCase(); avatar.append(avatarFallback);
+    if (conversation.counterparty.photo_url) { const image = document.createElement("img"); image.src = conversation.counterparty.photo_url; image.alt = ""; image.addEventListener("load", () => { avatarFallback.hidden = true; }); avatar.append(image); }
+    const primary = document.createElement("span"); primary.className = "conversation-primary";
+    const name = document.createElement("strong"); name.textContent = conversation.counterparty.name || "Пользователь";
+    const time = document.createElement("time"); time.textContent = formatMessageTime(conversation.last_message_at);
+    primary.append(name, time);
+    const secondary = document.createElement("span"); secondary.className = "conversation-secondary";
+    const preview = document.createElement("span"); preview.className = "conversation-preview"; preview.textContent = conversation.last_message || "Сделка создана";
+    const username = document.createElement("span"); username.className = "conversation-username"; username.textContent = conversation.counterparty.username ? `@${conversation.counterparty.username}` : "";
+    secondary.append(preview, username);
+    open.append(avatar, primary, secondary);
 
     const unreadSummary = state.unreadConversations.find(
       (item) => String(item.conversation_id) === String(conversation.id)
@@ -1204,42 +1210,27 @@ function renderConversations(conversations) {
     const del = document.createElement("button");
     del.className = "conversation-delete";
     del.dataset.hideConversation = conversation.id;
-    del.textContent = "🗑";
+    del.textContent = "Скрыть";
 
     row.append(open, del);
     elements.conversationList.append(row);
   });
 }
-function getHiddenConversationIds() {
+
+async function hideConversation(conversationId) {
   try {
-    const saved = JSON.parse(
-      localStorage.getItem("hiddenConversationIds") || "[]"
-    );
-
-    return Array.isArray(saved) ? saved.map(String) : [];
-  } catch {
-    return [];
-  }
+    await api.request(`/conversations/${conversationId}/hide`, { method: "POST" });
+    if (state.profile) state.profile.conversations = state.profile.conversations.filter((item) => String(item.id) !== String(conversationId));
+    renderConversations(state.profile?.conversations || []);
+    notify("Чат скрыт. Новое сообщение вернёт его в список");
+  } catch (error) { notify(error.message); }
 }
 
-function saveHiddenConversationIds(ids) {
-  localStorage.setItem(
-    "hiddenConversationIds",
-    JSON.stringify(ids.map(String))
-  );
-}
-
-function hideConversation(conversationId) {
-  const hiddenIds = getHiddenConversationIds();
-  const id = String(conversationId);
-
-  if (!hiddenIds.includes(id)) {
-    hiddenIds.push(id);
-    saveHiddenConversationIds(hiddenIds);
-  }
-
-  renderConversations(state.profile?.conversations || []);
-  notify("Диалог удалён из вашего списка");
+async function hideCurrentConversation() {
+  if (!state.currentConversation?.id) return navigate(state.previousView || "market");
+  await hideConversation(state.currentConversation.id);
+  navigate("profile");
+  switchProfileTab("chats");
 }
   function openFrozenDeals() {
     switchProfileTab("deals");
@@ -1259,36 +1250,58 @@ function hideConversation(conversationId) {
   }
 
   async function startConversation(listingId) {
-    try { const conversation = await api.request(`/conversations/listing/${listingId}`, { method: "POST" }); await openConversation(conversation.id); }
+    try {
+      const conversation = await api.request(`/conversations/listing/${listingId}`, { method: "POST" });
+      if (conversation.id) return await openConversation(conversation.id, conversation);
+      state.currentConversation = conversation;
+      state.messages = [];
+      state.previousView = state.currentView;
+      renderConversation();
+      await navigate("deal-chat");
+      document.getElementById("chatInput").focus({ preventScroll: true });
+    }
     catch (error) { notify(error.message); }
   }
 
-  async function openConversation(id) {
+  async function openConversation(id, prefetched = null) {
     try {
-      const [conversation, messages] = await Promise.all([api.request(`/conversations/${id}`), api.request(`/conversations/${id}/messages`)]);
+      const [conversation, messages] = await Promise.all([prefetched || api.request(`/conversations/${id}`), api.request(`/conversations/${id}/messages`)]);
       state.currentConversation = conversation;
       state.messages = messages;
       state.previousView = state.currentView === "profile" ? "profile" : "market";
       renderConversation();
-      navigate("deal-chat");
+      await navigate("deal-chat");
+      await markConversationRead(id);
+      state.messages = await api.request(`/conversations/${id}/messages`);
+      renderConversation();
     } catch (error) { notify(error.message); }
   }
 
   function renderConversation() {
     const details = state.currentConversation; if (!details) return;
     const other = details.counterparty;
-    document.getElementById("chatName").textContent = other.name || other.username || "Пользователь";
-    document.getElementById("chatActivity").textContent = other.mini_app_last_active_at ? `В Mini App: ${formatDate(other.mini_app_last_active_at)}` : "Активность в Mini App неизвестна";
+    document.getElementById("chatName").textContent = other.name || "Пользователь";
+    document.getElementById("chatActivity").textContent = [other.username ? `@${other.username}` : null, other.mini_app_last_active_at ? `в Mini App ${formatMessageTime(other.mini_app_last_active_at)}` : null].filter(Boolean).join(" · ") || "Активность неизвестна";
     document.getElementById("chatStatus").textContent = details.deal ? dealStatusLabel(details.deal.status) : "Переписка";
-    document.getElementById("chatAvatar").textContent = (other.name || other.username || "A").slice(0, 1).toUpperCase();
+    const avatarFallback = document.getElementById("chatAvatarFallback"); const avatarImage = document.getElementById("chatAvatarImage");
+    avatarFallback.textContent = (other.name || other.username || "A").slice(0, 1).toUpperCase();
+    avatarImage.hidden = !other.photo_url; avatarFallback.hidden = Boolean(other.photo_url); if (other.photo_url) avatarImage.src = other.photo_url;
+    document.getElementById("chatHideButton").hidden = !details.id;
     elements.chatListing.replaceChildren();
-    const title = document.createElement("strong"); title.textContent = `${details.listing.brand} ${details.listing.model}`;
-    const price = document.createElement("span"); price.append(document.createTextNode(`${formatNumber(details.accepted_price_af_coins ?? details.listing.price_af_coins)} `), coin("af-coin--small"));
-    elements.chatListing.append(title, price);
-    elements.dealMessages.replaceChildren(...state.messages.map((message) => {
+    if (details.listing.images?.[0]) { const image = document.createElement("img"); image.src = details.listing.images[0]; image.alt = ""; elements.chatListing.append(image); }
+    const listingCopy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = `${details.listing.brand} ${details.listing.model}`;
+    const price = document.createElement("small"); price.textContent = `${formatNumber(details.accepted_price_af_coins ?? details.listing.price_af_coins)} AF Coins`; listingCopy.append(title, price);
+    const listingAction = document.createElement("span"); listingAction.textContent = "Открыть ›"; elements.chatListing.append(listingCopy, listingAction);
+    const renderedMessages = []; let previousDay = "";
+    state.messages.forEach((message) => {
+      const day = new Date(message.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+      if (day !== previousDay) { const divider = document.createElement("div"); divider.className = "message-day"; divider.textContent = day; renderedMessages.push(divider); previousDay = day; }
       const bubble = document.createElement("div"); bubble.className = `message${message.sender_id === state.me.user.id ? " is-own" : ""}${message.message_type === "system" ? " is-system" : ""}`;
-      bubble.append(document.createTextNode(message.body)); const time = document.createElement("small"); time.textContent = formatDate(message.created_at); bubble.append(time); return bubble;
-    }));
+      bubble.append(document.createTextNode(message.body)); const meta = document.createElement("small"); meta.className = "message-meta"; const time = document.createElement("span"); time.textContent = formatMessageTime(message.created_at); meta.append(time);
+      if (message.sender_id === state.me.user.id && message.message_type !== "system") { const receipt = document.createElement("span"); receipt.className = "message-receipt"; receipt.textContent = message.is_read ? "✓✓" : "✓"; receipt.title = message.is_read ? "Прочитано" : "Получено сервером"; meta.append(receipt); }
+      bubble.append(meta); renderedMessages.push(bubble);
+    });
+    elements.dealMessages.replaceChildren(...renderedMessages);
     renderOffers();
     renderDealControls();
     requestAnimationFrame(() => { elements.dealMessages.scrollTop = elements.dealMessages.scrollHeight; });
@@ -1380,11 +1393,52 @@ function hideConversation(conversationId) {
     event.preventDefault();
     const input = document.getElementById("chatInput");
     if (!state.currentConversation || !input.value.trim()) return;
+    const button = event.currentTarget.querySelector("button[type=submit]");
+    if (button.disabled) return;
+    const body = input.value.trim();
+    const clientMessageId = crypto.randomUUID();
+    button.disabled = true;
     try {
-      await api.request(`/conversations/${state.currentConversation.id}/messages`, { method: "POST", body: JSON.stringify({ body: input.value.trim() }) });
+      const endpoint = state.currentConversation.id
+        ? `/conversations/${state.currentConversation.id}/messages`
+        : `/conversations/listing/${state.currentConversation.listing.id}/messages`;
+      const message = await api.request(endpoint, { method: "POST", body: JSON.stringify({ body, client_message_id: clientMessageId }) });
       input.value = "";
-      await openConversation(state.currentConversation.id);
-    } catch (error) { notify(error.message); }
+      resizeChatInput();
+      await openConversation(message.conversation_id);
+    } catch (error) { input.value = body; resizeChatInput(); notify(`Сообщение не отправлено: ${error.message}`); }
+    finally { button.disabled = false; }
+  }
+
+  function resizeChatInput() {
+    const input = document.getElementById("chatInput");
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 112)}px`;
+  }
+
+  function installChatViewport() {
+    updateChatViewport();
+    window.visualViewport?.addEventListener("resize", updateChatViewport);
+    window.visualViewport?.addEventListener("scroll", updateChatViewport);
+    window.addEventListener("orientationchange", updateChatViewport);
+  }
+
+  function updateChatViewport() {
+    const viewport = window.visualViewport;
+    const height = viewport?.height || telegram?.viewportStableHeight || window.innerHeight;
+    document.documentElement.style.setProperty("--chat-viewport-height", `${Math.round(height)}px`);
+    document.documentElement.style.setProperty("--chat-viewport-top", `${Math.round(viewport?.offsetTop || 0)}px`);
+    if (document.body.classList.contains("chat-open")) requestAnimationFrame(() => {
+      elements.dealMessages.scrollTop = elements.dealMessages.scrollHeight;
+    });
+  }
+
+  function openChatListing() {
+    const listingId = state.currentConversation?.listing?.id;
+    if (!listingId) return;
+    state.selectedListingId = listingId;
+    navigate("market");
+    notify("Объявление открыто в Market");
   }
 
   async function createOffer() {
@@ -1864,6 +1918,7 @@ function hideConversation(conversationId) {
   function absoluteMediaUrl(url) { return url.startsWith("/") ? `${api.baseUrl.replace(/\/api$/, "")}${url}` : url; }
   function formatNumber(value) { return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(Number(value)); }
   function formatDate(value) { return new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)); }
+  function formatMessageTime(value) { return value ? new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)) : ""; }
   function uniqueValues(values) { return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru")); }
   function statusLabel(status) { return ({ active: "Доступно", reserved: "Деньги под защитой", sold: "Уже продано", paused: "Снято с публикации", deleted: "Удалено" })[status] || status; }
   function dealStatusLabel(status) { return ({ pending_payment: "Ожидает оплаты", paid: "Оплачено", seller_contacted: "Продавец на связи", transfer_in_progress: "Передача", buyer_confirmed: "Получение подтверждено", completed: "Завершена", disputed: "Спор", cancelled: "Отменена" })[status] || status; }

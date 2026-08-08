@@ -148,8 +148,15 @@ class Conversation(Base, TimestampMixin):
     deal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("deals.id", ondelete="SET NULL"), unique=True)
     accepted_price_af_coins: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    buyer_hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    seller_hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
-        UniqueConstraint("listing_id", "buyer_id", name="uq_conversation_listing_buyer"),
+        Index(
+            "uq_conversations_participant_pair",
+            text("LEAST(buyer_id, seller_id)"),
+            text("GREATEST(buyer_id, seller_id)"),
+            unique=True,
+        ),
         CheckConstraint("buyer_id <> seller_id", name="ck_conversation_distinct_participants"),
         CheckConstraint("accepted_price_af_coins IS NULL OR accepted_price_af_coins >= 100", name="ck_conversation_accepted_price"),
     )
@@ -198,6 +205,7 @@ class ConversationMessage(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    client_message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -210,6 +218,7 @@ class ConversationMessage(Base):
             "message_type IN ('text','system','offer')",
             name="ck_conversation_message_type",
         ),
+        UniqueConstraint("conversation_id", "sender_id", "client_message_id", name="uq_conversation_message_client_id"),
     )
 
 class PriceOffer(Base, TimestampMixin):
