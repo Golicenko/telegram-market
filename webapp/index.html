@@ -12,11 +12,6 @@
     <script src="js/app.js" defer></script>
   </head>
   <body>
-    <div id="introScreen">
-  <video id="introVideo" autoplay muted playsinline>
-    <source src="intro.mp4" type="video/mp4">
-  </video>
-</div>
     <div class="app-shell">
       <section class="startup-status" id="startupStatus" role="status" aria-live="polite">
         <div class="startup-status__brand"><strong>AUTOFLOW</strong><span>MARKET</span></div>
@@ -236,6 +231,7 @@
     </div>
 
     <dialog class="modal" id="infoModal"><div class="modal-head"><div><span class="eyebrow">О приложении</span><h2>AUTOFLOW MARKET</h2></div><button type="button" data-close-dialog="infoModal" aria-label="Закрыть">×</button></div><p>AUTOFLOW MARKET — удобная площадка внутри Telegram для размещения и поиска автомобильных предложений. Вы оплачиваете, но продавец не получит деньги, пока вы не подтвердите, что всё получили. Все объявления, операции и статусы сделки сохраняются в истории.</p><p>AF Coins, купленные через Telegram Stars, можно тратить внутри сервиса, но нельзя выводить. Для вывода доступны только AF Coins, заработанные после продаж. При завершённой сделке продавец получает 70% цены, комиссия платформы составляет 30%.</p><p class="security-note">Никому не передавайте пароль, коды подтверждения или доступ к Telegram. Перед подтверждением сделки убедитесь, что получили именно заявленный товар.</p><button class="publish-button" type="button" data-close-dialog="infoModal">Понятно</button></dialog>
+    <dialog class="modal purchase-modal" id="purchaseModal"><div class="modal-head"><div><span class="eyebrow">Безопасная покупка</span><h2 id="purchaseModalTitle">Купить автомобиль</h2></div><button type="button" data-close-purchase aria-label="Закрыть">×</button></div><p id="purchaseModalText">Вы оплачиваете, но продавец не получит деньги, пока вы не подтвердите получение.</p><div class="purchase-modal__amount" id="purchaseModalAmount"></div><p class="security-note" id="purchaseModalNote">Деньги будут находиться под защитой AutoFlow Market.</p><button class="publish-button" id="purchaseModalAction" type="button">Оплатить безопасно</button><button class="ghost-button" type="button" data-close-purchase>Отмена</button></dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
      <!-- Плавающая кнопка чата -->
 <button
@@ -266,26 +262,5 @@
         <p id="successText"></p>
     </div>
 </div>
-    <script>
-(() => {
-  const intro = document.getElementById("introScreen");
-  const video = document.getElementById("introVideo");
-  let removed = false;
-  const dismiss = () => {
-    if (removed || !intro) return;
-    removed = true;
-    intro.style.pointerEvents = "none";
-    intro.style.opacity = "0";
-    window.setTimeout(() => intro.remove(), 500);
-  };
-  window.AutoFlowIntro = Object.freeze({ dismiss });
-  if (!video) return dismiss();
-  video.addEventListener("ended", dismiss, { once: true });
-  video.addEventListener("error", dismiss, { once: true });
-  if (video.ended) dismiss();
-  else video.play().catch(() => {});
-  window.setTimeout(dismiss, 4500);
-})();
-</script>
   </body>
 </html>

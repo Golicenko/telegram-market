@@ -28,11 +28,13 @@ test("browser launch and global JavaScript failures have explicit handling", () 
   assert.doesNotMatch(source, /Запустите PostgreSQL|localhost|Сервер API не подключён/);
 });
 
-test("intro cannot permanently cover a rendered shell", () => {
+test("market shell is immediate and startup feedback stays inline", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
-  assert.match(html, /window\.setTimeout\(dismiss, 4500\)/);
-  assert.match(html, /video\.addEventListener\("error", dismiss/);
-  assert.match(source, /dismissIntro\(\)/);
+  const css = fs.readFileSync(path.join(__dirname, "..", "css", "style.css"), "utf8");
+  assert.doesNotMatch(html, /id="introScreen"|id="introVideo"/);
+  assert.match(html, /<div class="app-shell">[\s\S]*<section class="startup-status"/);
+  const startupRule = css.slice(css.indexOf(".startup-status {"), css.indexOf(".startup-status__brand"));
+  assert.doesNotMatch(startupRule, /position:\s*fixed|inset:\s*0/);
 });
 
 test("optional requests render independently before allSettled completes", () => {

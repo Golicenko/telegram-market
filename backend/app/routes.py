@@ -9,9 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import get_current_user, require_admin
 from .bot import (
+    answer_bot_callback,
     answer_pre_checkout_query,
     create_star_invoice_link,
     send_bot_notification,
+    send_bot_menu,
     send_bot_material,
     send_bot_photo,
     upload_bot_material,
@@ -83,6 +85,7 @@ from .services import (
     create_star_payment_intent,
     create_training_product,
     create_training_material,
+    create_listing_payment_intent,
     create_withdrawal,
     decide_withdrawal,
     delete_account_listing,
@@ -94,6 +97,8 @@ from .services import (
     finish_training_delivery,
     get_or_create_conversation,
     process_successful_payment,
+    purchase_listing,
+    complete_listing_payment_intent,
     promote_listing,
     resolve_dispute,
     respond_price_offer,
@@ -441,6 +446,23 @@ async def get_listing_details(
         await session.commit()
         await session.refresh(listing)
     return await listing_out(session, listing, user.id)
+
+
+@router.post("/listings/{listing_id}/purchase", response_model=DealOut)
+async def buy_listing_now(
+    listing_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    deal, seller_telegram_id, created = await purchase_listing(session, user, listing_id)
+    if created and seller_telegram_id:
+        background_tasks.add_task(
+            send_bot_notification,
+            seller_telegram_id,
+            "Ваш товар хотят купить. Покупатель оплатил, деньги находятся под защитой. Откройте AUTOFLOW MARKET.",
+        )
+    return deal
 
 
 @router.patch("/listings/{listing_id}", response_model=ListingOut)
@@ -1203,7 +1225,35 @@ async def add_star_payment_intent(
     session: AsyncSession = Depends(get_session),
 ):
     intent = await create_star_payment_intent(session, user, payload.amount, create_star_invoice_link, payload.purpose)
-    return StarPaymentIntentOut(id=intent.id, invoice_url=intent.invoice_link, amount=intent.xtr_amount, status=intent.status)
+    return StarPaymentIntentOut(
+        id=intent.id,
+        invoice_url=intent.invoice_link,
+        amount=intent.xtr_amount,
+        status=intent.status,
+        purpose=intent.purpose,
+        listing_id=intent.listing_id,
+        missing_af_coins=intent.missing_af_coins,
+        checkout_status=intent.checkout_status,
+    )
+
+
+@router.post("/listings/{listing_id}/purchase-topup-intent", response_model=StarPaymentIntentOut, status_code=201)
+async def add_listing_purchase_topup_intent(
+    listing_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    intent = await create_listing_payment_intent(session, user, listing_id, create_star_invoice_link)
+    return StarPaymentIntentOut(
+        id=intent.id,
+        invoice_url=intent.invoice_link,
+        amount=intent.xtr_amount,
+        status=intent.status,
+        purpose=intent.purpose,
+        listing_id=intent.listing_id,
+        missing_af_coins=intent.missing_af_coins,
+        checkout_status=intent.checkout_status,
+    )
 
 
 @router.get("/wallet/star-payments/intents/{intent_id}", response_model=StarPaymentStatusOut)
@@ -1216,7 +1266,56 @@ async def star_payment_status(
     if not intent or intent.user_id != user.id:
         raise HTTPException(status_code=404, detail="Счёт не найден")
     wallet_value = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
-    return StarPaymentStatusOut(id=intent.id, status=intent.status, amount=intent.xtr_amount, wallet=wallet_value)
+    messages = {
+        "completed": "Покупка оформлена. Деньги находятся под защитой.",
+        "listing_unavailable": "Объявление уже недоступно. Пополненные AF Coins сохранены на вашем балансе.",
+        "failed": "Покупка не завершена. Пополненные AF Coins сохранены на вашем балансе.",
+        "pending": "Оплата подтверждена. Сервер завершает покупку.",
+    }
+    return StarPaymentStatusOut(
+        id=intent.id,
+        status=intent.status,
+        amount=intent.xtr_amount,
+        wallet=wallet_value,
+        purpose=intent.purpose,
+        listing_id=intent.listing_id,
+        deal_id=intent.deal_id,
+        checkout_status=intent.checkout_status,
+        message=messages.get(intent.checkout_status),
+    )
+
+
+@router.post("/wallet/star-payments/intents/{intent_id}/resume-checkout", response_model=StarPaymentStatusOut)
+async def resume_listing_checkout(
+    intent_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    intent, deal, seller_telegram_id = await complete_listing_payment_intent(session, user, intent_id)
+    if deal and seller_telegram_id:
+        background_tasks.add_task(
+            send_bot_notification,
+            seller_telegram_id,
+            "Ваш товар хотят купить. Покупатель оплатил, деньги находятся под защитой. Откройте AUTOFLOW MARKET.",
+        )
+    wallet_value = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
+    messages = {
+        "completed": "Покупка оформлена. Деньги находятся под защитой.",
+        "listing_unavailable": "Объявление уже недоступно. Пополненные AF Coins сохранены на вашем балансе.",
+        "failed": "Покупка не завершена. Пополненные AF Coins сохранены на вашем балансе.",
+    }
+    return StarPaymentStatusOut(
+        id=intent.id,
+        status=intent.status,
+        amount=intent.xtr_amount,
+        wallet=wallet_value,
+        purpose=intent.purpose,
+        listing_id=intent.listing_id,
+        deal_id=intent.deal_id,
+        checkout_status=intent.checkout_status,
+        message=messages.get(intent.checkout_status),
+    )
 
 
 @router.get("/withdrawals", response_model=list[WithdrawalOut])
@@ -1650,6 +1749,21 @@ async def telegram_webhook(
         )
         await answer_pre_checkout_query(pre_checkout["id"], accepted, error_message)
         return {"ok": True}
+    callback = update.get("callback_query") or {}
+    if callback.get("id") and callback.get("data") in {"autoflow:how", "autoflow:start"}:
+        callback_message = callback.get("message") or {}
+        callback_sender = callback.get("from") or {}
+        chat = callback_message.get("chat") or {}
+        telegram_id = int(chat.get("id") or callback_sender.get("id") or 0)
+        message_id = callback_message.get("message_id")
+        await answer_bot_callback(str(callback["id"]))
+        if telegram_id and message_id:
+            await send_bot_menu(
+                telegram_id,
+                detailed=callback.get("data") == "autoflow:how",
+                message_id=int(message_id),
+            )
+        return {"ok": True}
     message = update.get("message") or {}
     sender = message.get("from") or {}
     # Админская рассылка
@@ -1763,39 +1877,63 @@ async def telegram_webhook(
         else:
             user.bot_started = True
         await session.commit()
+        background_tasks.add_task(send_bot_menu, int(sender["id"]))
     payment = message.get("successful_payment")
     if payment and sender.get("id"):
         credited = await process_successful_payment(session, int(sender["id"]), payment)
+        payment_intent = await session.scalar(
+            select(StarPaymentIntent).where(
+                StarPaymentIntent.invoice_payload == str(payment.get("invoice_payload") or "")
+            )
+        )
+        payment_user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
+        await session.commit()
         if credited:
             background_tasks.add_task(send_bot_notification, int(sender["id"]), f"Баланс AUTOFLOW MARKET пополнен на {payment['total_amount']} AF Coins")
-            payment_intent = await session.scalar(
-                select(StarPaymentIntent).where(
-                    StarPaymentIntent.invoice_payload == str(payment.get("invoice_payload") or "")
-                )
+        if payment_intent and payment_user and payment_intent.purpose == "listing_checkout":
+            completed_intent, deal, seller_telegram_id = await complete_listing_payment_intent(
+                session, payment_user, payment_intent.id
             )
-            if payment_intent and payment_intent.purpose == "cart_checkout":
-                payment_user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
-                current_cart_ids = {
-                    str(item)
-                    for item in (await session.scalars(select(CartItem.listing_id).where(CartItem.user_id == payment_user.id))).all()
-                }
-                expected_cart_ids = set((payment_intent.context or {}).get("listing_ids", []))
-                await session.commit()
-                try:
-                    if current_cart_ids != expected_cart_ids:
-                        raise HTTPException(status_code=409, detail="Состав корзины изменился после выставления счёта")
-                    deals, seller_ids = await checkout_cart(session, payment_user)
-                except HTTPException as error:
-                    await create_notification(
-                        session,
-                        payment_user.id,
-                        "checkout_after_topup_failed",
-                        "Покупка не завершена автоматически",
-                        f"AF Coins сохранены на балансе: {error.detail}",
+            if deal:
+                if seller_telegram_id:
+                    background_tasks.add_task(
+                        send_bot_notification,
+                        seller_telegram_id,
+                        "Ваш товар хотят купить. Покупатель оплатил, деньги находятся под защитой. Откройте AUTOFLOW MARKET.",
                     )
-                    await session.commit()
-                else:
-                    for telegram_id in seller_ids:
-                        background_tasks.add_task(send_bot_notification, telegram_id, "Ваш товар хотят купить. Откройте AUTOFLOW MARKET, чтобы ответить покупателю")
-                    background_tasks.add_task(send_bot_notification, int(sender["id"]), f"Покупка оформлена. Создано сделок: {len(deals)}")
+                background_tasks.add_task(
+                    send_bot_notification,
+                    int(sender["id"]),
+                    "Покупка оформлена. Деньги находятся под защитой до подтверждения получения.",
+                )
+            elif completed_intent.checkout_status == "listing_unavailable":
+                background_tasks.add_task(
+                    send_bot_notification,
+                    int(sender["id"]),
+                    "Объявление уже недоступно. Пополненные AF Coins сохранены на вашем балансе.",
+                )
+        elif credited and payment_intent and payment_user and payment_intent.purpose == "cart_checkout":
+            current_cart_ids = {
+                str(item)
+                for item in (await session.scalars(select(CartItem.listing_id).where(CartItem.user_id == payment_user.id))).all()
+            }
+            expected_cart_ids = set((payment_intent.context or {}).get("listing_ids", []))
+            await session.commit()
+            try:
+                if current_cart_ids != expected_cart_ids:
+                    raise HTTPException(status_code=409, detail="Состав корзины изменился после выставления счёта")
+                deals, seller_ids = await checkout_cart(session, payment_user)
+            except HTTPException as error:
+                await create_notification(
+                    session,
+                    payment_user.id,
+                    "checkout_after_topup_failed",
+                    "Покупка не завершена автоматически",
+                    f"AF Coins сохранены на балансе: {error.detail}",
+                )
+                await session.commit()
+            else:
+                for telegram_id in seller_ids:
+                    background_tasks.add_task(send_bot_notification, telegram_id, "Ваш товар хотят купить. Откройте AUTOFLOW MARKET, чтобы ответить покупателю")
+                background_tasks.add_task(send_bot_notification, int(sender["id"]), f"Покупка оформлена. Создано сделок: {len(deals)}")
     return {"ok": True}

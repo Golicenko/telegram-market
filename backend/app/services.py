@@ -910,6 +910,260 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
     return deals, seller_telegram_ids
 
 
+async def _effective_listing_price(session: AsyncSession, buyer: User, listing: Listing) -> tuple[Decimal, Conversation | None]:
+    conversation = await session.scalar(
+        select(Conversation)
+        .where(
+            or_(
+                and_(Conversation.buyer_id == buyer.id, Conversation.seller_id == listing.seller_id),
+                and_(Conversation.buyer_id == listing.seller_id, Conversation.seller_id == buyer.id),
+            )
+        )
+        .with_for_update()
+    )
+    price = money(listing.price_af_coins)
+    if conversation and conversation.listing_id == listing.id and conversation.accepted_price_af_coins is not None:
+        price = money(conversation.accepted_price_af_coins)
+    return price, conversation
+
+
+async def _purchase_locked_listing(
+    session: AsyncSession,
+    buyer: User,
+    listing: Listing,
+) -> tuple[Deal, int | None]:
+    if listing.seller_id == buyer.id:
+        raise HTTPException(status_code=400, detail="Нельзя купить собственное объявление")
+    if listing.status != "active" or listing.deleted_at is not None:
+        raise HTTPException(status_code=409, detail="Объявление уже недоступно")
+
+    agreed_price, conversation = await _effective_listing_price(session, buyer, listing)
+    wallet = await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id).with_for_update())
+    available = wallet.available_balance if wallet else Decimal("0")
+    if not wallet or available < agreed_price:
+        missing = money(agreed_price - available)
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "insufficient_af_coins",
+                "missing_af_coins": str(missing),
+                "price_af_coins": str(agreed_price),
+                "available_af_coins": str(money(available)),
+                "listing_id": str(listing.id),
+            },
+        )
+
+    available_before, frozen_before = wallet_snapshot(wallet)
+    purchased_part, earned_part = hold_for_purchase(wallet, agreed_price)
+    wallet.version += 1
+    payout, commission = settlement_amounts(agreed_price)
+    deal = Deal(
+        listing_id=listing.id,
+        buyer_id=buyer.id,
+        seller_id=listing.seller_id,
+        status="paid",
+        price_af_coins=agreed_price,
+        frozen_amount=agreed_price,
+        purchased_frozen_amount=purchased_part,
+        earned_frozen_amount=earned_part,
+        seller_payout=payout,
+        platform_commission=commission,
+    )
+    session.add(deal)
+    await session.flush()
+    if not conversation:
+        conversation = Conversation(listing_id=listing.id, buyer_id=buyer.id, seller_id=listing.seller_id)
+        session.add(conversation)
+        await session.flush()
+    else:
+        conversation.listing_id = listing.id
+        conversation.accepted_price_af_coins = None
+    conversation.deal_id = deal.id
+    conversation.buyer_hidden_at = None
+    conversation.seller_hidden_at = None
+    conversation.last_message_at = datetime.now(UTC)
+    session.add(
+        ConversationMessage(
+            conversation_id=conversation.id,
+            sender_id=buyer.id,
+            body=f"Покупатель оплатил {agreed_price} AF Coins. Деньги под защитой до подтверждения получения.",
+            message_type="system",
+        )
+    )
+    listing.status = "reserved"
+    listing.reserved_by_deal_id = deal.id
+    session.add(
+        wallet_transaction(
+            wallet,
+            "protection_hold",
+            -agreed_price,
+            available_before,
+            frozen_before,
+            "Деньги переведены под защиту для покупки",
+            deal_id=deal.id,
+            external_reference=f"deal:{deal.id}:protection_hold",
+        )
+    )
+    seller = await session.get(User, listing.seller_id)
+    if seller:
+        await create_notification(
+            session,
+            seller.id,
+            "deal_created",
+            "Ваш товар хотят купить",
+            "Покупатель оплатил. Откройте AUTOFLOW MARKET, чтобы продолжить сделку",
+            {"deal_id": str(deal.id)},
+        )
+    return deal, seller.telegram_id if seller and seller.bot_started else None
+
+
+async def purchase_listing(session: AsyncSession, buyer: User, listing_id: uuid.UUID) -> tuple[Deal, int | None, bool]:
+    async with session.begin():
+        listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
+        if not listing:
+            raise HTTPException(status_code=404, detail="Объявление не найдено")
+        if listing.seller_id == buyer.id:
+            raise HTTPException(status_code=400, detail="Нельзя купить собственное объявление")
+        if listing.status == "reserved" and listing.reserved_by_deal_id:
+            existing = await session.scalar(select(Deal).where(Deal.id == listing.reserved_by_deal_id).with_for_update())
+            if existing and existing.buyer_id == buyer.id and existing.status not in {"completed", "cancelled"}:
+                seller = await session.get(User, existing.seller_id)
+                return existing, seller.telegram_id if seller and seller.bot_started else None, False
+        deal, seller_telegram_id = await _purchase_locked_listing(session, buyer, listing)
+    return deal, seller_telegram_id, True
+
+
+async def create_listing_payment_intent(
+    session: AsyncSession,
+    user: User,
+    listing_id: uuid.UUID,
+    invoice_factory: Callable[[int, str], Awaitable[str]],
+) -> StarPaymentIntent:
+    now = datetime.now(UTC)
+    async with session.begin():
+        listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
+        if not listing or listing.status != "active" or listing.deleted_at is not None:
+            raise HTTPException(status_code=409, detail="Объявление уже недоступно")
+        if listing.seller_id == user.id:
+            raise HTTPException(status_code=400, detail="Нельзя купить собственное объявление")
+        existing = await session.scalar(
+            select(StarPaymentIntent)
+            .where(
+                StarPaymentIntent.user_id == user.id,
+                StarPaymentIntent.listing_id == listing.id,
+                StarPaymentIntent.purpose == "listing_checkout",
+                StarPaymentIntent.status == "pending",
+            )
+            .with_for_update()
+        )
+        if existing and existing.expires_at > now:
+            if existing.invoice_link:
+                return existing
+            raise HTTPException(status_code=409, detail="Счёт уже создаётся. Повторите через несколько секунд")
+        if existing:
+            existing.status = "expired"
+        price, _conversation = await _effective_listing_price(session, user, listing)
+        wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id).with_for_update())
+        available = money(wallet.available_balance if wallet else Decimal("0"))
+        missing = money(price - available)
+        if missing <= 0:
+            raise HTTPException(status_code=409, detail="Средств уже достаточно. Нажмите «Оплатить безопасно» ещё раз")
+        xtr_amount = int(missing.to_integral_value(rounding=ROUND_CEILING))
+        intent_id = uuid.uuid4()
+        intent = StarPaymentIntent(
+            id=intent_id,
+            user_id=user.id,
+            invoice_payload=f"autoflow_topup:{intent_id}",
+            xtr_amount=xtr_amount,
+            purpose="listing_checkout",
+            context={"listing_title": f"{listing.brand} {listing.model}"},
+            listing_id=listing.id,
+            seller_id=listing.seller_id,
+            listing_price_af_coins=price,
+            available_balance_at_creation=available,
+            missing_af_coins=missing,
+            checkout_status="pending",
+            status="pending",
+            expires_at=now + timedelta(minutes=30),
+        )
+        session.add(intent)
+
+    try:
+        invoice_link = await invoice_factory(intent.xtr_amount, intent.invoice_payload)
+    except Exception:
+        async with session.begin():
+            locked = await session.scalar(select(StarPaymentIntent).where(StarPaymentIntent.id == intent.id).with_for_update())
+            if locked and locked.status == "pending":
+                locked.status = "cancelled"
+                locked.checkout_status = "failed"
+        raise
+    async with session.begin():
+        locked = await session.scalar(select(StarPaymentIntent).where(StarPaymentIntent.id == intent.id).with_for_update())
+        if not locked or locked.status != "pending":
+            raise HTTPException(status_code=409, detail="Счёт больше недоступен")
+        locked.invoice_link = invoice_link
+    return locked
+
+
+async def complete_listing_payment_intent(
+    session: AsyncSession,
+    user: User,
+    intent_id: uuid.UUID,
+) -> tuple[StarPaymentIntent, Deal | None, int | None]:
+    async with session.begin():
+        intent = await session.scalar(select(StarPaymentIntent).where(StarPaymentIntent.id == intent_id).with_for_update())
+        if not intent or intent.user_id != user.id or intent.purpose != "listing_checkout":
+            raise HTTPException(status_code=404, detail="Счёт покупки не найден")
+        if intent.status != "paid":
+            raise HTTPException(status_code=409, detail="Telegram ещё не подтвердил оплату")
+        if intent.checkout_status == "completed" and intent.deal_id:
+            return intent, await session.get(Deal, intent.deal_id), None
+        if intent.checkout_status in {"listing_unavailable", "failed"}:
+            return intent, None, None
+        listing = await session.scalar(select(Listing).where(Listing.id == intent.listing_id).with_for_update())
+        if not listing or listing.status != "active" or listing.deleted_at is not None:
+            intent.checkout_status = "listing_unavailable"
+            await create_notification(
+                session,
+                user.id,
+                "listing_checkout_unavailable",
+                "Объявление уже недоступно",
+                "Пополненные AF Coins сохранены на вашем балансе.",
+                {"intent_id": str(intent.id), "listing_id": str(intent.listing_id)},
+            )
+            return intent, None, None
+        current_price, _conversation = await _effective_listing_price(session, user, listing)
+        if listing.seller_id != intent.seller_id or current_price != money(intent.listing_price_af_coins):
+            intent.checkout_status = "failed"
+            await create_notification(
+                session,
+                user.id,
+                "listing_checkout_changed",
+                "Условия объявления изменились",
+                "Пополненные AF Coins сохранены на вашем балансе.",
+                {"intent_id": str(intent.id), "listing_id": str(intent.listing_id)},
+            )
+            return intent, None, None
+        try:
+            deal, seller_telegram_id = await _purchase_locked_listing(session, user, listing)
+        except HTTPException as error:
+            if error.status_code != 402:
+                raise
+            intent.checkout_status = "failed"
+            await create_notification(
+                session,
+                user.id,
+                "listing_checkout_failed",
+                "Покупка не завершена автоматически",
+                "Пополненные AF Coins сохранены на вашем балансе.",
+                {"intent_id": str(intent.id), "listing_id": str(intent.listing_id)},
+            )
+            return intent, None, None
+        intent.deal_id = deal.id
+        intent.checkout_status = "completed"
+    return intent, deal, seller_telegram_id
+
+
 async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID, next_status: str) -> Deal:
     allowed = {
         "seller_contacted": {"paid"},
