@@ -12,11 +12,13 @@ from .bot import (
     answer_pre_checkout_query,
     create_star_invoice_link,
     send_bot_notification,
+    send_bot_material,
     send_bot_photo,
+    upload_bot_material,
 )
 from .config import Settings, get_settings
-from .database import get_session
-from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportMessage, SupportTicket, TrainingProduct, User, Wallet, WalletTransaction, WithdrawalRequest
+from .database import SessionLocal, get_session
+from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportMessage, SupportTicket, TrainingMaterial, TrainingProduct, TrainingPurchase, User, Wallet, WalletTransaction, WithdrawalRequest
 from .schemas import (
     AccountListingCreate,
     AccountListingOut,
@@ -49,8 +51,18 @@ from .schemas import (
     SupportTicketCreate,
     SupportTicketOut,
     TrainingProductCreate,
+    TrainingAdminProductOut,
+    TrainingAdminStatsOut,
+    TrainingBuyerOut,
+    TrainingMaterialAdminOut,
+    TrainingMaterialCreate,
+    TrainingMaterialPublicOut,
+    TrainingMaterialUpdate,
     TrainingProductOut,
     TrainingProductUpdate,
+    TrainingPurchaseAdminOut,
+    TrainingPurchaseOut,
+    TrainingPurchaseStatusUpdate,
     UniqueListingCreate,
     UserOut,
     WalletOut,
@@ -70,12 +82,16 @@ from .services import (
     create_price_offer,
     create_star_payment_intent,
     create_training_product,
+    create_training_material,
     create_withdrawal,
     decide_withdrawal,
     delete_account_listing,
     delete_listing,
     delete_special_listing,
     delete_training_product,
+    delete_training_material,
+    begin_training_delivery,
+    finish_training_delivery,
     get_or_create_conversation,
     process_successful_payment,
     promote_listing,
@@ -88,6 +104,10 @@ from .services import (
     update_listing,
     update_special_listing,
     update_training_product,
+    update_training_material,
+    update_training_purchase_status,
+    purchase_training_product,
+    set_training_product_state,
     validate_star_pre_checkout,
 )
 
@@ -198,6 +218,44 @@ async def support_ticket_out(session: AsyncSession, ticket: SupportTicket) -> Su
     return SupportTicketOut.model_validate(ticket).model_copy(
         update={"messages": [SupportMessageOut.model_validate(message) for message in messages]}
     )
+
+
+async def training_purchase_out(session: AsyncSession, purchase: TrainingPurchase) -> TrainingPurchaseOut:
+    materials: list[TrainingMaterial] = []
+    if purchase.product_type == "automatic":
+        materials = list((await session.scalars(
+            select(TrainingMaterial).where(
+                TrainingMaterial.product_id == purchase.product_id,
+                TrainingMaterial.is_active.is_(True),
+            ).order_by(TrainingMaterial.position, TrainingMaterial.created_at)
+        )).all())
+    return TrainingPurchaseOut.model_validate(purchase).model_copy(
+        update={"materials": [TrainingMaterialPublicOut.model_validate(item) for item in materials]}
+    )
+
+
+async def deliver_training_materials(purchase_id: uuid.UUID) -> None:
+    async with SessionLocal() as session:
+        purchase = await session.get(TrainingPurchase, purchase_id)
+        if not purchase or purchase.delivery_status != "sending":
+            return
+        buyer = await session.get(User, purchase.buyer_id)
+        materials = list((await session.scalars(
+            select(TrainingMaterial).where(
+                TrainingMaterial.product_id == purchase.product_id,
+                TrainingMaterial.is_active.is_(True),
+            ).order_by(TrainingMaterial.position, TrainingMaterial.created_at)
+        )).all())
+        telegram_id = buyer.telegram_id if buyer and buyer.bot_started else None
+    success = bool(telegram_id and materials)
+    if success:
+        for material in materials:
+            sent = await send_bot_material(telegram_id, material.material_type, material.delivery_reference, material.title)
+            if not sent:
+                success = False
+                break
+    async with SessionLocal() as session:
+        await finish_training_delivery(session, purchase_id, success)
 
 
 def validate_image_content(content: bytes, content_type: str | None) -> str:
@@ -462,6 +520,16 @@ async def list_training_products(session: AsyncSession = Depends(get_session)):
     )).all())
 
 
+@router.get("/training/mine", response_model=list[TrainingPurchaseOut])
+async def my_training_purchases(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    purchases = list((await session.scalars(
+        select(TrainingPurchase)
+        .where(TrainingPurchase.buyer_id == user.id)
+        .order_by(TrainingPurchase.created_at.desc())
+    )).all())
+    return [await training_purchase_out(session, purchase) for purchase in purchases]
+
+
 @router.get("/training/{product_id}", response_model=TrainingProductOut)
 async def get_training_product(product_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
     product = await session.scalar(select(TrainingProduct).where(
@@ -474,6 +542,46 @@ async def get_training_product(product_id: uuid.UUID, session: AsyncSession = De
     return product
 
 
+@router.post("/training/{product_id}/purchase", response_model=TrainingPurchaseOut)
+async def buy_training_product(
+    product_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    purchase, created = await purchase_training_product(session, user, product_id)
+    if created:
+        if purchase.product_type == "automatic":
+            await begin_training_delivery(session, user.id, purchase.id, cooldown_seconds=0)
+            background_tasks.add_task(deliver_training_materials, purchase.id)
+        seller = await session.get(User, purchase.seller_id)
+        if seller and seller.bot_started:
+            background_tasks.add_task(
+                send_bot_notification,
+                seller.telegram_id,
+                f"Новое обучение куплено: {purchase.title_snapshot}. Откройте AUTOFLOW MARKET.",
+            )
+    return await training_purchase_out(session, purchase)
+
+
+@router.post("/training/purchases/{purchase_id}/redeliver", response_model=TrainingPurchaseOut)
+async def redeliver_training_purchase(
+    purchase_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    purchase = await begin_training_delivery(
+        session,
+        user.id,
+        purchase_id,
+        cooldown_seconds=settings.training_delivery_cooldown_seconds,
+    )
+    background_tasks.add_task(deliver_training_materials, purchase.id)
+    return await training_purchase_out(session, purchase)
+
+
 @router.get("/admin/training", response_model=list[TrainingProductOut])
 async def list_admin_training_products(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return list((await session.scalars(
@@ -484,6 +592,64 @@ async def list_admin_training_products(admin: User = Depends(require_admin), ses
     )).all())
 
 
+@router.get("/admin/training/management", response_model=list[TrainingAdminProductOut])
+async def manage_training_products(
+    filter: str = Query(default="all", pattern="^(all|published|hidden|pinned|personal|automatic)$"),
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    aggregate = (
+        select(
+            TrainingPurchase.product_id.label("product_id"),
+            func.count(TrainingPurchase.id).label("purchase_count"),
+            func.coalesce(func.sum(TrainingPurchase.price_af_coins), 0).label("revenue"),
+        )
+        .group_by(TrainingPurchase.product_id)
+        .subquery()
+    )
+    statement = (
+        select(TrainingProduct, aggregate.c.purchase_count, aggregate.c.revenue)
+        .outerjoin(aggregate, aggregate.c.product_id == TrainingProduct.id)
+        .where(TrainingProduct.admin_id == admin.id)
+        .order_by(TrainingProduct.pinned.desc(), TrainingProduct.created_at.desc())
+    )
+    if filter == "published":
+        statement = statement.where(TrainingProduct.published.is_(True), TrainingProduct.deleted_at.is_(None))
+    elif filter == "hidden":
+        statement = statement.where(or_(TrainingProduct.published.is_(False), TrainingProduct.deleted_at.is_not(None)))
+    elif filter == "pinned":
+        statement = statement.where(TrainingProduct.pinned.is_(True), TrainingProduct.deleted_at.is_(None))
+    elif filter in {"personal", "automatic"}:
+        statement = statement.where(TrainingProduct.product_type == filter)
+    rows = (await session.execute(statement)).all()
+    return [
+        TrainingAdminProductOut.model_validate(product).model_copy(update={
+            "purchase_count": int(count or 0),
+            "revenue_af_coins": Decimal(revenue or 0),
+            "archived": product.deleted_at is not None,
+        })
+        for product, count, revenue in rows
+    ]
+
+
+@router.get("/admin/training/stats", response_model=TrainingAdminStatsOut)
+async def training_stats(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    total_sales, total_revenue, personal_sales, automatic_sales = (await session.execute(
+        select(
+            func.count(TrainingPurchase.id),
+            func.coalesce(func.sum(TrainingPurchase.price_af_coins), 0),
+            func.count(TrainingPurchase.id).filter(TrainingPurchase.product_type == "personal"),
+            func.count(TrainingPurchase.id).filter(TrainingPurchase.product_type == "automatic"),
+        ).where(TrainingPurchase.seller_id == admin.id)
+    )).one()
+    return TrainingAdminStatsOut(
+        total_sales=int(total_sales or 0),
+        total_revenue_af_coins=Decimal(total_revenue or 0),
+        personal_sales=int(personal_sales or 0),
+        automatic_sales=int(automatic_sales or 0),
+    )
+
+
 @router.post("/admin/training", response_model=TrainingProductOut, status_code=201)
 async def add_training_product(payload: TrainingProductCreate, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return await create_training_product(session, admin, payload)
@@ -492,6 +658,130 @@ async def add_training_product(payload: TrainingProductCreate, admin: User = Dep
 @router.patch("/admin/training/{product_id}", response_model=TrainingProductOut)
 async def edit_training_product(product_id: uuid.UUID, payload: TrainingProductUpdate, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return await update_training_product(session, admin, product_id, payload)
+
+
+@router.post("/admin/training/{product_id}/state/{action}", response_model=TrainingProductOut)
+async def change_training_product_state(
+    product_id: uuid.UUID,
+    action: str,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    return await set_training_product_state(session, admin, product_id, action)
+
+
+@router.get("/admin/training/{product_id}/materials", response_model=list[TrainingMaterialAdminOut])
+async def list_training_materials(
+    product_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    product = await session.get(TrainingProduct, product_id)
+    if not product or product.admin_id != admin.id:
+        raise HTTPException(status_code=404, detail="Обучение не найдено")
+    return list((await session.scalars(
+        select(TrainingMaterial).where(TrainingMaterial.product_id == product_id, TrainingMaterial.is_active.is_(True))
+        .order_by(TrainingMaterial.position, TrainingMaterial.created_at)
+    )).all())
+
+
+@router.post("/admin/training/{product_id}/materials", response_model=TrainingMaterialAdminOut, status_code=201)
+async def add_training_material(
+    product_id: uuid.UUID,
+    payload: TrainingMaterialCreate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    return await create_training_material(session, admin, product_id, payload)
+
+
+@router.post("/admin/training/materials/upload", status_code=201)
+async def upload_training_material(
+    material_type: str = Query(pattern="^(photo|video|document)$"),
+    file: UploadFile = File(...),
+    admin: User = Depends(require_admin),
+):
+    content = await file.read(20 * 1024 * 1024 + 1)
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Материал не должен превышать 20 МБ")
+    if not content:
+        raise HTTPException(status_code=400, detail="Файл пуст")
+    return await upload_bot_material(
+        admin.telegram_id,
+        material_type,
+        file.filename or "material",
+        content,
+        file.content_type or "application/octet-stream",
+    )
+
+
+@router.patch("/admin/training/materials/{material_id}", response_model=TrainingMaterialAdminOut)
+async def edit_training_material(
+    material_id: uuid.UUID,
+    payload: TrainingMaterialUpdate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    return await update_training_material(session, admin, material_id, payload)
+
+
+@router.delete("/admin/training/materials/{material_id}", status_code=204)
+async def remove_training_material(
+    material_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    await delete_training_material(session, admin, material_id)
+
+
+@router.get("/admin/training/{product_id}/purchases", response_model=list[TrainingPurchaseAdminOut])
+async def training_product_buyers(
+    product_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    product = await session.get(TrainingProduct, product_id)
+    if not product or product.admin_id != admin.id:
+        raise HTTPException(status_code=404, detail="Обучение не найдено")
+    purchases = list((await session.scalars(
+        select(TrainingPurchase).where(TrainingPurchase.product_id == product_id).order_by(TrainingPurchase.created_at.desc())
+    )).all())
+    buyer_ids = {item.buyer_id for item in purchases}
+    users = list((await session.scalars(select(User).where(User.id.in_(buyer_ids)))).all()) if buyer_ids else []
+    users_by_id = {item.id: item for item in users}
+    results = []
+    for purchase in purchases:
+        buyer = users_by_id.get(purchase.buyer_id)
+        if not buyer:
+            continue
+        public = await training_purchase_out(session, purchase)
+        results.append(TrainingPurchaseAdminOut.model_validate(purchase).model_copy(update={
+            "buyer": TrainingBuyerOut.model_validate(buyer),
+            "materials": public.materials,
+        }))
+    return results
+
+
+@router.patch("/admin/training/purchases/{purchase_id}/status", response_model=TrainingPurchaseAdminOut)
+async def change_training_purchase_status(
+    purchase_id: uuid.UUID,
+    payload: TrainingPurchaseStatusUpdate,
+    background_tasks: BackgroundTasks,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    purchase = await update_training_purchase_status(session, admin, purchase_id, payload.status)
+    buyer = await session.get(User, purchase.buyer_id)
+    if buyer and buyer.bot_started:
+        text = "Ваше персональное обучение началось" if payload.status == "in_progress" else "Ваше персональное обучение завершено"
+        background_tasks.add_task(send_bot_notification, buyer.telegram_id, text)
+    if not buyer:
+        raise HTTPException(status_code=404, detail="Покупатель не найден")
+    public = await training_purchase_out(session, purchase)
+    return TrainingPurchaseAdminOut.model_validate(purchase).model_copy(update={
+        "buyer": TrainingBuyerOut.model_validate(buyer),
+        "materials": public.materials,
+    })
 
 
 @router.delete("/admin/training/{product_id}", status_code=204)

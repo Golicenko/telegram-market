@@ -11,7 +11,14 @@
     regular: [],
     unique: [],
     training: [],
+    trainingPurchases: [],
     selectedTraining: null,
+    adminTraining: [],
+    adminTrainingStats: null,
+    adminTrainingFilter: "all",
+    adminTrainingPurchases: [],
+    adminTrainingMaterials: [],
+    selectedAdminTrainingId: null,
     cart: [],
     advertisement: null,
     supportTickets: [],
@@ -41,6 +48,13 @@
     uniqueEmpty: document.getElementById("uniqueEmptyState"),
     trainingCards: document.getElementById("trainingCards"),
     trainingEmpty: document.getElementById("trainingEmptyState"),
+    personalTrainingPurchases: document.getElementById("personalTrainingPurchases"),
+    automaticTrainingPurchases: document.getElementById("automaticTrainingPurchases"),
+    adminTrainingStats: document.getElementById("adminTrainingStats"),
+    adminTrainingProducts: document.getElementById("adminTrainingProducts"),
+    adminTrainingDetail: document.getElementById("adminTrainingDetail"),
+    adminTrainingBuyers: document.getElementById("adminTrainingBuyers"),
+    adminTrainingMaterials: document.getElementById("adminTrainingMaterials"),
     brandFilter: document.getElementById("brandFilter"),
     modelFilter: document.getElementById("modelFilter"),
     priceFilter: document.getElementById("priceFilter"),
@@ -166,7 +180,8 @@
     bind(elements.chatListing, "click", openChatListing, "chatListing");
     bind(elements.withdrawForm, "submit", createWithdrawal, "withdrawForm");
     bind(document.getElementById("trainingForm"), "submit", submitTrainingProduct, "trainingForm");
-    bind(document.getElementById("trainingBuyButton"), "click", () => notify("Покупка обучения будет подключена на следующем этапе"), "trainingBuyButton");
+    bind(document.getElementById("trainingBuyButton"), "click", buyTrainingProduct, "trainingBuyButton");
+    bind(document.getElementById("trainingMaterialForm"), "submit", saveTrainingMaterial, "trainingMaterialForm");
     bind(elements.supportForm, "submit", submitSupportTicket, "supportForm");
     bind(elements.advertisementForm, "submit", submitAdvertisement, "advertisementForm");
     bind(document.getElementById("deleteAdvertisementButton"), "click", deleteAdvertisement, "deleteAdvertisementButton");
@@ -263,6 +278,7 @@
     regular: async () => { state.regular = await api.request("/listings?type=regular"); },
     unique: async () => { state.unique = await api.request("/listings?type=unique"); },
     training: async () => { state.training = await api.request(state.me?.user.role === "admin" ? "/admin/training" : "/training"); },
+    trainingPurchases: async () => { state.trainingPurchases = await api.request("/training/mine"); },
     cart: async () => { state.cart = await api.request("/cart"); },
     profile: async () => { state.profile = await api.request("/profile"); },
     advertisement: async () => { state.advertisement = await api.request("/advertisement", { timeoutMs: 8000 }); },
@@ -303,7 +319,7 @@
 
   async function refreshMarketplace() {
     if (!state.serverAvailable) return;
-    await loadOptionalData(["regular", "unique", "training", "cart", "profile", "advertisement"], { allowRecovery: false });
+    await loadOptionalData(["regular", "unique", "training", "trainingPurchases", "cart", "profile", "advertisement"], { allowRecovery: false });
   }
 
   function hasTelegramLaunchHint() {
@@ -455,6 +471,17 @@ function handleClick(event) {
     if (trainingEdit) return void openTrainingEditor(trainingEdit.dataset.editTraining);
     const trainingDelete = target.closest("[data-delete-training]");
     if (trainingDelete) return void deleteTrainingProduct(trainingDelete.dataset.deleteTraining);
+    const trainingFilter = target.closest("[data-training-filter]");
+    if (trainingFilter) return void loadAdminTraining(trainingFilter.dataset.trainingFilter);
+    const trainingAdminAction = target.closest("[data-training-admin-action]");
+    if (trainingAdminAction) return void runTrainingAdminAction(trainingAdminAction);
+    const trainingPurchaseAction = target.closest("[data-training-purchase-action]");
+    if (trainingPurchaseAction) return void updatePersonalTrainingStatus(trainingPurchaseAction);
+    const trainingMaterialAction = target.closest("[data-training-material-action]");
+    if (trainingMaterialAction) return void runTrainingMaterialAction(trainingMaterialAction);
+    const redeliverTraining = target.closest("[data-training-redeliver]");
+    if (redeliverTraining) return void redeliverTrainingMaterials(redeliverTraining);
+    if (target.closest("[data-close-training-detail]")) return void closeAdminTrainingDetail();
     const adminTab = target.closest("[data-admin-tab]");
     if (adminTab) return void switchAdminTab(adminTab.dataset.adminTab);
     const userAction = target.closest("[data-admin-user-action]");
@@ -651,7 +678,7 @@ function handleClick(event) {
   async function openAdminPanel() {
     if (state.me?.user.role !== "admin") return notify("Требуется роль администратора");
     openSecondary("admin");
-    const results = await Promise.allSettled([loadAdminUsers(), loadAdminListings(), loadAdminDeals(), loadAdminWithdrawals(), loadAdminSupport(), loadAdvertisementAdmin()]);
+    const results = await Promise.allSettled([loadAdminUsers(), loadAdminListings(), loadAdminDeals(), loadAdminWithdrawals(), loadAdminSupport(), loadAdvertisementAdmin(), loadAdminTraining(state.adminTrainingFilter)]);
     const rejected = results.filter((result) => result.status === "rejected");
     rejected.forEach((result) => reportClientError("admin_optional", result.reason));
     if (rejected.length) notify("Часть данных админ-панели временно недоступна");
@@ -1121,9 +1148,36 @@ function handleClick(event) {
     renderWithdrawalHistory(profile.withdrawals);
     renderDeals(profile.active_deals);
     renderConversations(profile.conversations || []);
+    renderTrainingLibrary();
     document.getElementById("frozenBalance").textContent = Number(profile.wallet.frozen_balance).toFixed(2);
     document.getElementById("purchasedBalance").textContent = Number(profile.wallet.purchased_balance).toFixed(2);
     document.getElementById("earnedBalance").textContent = Number(profile.wallet.earned_balance).toFixed(2);
+  }
+
+  function renderTrainingLibrary() {
+    if (!elements.personalTrainingPurchases || !elements.automaticTrainingPurchases) return;
+    const personal = state.trainingPurchases.filter((item) => item.product_type === "personal");
+    const automatic = state.trainingPurchases.filter((item) => item.product_type === "automatic");
+    elements.personalTrainingPurchases.replaceChildren(...personal.map(createTrainingLibraryCard));
+    elements.automaticTrainingPurchases.replaceChildren(...automatic.map(createTrainingLibraryCard));
+    document.getElementById("personalTrainingEmpty").hidden = personal.length > 0;
+    document.getElementById("automaticTrainingEmpty").hidden = automatic.length > 0;
+  }
+
+  function createTrainingLibraryCard(purchase) {
+    const card = document.createElement("article"); card.className = "training-library-card";
+    const image = document.createElement("img"); image.src = absoluteMediaUrl(purchase.cover_url_snapshot); image.alt = purchase.title_snapshot;
+    const copy = document.createElement("div");
+    const title = document.createElement("strong"); title.textContent = purchase.title_snapshot;
+    const date = document.createElement("small"); date.textContent = `Куплено ${formatDate(purchase.created_at)}`;
+    const status = document.createElement("span");
+    status.textContent = purchase.product_type === "personal" ? trainingPurchaseStatusLabel(purchase.status) : trainingDeliveryStatusLabel(purchase.delivery_status);
+    copy.append(title, status, date); card.append(image, copy);
+    if (purchase.product_type === "automatic" && purchase.status === "completed") {
+      const repeat = document.createElement("button"); repeat.type = "button"; repeat.dataset.trainingRedeliver = purchase.id; repeat.textContent = purchase.delivery_status === "sending" ? "Отправляется…" : "Получить материалы повторно"; repeat.disabled = purchase.delivery_status === "sending";
+      card.append(repeat);
+    }
+    return card;
   }
 
   function renderMiniListings(container, listings, emptyText, ownerControls = false) {
@@ -1578,14 +1632,54 @@ async function hideCurrentConversation() {
       document.getElementById("trainingDetailAvailability").textContent = trainingAvailabilityLabel(product.availability);
       document.getElementById("trainingDetailPrice").textContent = formatNumber(product.price_af_coins);
       const video = document.getElementById("trainingDetailVideo"); video.hidden = !product.promo_video_url; if (product.promo_video_url) video.src = product.promo_video_url;
+      const purchase = state.trainingPurchases.find((item) => String(item.product_id) === String(product.id));
+      const buyButton = document.getElementById("trainingBuyButton");
+      buyButton.disabled = Boolean(purchase) || product.availability !== "available" || state.me?.user.id === product.admin_id;
+      buyButton.textContent = purchase ? "Уже куплено" : product.availability === "available" ? "Купить обучение" : trainingAvailabilityLabel(product.availability);
       state.previousView = "training"; await navigate("training-detail");
     } catch (error) { notify(error.message); }
+  }
+
+  async function buyTrainingProduct() {
+    const product = state.selectedTraining;
+    const button = document.getElementById("trainingBuyButton");
+    if (!product || button.disabled) return;
+    if (!(await confirmAction(`Купить «${product.title}» за ${formatNumber(product.price_af_coins)} AF Coins?`))) return;
+    button.disabled = true;
+    try {
+      const purchase = await api.request(`/training/${product.id}/purchase`, { method: "POST" });
+      state.trainingPurchases = [purchase, ...state.trainingPurchases.filter((item) => item.id !== purchase.id)];
+      await loadOptionalData(["profile"], { allowRecovery: false });
+      renderTrainingLibrary();
+      button.textContent = "Уже куплено";
+      notify(purchase.product_type === "automatic" ? "Покупка сохранена. Материалы отправляются ботом" : "Покупка сохранена. Администратор получил уведомление");
+    } catch (error) {
+      button.disabled = false;
+      if (Number(error.status) === 402) {
+        state.pendingCheckoutTopup = true;
+        notify("Недостаточно AF Coins. Пополните баланс");
+        openSecondary("topup");
+      } else notify(error.message);
+    }
+  }
+
+  async function redeliverTrainingMaterials(button) {
+    if (button.disabled) return;
+    button.disabled = true; button.textContent = "Запрашиваем…";
+    try {
+      const purchase = await api.request(`/training/purchases/${button.dataset.trainingRedeliver}/redeliver`, { method: "POST" });
+      state.trainingPurchases = state.trainingPurchases.map((item) => item.id === purchase.id ? purchase : item);
+      renderTrainingLibrary();
+      notify("Материалы отправляются в чат с ботом");
+    } catch (error) {
+      button.disabled = false; button.textContent = "Получить материалы повторно"; notify(error.message);
+    }
   }
 
   function openTrainingEditor(id = null) {
     if (state.me?.user.role !== "admin") return notify("Требуется роль администратора");
     const form = document.getElementById("trainingForm"); form.reset();
-    const product = id ? state.training.find((item) => String(item.id) === String(id)) : null;
+    const product = id ? [...state.training, ...state.adminTraining].find((item) => String(item.id) === String(id)) : null;
     form.elements.product_id.value = product?.id || "";
     document.getElementById("trainingEditorTitle").textContent = product ? "Изменить обучение" : "Создать обучение";
     if (product) {
@@ -1598,12 +1692,12 @@ async function hideCurrentConversation() {
   async function submitTrainingProduct(event) {
     event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const button = formElement.querySelector("button[type=submit]"); if (button.disabled) return; button.disabled = true;
     try {
-      const id = form.get("product_id"); const existing = id ? state.training.find((item) => String(item.id) === String(id)) : null;
+      const id = form.get("product_id"); const existing = id ? [...state.training, ...state.adminTraining].find((item) => String(item.id) === String(id)) : null;
       let coverUrl = existing?.cover_url || null; const cover = form.get("cover"); if (cover?.size) coverUrl = (await api.upload(cover)).url;
       if (!coverUrl) throw new Error("Добавьте одну основную обложку");
       const payload = { title: form.get("title"), short_description: form.get("short_description"), full_description: form.get("full_description"), cover_url: coverUrl, promo_video_url: form.get("promo_video_url") || null, product_type: form.get("product_type"), availability: form.get("availability"), price_af_coins: Number(form.get("price_af_coins")), published: form.get("published") === "on", pinned: form.get("pinned") === "on" };
       await api.request(id ? `/admin/training/${id}` : "/admin/training", { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) });
-      formElement.reset(); state.training = await api.request("/admin/training"); renderTraining(); await navigate("training"); notify("Обучение сохранено");
+      formElement.reset(); state.training = await api.request("/admin/training"); renderTraining(); await loadAdminTraining(state.adminTrainingFilter); await navigate("admin"); switchAdminTab("training"); notify("Обучение сохранено");
     } catch (error) { notify(error.message); } finally { button.disabled = false; }
   }
 
@@ -1806,6 +1900,140 @@ async function hideCurrentConversation() {
     try { await api.request(`/admin/deals/${button.dataset.dealId}/resolve`, { method: "POST", body: JSON.stringify({ outcome: button.dataset.resolveDeal, reason }) }); await loadAdminDeals(); notify("Спор разрешён и записан в историю"); }
     catch (error) { notify(error.message); }
   }
+
+  async function loadAdminTraining(filter = "all") {
+    if (state.me?.user.role !== "admin") return;
+    state.adminTrainingFilter = filter;
+    const [products, stats] = await Promise.all([
+      api.request(`/admin/training/management?filter=${encodeURIComponent(filter)}`),
+      api.request("/admin/training/stats"),
+    ]);
+    state.adminTraining = products; state.adminTrainingStats = stats;
+    document.querySelectorAll("[data-training-filter]").forEach((button) => button.classList.toggle("is-active", button.dataset.trainingFilter === filter));
+    renderAdminTraining();
+  }
+
+  function renderAdminTraining() {
+    const stats = state.adminTrainingStats;
+    if (stats) {
+      const values = [["Продажи", stats.total_sales], ["Выручка", `${formatNumber(stats.total_revenue_af_coins)} AF`], ["Персональные", stats.personal_sales], ["Автовыдача", stats.automatic_sales]];
+      elements.adminTrainingStats.replaceChildren(...values.map(([label, value]) => { const node = document.createElement("div"); const strong = document.createElement("strong"); strong.textContent = value; const span = document.createElement("span"); span.textContent = label; node.append(strong, span); return node; }));
+    }
+    if (!state.adminTraining.length) { const empty = document.createElement("div"); empty.className = "history-empty"; empty.textContent = "В этой категории обучений нет"; elements.adminTrainingProducts.replaceChildren(empty); return; }
+    elements.adminTrainingProducts.replaceChildren(...state.adminTraining.map((product) => {
+      const card = document.createElement("article"); card.className = "training-admin-card";
+      const image = document.createElement("img"); image.src = absoluteMediaUrl(product.cover_url); image.alt = "";
+      const copy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = product.title;
+      const meta = document.createElement("small"); meta.textContent = `${trainingTypeLabel(product.product_type)} · ${formatDate(product.created_at)}`;
+      const facts = document.createElement("span"); facts.textContent = `${formatNumber(product.price_af_coins)} AF · покупок ${product.purchase_count} · доход ${formatNumber(product.revenue_af_coins)} AF`;
+      const flags = document.createElement("em"); flags.textContent = [product.published && !product.archived ? "Опубликовано" : "Скрыто", product.pinned ? "Закреплено" : null].filter(Boolean).join(" · "); copy.append(title, meta, facts, flags);
+      const actions = document.createElement("div"); actions.className = "admin-record__actions";
+      const definitions = [
+        ["edit", "Редактировать"], [product.published && !product.archived ? "hide" : "publish", product.published && !product.archived ? "Скрыть" : "Опубликовать"],
+        [product.pinned ? "unpin" : "pin", product.pinned ? "Снять закрепление" : "Закрепить"], ["buyers", "Покупатели"],
+      ];
+      if (product.product_type === "automatic") definitions.push(["materials", "Материалы"]);
+      definitions.forEach(([action, label]) => { const button = document.createElement("button"); button.type = "button"; button.dataset.trainingAdminAction = action; button.dataset.productId = product.id; button.textContent = label; actions.append(button); });
+      card.append(image, copy, actions); return card;
+    }));
+  }
+
+  async function runTrainingAdminAction(button) {
+    const action = button.dataset.trainingAdminAction; const productId = button.dataset.productId;
+    if (action === "edit") return openTrainingEditor(productId);
+    if (action === "buyers") return openTrainingBuyers(productId);
+    if (action === "materials") return openTrainingMaterials(productId);
+    button.disabled = true;
+    try { await api.request(`/admin/training/${productId}/state/${action}`, { method: "POST" }); await loadAdminTraining(state.adminTrainingFilter); notify("Изменения сохранены"); }
+    catch (error) { notify(error.message); }
+    finally { button.disabled = false; }
+  }
+
+  async function openTrainingBuyers(productId) {
+    state.selectedAdminTrainingId = productId;
+    state.adminTrainingPurchases = await api.request(`/admin/training/${productId}/purchases`);
+    const product = state.adminTraining.find((item) => item.id === productId);
+    document.getElementById("adminTrainingDetailTitle").textContent = `Покупатели · ${product?.title || "обучение"}`;
+    document.getElementById("trainingMaterialForm").hidden = true;
+    elements.adminTrainingMaterials.replaceChildren(); elements.adminTrainingDetail.hidden = false;
+    if (!state.adminTrainingPurchases.length) { const empty = document.createElement("div"); empty.className = "history-empty"; empty.textContent = "Покупок пока нет"; elements.adminTrainingBuyers.replaceChildren(empty); return; }
+    elements.adminTrainingBuyers.replaceChildren(...state.adminTrainingPurchases.map(createTrainingBuyerCard));
+  }
+
+  function createTrainingBuyerCard(purchase) {
+    const card = document.createElement("article"); card.className = "training-buyer-card";
+    const avatar = document.createElement("span"); avatar.className = "conversation-avatar"; avatar.textContent = (purchase.buyer.first_name || purchase.buyer.username || "A").slice(0, 1).toUpperCase();
+    if (purchase.buyer.photo_url) { const image = document.createElement("img"); image.src = purchase.buyer.photo_url; image.alt = ""; avatar.replaceChildren(image); }
+    const copy = document.createElement("div"); const name = document.createElement("strong"); name.textContent = [purchase.buyer.first_name, purchase.buyer.last_name].filter(Boolean).join(" ");
+    const username = document.createElement("small"); username.textContent = `${purchase.buyer.username ? `@${purchase.buyer.username} · ` : ""}Telegram ID ${purchase.buyer.telegram_id}`;
+    const meta = document.createElement("span"); meta.textContent = `${formatDate(purchase.created_at)} · ${formatNumber(purchase.price_af_coins)} AF · ${trainingPurchaseStatusLabel(purchase.status)}`; copy.append(name, username, meta); card.append(avatar, copy);
+    if (purchase.product_type === "personal" && purchase.status !== "completed") { const action = document.createElement("button"); action.type = "button"; action.dataset.trainingPurchaseAction = purchase.status === "awaiting_start" ? "in_progress" : "completed"; action.dataset.purchaseId = purchase.id; action.textContent = purchase.status === "awaiting_start" ? "Начать обучение" : "Обучение завершено"; card.append(action); }
+    return card;
+  }
+
+  async function updatePersonalTrainingStatus(button) {
+    button.disabled = true;
+    try {
+      const purchase = await api.request(`/admin/training/purchases/${button.dataset.purchaseId}/status`, { method: "PATCH", body: JSON.stringify({ status: button.dataset.trainingPurchaseAction }) });
+      state.adminTrainingPurchases = state.adminTrainingPurchases.map((item) => item.id === purchase.id ? purchase : item);
+      elements.adminTrainingBuyers.replaceChildren(...state.adminTrainingPurchases.map(createTrainingBuyerCard));
+      await loadAdminTraining(state.adminTrainingFilter); notify("Статус обучения обновлён");
+    } catch (error) { button.disabled = false; notify(error.message); }
+  }
+
+  async function openTrainingMaterials(productId) {
+    state.selectedAdminTrainingId = productId;
+    state.adminTrainingMaterials = await api.request(`/admin/training/${productId}/materials`);
+    const product = state.adminTraining.find((item) => item.id === productId);
+    document.getElementById("adminTrainingDetailTitle").textContent = `Материалы · ${product?.title || "обучение"}`;
+    elements.adminTrainingBuyers.replaceChildren(); elements.adminTrainingDetail.hidden = false;
+    const form = document.getElementById("trainingMaterialForm"); form.hidden = false; form.reset(); form.elements.material_id.value = "";
+    renderAdminTrainingMaterials();
+  }
+
+  function renderAdminTrainingMaterials() {
+    if (!state.adminTrainingMaterials.length) { const empty = document.createElement("div"); empty.className = "history-empty"; empty.textContent = "Материалов пока нет"; elements.adminTrainingMaterials.replaceChildren(empty); return; }
+    elements.adminTrainingMaterials.replaceChildren(...state.adminTrainingMaterials.map((material) => {
+      const card = document.createElement("article"); card.className = "training-material-card";
+      const copy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = `${material.position + 1}. ${material.title}`;
+      const meta = document.createElement("small"); meta.textContent = [trainingMaterialTypeLabel(material.material_type), material.mime_type, material.file_size ? formatFileSize(material.file_size) : null].filter(Boolean).join(" · "); copy.append(title, meta);
+      const actions = document.createElement("div"); actions.className = "admin-record__actions";
+      [["edit", "Заменить / изменить"], ["delete", "Удалить"]].forEach(([action, label]) => { const button = document.createElement("button"); button.type = "button"; button.dataset.trainingMaterialAction = action; button.dataset.materialId = material.id; button.textContent = label; actions.append(button); });
+      card.append(copy, actions); return card;
+    }));
+  }
+
+  function runTrainingMaterialAction(button) {
+    const material = state.adminTrainingMaterials.find((item) => item.id === button.dataset.materialId);
+    if (!material) return;
+    if (button.dataset.trainingMaterialAction === "edit") {
+      const form = document.getElementById("trainingMaterialForm"); form.elements.material_id.value = material.id; form.elements.title.value = material.title; form.elements.material_type.value = material.material_type; form.elements.position.value = material.position; form.elements.delivery_reference.value = material.delivery_reference; form.scrollIntoView({ behavior: "smooth", block: "start" }); return;
+    }
+    void deleteTrainingMaterial(material.id);
+  }
+
+  async function deleteTrainingMaterial(id) {
+    if (!(await confirmAction("Удалить этот материал из выдачи? Уже купившие курс сохранят доступ к остальным материалам."))) return;
+    try { await api.request(`/admin/training/materials/${id}`, { method: "DELETE" }); await openTrainingMaterials(state.selectedAdminTrainingId); notify("Материал удалён из выдачи"); }
+    catch (error) { notify(error.message); }
+  }
+
+  async function saveTrainingMaterial(event) {
+    event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const button = formElement.querySelector("button[type=submit]"); if (button.disabled) return; button.disabled = true;
+    try {
+      const materialType = form.get("material_type"); const file = form.get("file"); let upload = null;
+      if (file?.size) upload = await api.upload(file, `/admin/training/materials/upload?material_type=${encodeURIComponent(materialType)}`);
+      const reference = upload?.delivery_reference || String(form.get("delivery_reference") || "").trim();
+      if (!reference) throw new Error("Добавьте текст, ссылку, file_id или выберите файл");
+      const payload = { title: form.get("title"), material_type: materialType, delivery_reference: reference, mime_type: upload?.mime_type || null, file_size: upload?.file_size || null, metadata_json: upload?.metadata_json || {}, position: Number(form.get("position") || 0) };
+      const id = form.get("material_id");
+      await api.request(id ? `/admin/training/materials/${id}` : `/admin/training/${state.selectedAdminTrainingId}/materials`, { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) });
+      await openTrainingMaterials(state.selectedAdminTrainingId); notify("Материал сохранён");
+    } catch (error) { notify(error.message); }
+    finally { button.disabled = false; }
+  }
+
+  function closeAdminTrainingDetail() { elements.adminTrainingDetail.hidden = true; state.selectedAdminTrainingId = null; }
 
   function switchAdminTab(tab) {
     document.querySelectorAll("[data-admin-tab]").forEach((button) => button.classList.toggle("is-active", button.dataset.adminTab === tab));
@@ -2014,6 +2242,10 @@ async function hideCurrentConversation() {
   function formatMessageTime(value) { return value ? new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)) : ""; }
   function trainingTypeLabel(value) { return value === "personal" ? "Персональное обучение" : "Автоматическое обучение"; }
   function trainingAvailabilityLabel(value) { return ({ available: "Доступно", unavailable: "Недоступно", coming_soon: "Скоро" })[value] || value; }
+  function trainingPurchaseStatusLabel(value) { return ({ awaiting_start: "Ожидает начала", in_progress: "В процессе", completed: "Завершено" })[value] || value; }
+  function trainingDeliveryStatusLabel(value) { return ({ not_applicable: "Не требуется", pending: "Ожидает отправки", sending: "Отправляется", delivered: "Доставлено", failed: "Ошибка отправки" })[value] || value; }
+  function trainingMaterialTypeLabel(value) { return ({ text: "Текст", link: "Ссылка", photo: "Фото", video: "Видео", document: "Документ" })[value] || value; }
+  function formatFileSize(value) { const bytes = Number(value || 0); return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} МБ` : `${Math.max(1, Math.round(bytes / 1024))} КБ`; }
   function uniqueValues(values) { return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru")); }
   function statusLabel(status) { return ({ active: "Доступно", reserved: "Деньги под защитой", sold: "Уже продано", paused: "Снято с публикации", deleted: "Удалено" })[status] || status; }
   function dealStatusLabel(status) { return ({ pending_payment: "Ожидает оплаты", paid: "Оплачено", seller_contacted: "Продавец на связи", transfer_in_progress: "Передача", buyer_confirmed: "Получение подтверждено", completed: "Завершена", disputed: "Спор", cancelled: "Отменена" })[status] || status; }

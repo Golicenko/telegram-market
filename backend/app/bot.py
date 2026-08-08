@@ -85,6 +85,70 @@ async def send_bot_photo(
         return False
 
 
+async def send_bot_material(telegram_id: int, material_type: str, reference: str, title: str) -> bool:
+    if material_type in {"text", "link"}:
+        text = reference if material_type == "text" else f"{title}\n{reference}"
+        return await send_bot_notification(telegram_id, text)
+    methods = {
+        "photo": ("sendPhoto", "photo"),
+        "video": ("sendVideo", "video"),
+        "document": ("sendDocument", "document"),
+    }
+    method = methods.get(material_type)
+    if not method:
+        return False
+    method_name, payload_key = method
+    try:
+        await call_bot_api(method_name, {"chat_id": telegram_id, payload_key: reference, "caption": title[:1024]})
+        return True
+    except HTTPException:
+        return False
+
+
+async def upload_bot_material(
+    telegram_id: int,
+    material_type: str,
+    filename: str,
+    content: bytes,
+    content_type: str,
+) -> dict:
+    settings = get_settings()
+    methods = {
+        "photo": ("sendPhoto", "photo"),
+        "video": ("sendVideo", "video"),
+        "document": ("sendDocument", "document"),
+    }
+    method = methods.get(material_type)
+    if not settings.bot_token or not method:
+        raise HTTPException(status_code=400, detail="Неподдерживаемый тип материала")
+    method_name, field_name = method
+    url = f"https://api.telegram.org/bot{settings.bot_token}/{method_name}"
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                url,
+                data={"chat_id": str(telegram_id), "caption": "Материал AUTOFLOW MARKET сохранён для автовыдачи"},
+                files={field_name: (filename, content, content_type)},
+            )
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Не удалось загрузить материал в Telegram") from exc
+    if not response.is_success or not payload.get("ok"):
+        raise HTTPException(status_code=502, detail=payload.get("description") or "Telegram отклонил материал")
+    message = payload["result"]
+    file_info = message.get(field_name)
+    if field_name == "photo":
+        photos = message.get("photo") or []
+        file_info = photos[-1] if photos else None
+    if not file_info or not file_info.get("file_id"):
+        raise HTTPException(status_code=502, detail="Telegram не вернул идентификатор материала")
+    return {
+        "delivery_reference": file_info["file_id"],
+        "file_size": file_info.get("file_size", len(content)),
+        "mime_type": file_info.get("mime_type", content_type),
+    }
+
+
 async def configure_telegram_webhook() -> bool:
     """Register Railway's public HTTPS endpoint without making startup depend on Telegram."""
     settings = get_settings()

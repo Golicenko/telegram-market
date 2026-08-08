@@ -201,6 +201,93 @@ class TrainingProductOut(ORMModel):
     updated_at: datetime
 
 
+class TrainingMaterialCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=180)
+    material_type: str = Field(pattern="^(text|link|photo|video|document)$")
+    delivery_reference: str = Field(min_length=1, max_length=8000)
+    mime_type: str | None = Field(default=None, max_length=160)
+    file_size: int | None = Field(default=None, ge=0)
+    metadata_json: dict = Field(default_factory=dict)
+    position: int = Field(default=0, ge=0)
+
+
+class TrainingMaterialUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=180)
+    material_type: str | None = Field(default=None, pattern="^(text|link|photo|video|document)$")
+    delivery_reference: str | None = Field(default=None, min_length=1, max_length=8000)
+    mime_type: str | None = Field(default=None, max_length=160)
+    file_size: int | None = Field(default=None, ge=0)
+    metadata_json: dict | None = None
+    position: int | None = Field(default=None, ge=0)
+
+
+class TrainingMaterialPublicOut(ORMModel):
+    id: uuid.UUID
+    title: str
+    material_type: str
+    mime_type: str | None
+    file_size: int | None
+    metadata_json: dict
+    position: int
+
+
+class TrainingMaterialAdminOut(TrainingMaterialPublicOut):
+    product_id: uuid.UUID
+    delivery_reference: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class TrainingPurchaseOut(ORMModel):
+    id: uuid.UUID
+    product_id: uuid.UUID
+    product_type: str
+    title_snapshot: str
+    cover_url_snapshot: str
+    price_af_coins: Decimal
+    status: str
+    delivery_status: str
+    delivery_attempts: int
+    last_delivery_requested_at: datetime | None
+    created_at: datetime
+    completed_at: datetime | None
+    materials: list[TrainingMaterialPublicOut] = Field(default_factory=list)
+
+
+class TrainingBuyerOut(ORMModel):
+    id: uuid.UUID
+    telegram_id: int
+    first_name: str
+    last_name: str | None
+    username: str | None
+    photo_url: str | None
+
+
+class TrainingPurchaseAdminOut(TrainingPurchaseOut):
+    buyer: TrainingBuyerOut
+    seller_payout: Decimal
+    platform_commission: Decimal
+    settled_at: datetime | None
+
+
+class TrainingAdminProductOut(TrainingProductOut):
+    purchase_count: int = 0
+    revenue_af_coins: Decimal = Decimal("0")
+    archived: bool = False
+
+
+class TrainingAdminStatsOut(BaseModel):
+    total_sales: int
+    total_revenue_af_coins: Decimal
+    personal_sales: int
+    automatic_sales: int
+
+
+class TrainingPurchaseStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(in_progress|completed)$")
+
+
 class ConversationMessageOut(ORMModel):
     id: uuid.UUID
     conversation_id: uuid.UUID

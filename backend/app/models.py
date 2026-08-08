@@ -116,6 +116,60 @@ class TrainingProduct(Base, TimestampMixin):
     )
 
 
+class TrainingMaterial(Base, TimestampMixin):
+    __tablename__ = "training_materials"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("training_products.id", ondelete="RESTRICT"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    material_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    delivery_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(160))
+    file_size: Mapped[int | None] = mapped_column(BigInteger)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    __table_args__ = (
+        CheckConstraint("material_type IN ('text','link','photo','video','document')", name="ck_training_materials_type"),
+        CheckConstraint("position >= 0", name="ck_training_materials_position"),
+        CheckConstraint("file_size IS NULL OR file_size >= 0", name="ck_training_materials_file_size"),
+        Index("ix_training_materials_product_order", "product_id", "is_active", "position"),
+    )
+
+
+class TrainingPurchase(Base, TimestampMixin):
+    __tablename__ = "training_purchases"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("training_products.id", ondelete="RESTRICT"), nullable=False, index=True)
+    buyer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    seller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    product_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    title_snapshot: Mapped[str] = mapped_column(String(180), nullable=False)
+    cover_url_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
+    price_af_coins: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    seller_payout: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    platform_commission: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    delivery_status: Mapped[str] = mapped_column(String(24), nullable=False, default="not_applicable", index=True)
+    purchased_frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    earned_frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_delivery_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivery_lock_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("product_id", "buyer_id", name="uq_training_purchase_product_buyer"),
+        CheckConstraint("product_type IN ('personal','automatic')", name="ck_training_purchases_type"),
+        CheckConstraint("status IN ('awaiting_start','in_progress','completed')", name="ck_training_purchases_status"),
+        CheckConstraint("delivery_status IN ('not_applicable','pending','sending','delivered','failed')", name="ck_training_purchases_delivery_status"),
+        CheckConstraint("price_af_coins >= 0 AND seller_payout >= 0 AND platform_commission >= 0", name="ck_training_purchases_amounts"),
+        CheckConstraint("purchased_frozen_amount >= 0 AND earned_frozen_amount >= 0", name="ck_training_purchases_frozen"),
+        CheckConstraint("delivery_attempts >= 0", name="ck_training_purchases_delivery_attempts"),
+        Index("ix_training_purchases_buyer_created", "buyer_id", "created_at"),
+        Index("ix_training_purchases_product_status", "product_id", "status"),
+    )
+
+
 class Favorite(Base):
     __tablename__ = "favorites"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -309,6 +363,7 @@ class WalletTransaction(Base):
     frozen_after: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     related_deal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("deals.id", ondelete="SET NULL"))
     related_withdrawal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("withdrawal_requests.id", ondelete="SET NULL"))
+    related_training_purchase_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("training_purchases.id", ondelete="SET NULL"), index=True)
     external_reference: Mapped[str | None] = mapped_column(String(255), unique=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
