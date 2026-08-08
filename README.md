@@ -155,6 +155,7 @@ STAR_TOPUP_MAX=1000
 - `GET /api/cart`, `POST|DELETE /api/cart/items/{listing_id}`, `POST /api/cart/checkout`
 - `GET|POST|DELETE /api/favorites...`
 - `POST /api/conversations/listing/{listing_id}`, `GET /api/conversations`
+- `POST /api/conversations/listing/{listing_id}/messages`, `POST /api/conversations/{id}/hide`
 - `GET /api/conversations/{id}`, `GET|POST /api/conversations/{id}/messages`
 - `POST /api/conversations/{id}/offers`, `POST /api/conversations/{id}/offers/counter`
 - `POST /api/offers/{id}/{accept|reject}`
@@ -209,6 +210,12 @@ STAR_TOPUP_MAX=1000
 - Обновление чата выполняется при открытии/перезагрузке экрана; WebSocket/push-синхронизация сообщений в открытом Mini App пока не добавлена.
 
 Настоящие балансы, покупки, сделки, обращения и объявления не сохраняются в `localStorage`.
+
+## Мобильный чат
+
+Для каждой неупорядоченной пары пользователей существует один постоянный `Conversation`. Простое открытие формы не создаёт запись и не отправляет уведомление: новый диалог появляется только с первым сообщением либо при создании сделки. Скрытие хранится на сервере отдельно для каждого участника; следующее входящее сообщение возвращает тот же диалог в список. Сообщения используют клиентский UUID и уникальное ограничение PostgreSQL для защиты от повторной отправки. Статусы `is_read/read_at` устанавливаются сервером при фактическом открытии диалога.
+
+Экран чата использует `visualViewport`, событие Telegram `viewportChanged`, safe-area и отдельный фиксированный composer. Это сохраняет историю, набираемый текст и кнопку отправки над клавиатурой в мобильном WebView.
 
 ## Мобильный результат
 

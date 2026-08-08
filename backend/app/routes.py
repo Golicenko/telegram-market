@@ -4,7 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, UploadFile, status
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import get_current_user, require_admin
@@ -26,6 +26,7 @@ from .schemas import (
     AdminWithdrawalOut,
     BalanceAdjustmentCreate,
     ConversationMessageOut,
+    ConversationMessageCreate,
     CounterOfferCreate,
     DealResolution,
     DealOut,
@@ -124,6 +125,18 @@ async def conversation_details(session: AsyncSession, conversation: Conversation
     other_id = conversation.seller_id if viewer and viewer.id == conversation.buyer_id else conversation.buyer_id
     other = await session.get(User, other_id)
     offers = list((await session.scalars(select(PriceOffer).where(PriceOffer.conversation_id == conversation.id).order_by(PriceOffer.created_at))).all())
+    last_message = await session.scalar(
+        select(ConversationMessage).where(ConversationMessage.conversation_id == conversation.id).order_by(ConversationMessage.created_at.desc()).limit(1)
+    )
+    unread_count = 0
+    if viewer:
+        unread_count = int(await session.scalar(
+            select(func.count(ConversationMessage.id)).where(
+                ConversationMessage.conversation_id == conversation.id,
+                ConversationMessage.sender_id != viewer.id,
+                ConversationMessage.is_read.is_(False),
+            )
+        ) or 0)
     return {
         "id": str(conversation.id),
         "listing": await listing_out(session, listing, viewer.id if viewer else None),
@@ -141,6 +154,8 @@ async def conversation_details(session: AsyncSession, conversation: Conversation
         "offers": [PriceOfferOut.model_validate(item) for item in offers],
         "created_at": conversation.created_at,
         "last_message_at": conversation.last_message_at,
+        "last_message": last_message.body if last_message else None,
+        "unread_count": unread_count,
     }
 
 
@@ -501,14 +516,32 @@ async def remove_favorite(listing_id: uuid.UUID, user: User = Depends(get_curren
 @router.post("/conversations/listing/{listing_id}", status_code=201)
 async def start_conversation(
     listing_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    conversation, seller = await get_or_create_conversation(session, user, listing_id)
-    if seller and seller.bot_started:
-        background_tasks.add_task(send_bot_notification, seller.telegram_id, "Вам хотят написать по объявлению в AUTOFLOW MARKET")
-    return await conversation_details(session, conversation, user)
+    conversation, seller, listing = await get_or_create_conversation(session, user, listing_id, create=False)
+    if conversation:
+        details = await conversation_details(session, conversation, user)
+        details["listing"] = await listing_out(session, listing, user.id)
+        return details
+    return {
+        "id": None,
+        "draft": True,
+        "listing": await listing_out(session, listing, user.id),
+        "deal": None,
+        "buyer_id": str(user.id),
+        "seller_id": str(seller.id),
+        "counterparty": {
+            "id": str(seller.id),
+            "name": " ".join(filter(None, [seller.first_name, seller.last_name])),
+            "username": seller.username,
+            "photo_url": seller.photo_url,
+            "mini_app_last_active_at": seller.mini_app_last_active_at,
+        },
+        "offers": [],
+        "last_message": None,
+        "unread_count": 0,
+    }
 
 
 @router.get("/conversations")
@@ -517,7 +550,13 @@ async def list_conversations(user: User = Depends(get_current_user), session: As
         (
             await session.scalars(
                 select(Conversation)
-                .where(or_(Conversation.buyer_id == user.id, Conversation.seller_id == user.id))
+                .where(
+                    or_(
+                        and_(Conversation.buyer_id == user.id, Conversation.buyer_hidden_at.is_(None)),
+                        and_(Conversation.seller_id == user.id, Conversation.seller_hidden_at.is_(None)),
+                    ),
+                    or_(Conversation.last_message_at.is_not(None), Conversation.deal_id.is_not(None)),
+                )
                 .order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc())
             )
         ).all()
@@ -632,15 +671,48 @@ async def mark_conversation_as_read(
 @router.post("/conversations/{conversation_id}/messages", response_model=ConversationMessageOut, status_code=201)
 async def add_conversation_message(
     conversation_id: uuid.UUID,
-    payload: MessageCreate,
+    payload: ConversationMessageCreate,
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    message, recipient = await send_conversation_message(session, user, conversation_id, payload.body)
-    if recipient and recipient.bot_started:
+    message, recipient, created = await send_conversation_message(session, user, conversation_id, payload.body, payload.client_message_id)
+    if created and recipient and recipient.bot_started:
         background_tasks.add_task(send_bot_notification, recipient.telegram_id, "Новое сообщение в AUTOFLOW MARKET. Откройте приложение, чтобы ответить")
     return message
+
+
+@router.post("/conversations/listing/{listing_id}/messages", response_model=ConversationMessageOut, status_code=201)
+async def add_first_conversation_message(
+    listing_id: uuid.UUID,
+    payload: ConversationMessageCreate,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    conversation, _, _ = await get_or_create_conversation(session, user, listing_id, create=True)
+    message, recipient, created = await send_conversation_message(
+        session, user, conversation.id, payload.body, payload.client_message_id
+    )
+    if created and recipient and recipient.bot_started:
+        background_tasks.add_task(send_bot_notification, recipient.telegram_id, "Новое сообщение в AUTOFLOW MARKET. Откройте приложение, чтобы ответить")
+    return message
+
+
+@router.post("/conversations/{conversation_id}/hide", status_code=204)
+async def hide_conversation(
+    conversation_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id).with_for_update())
+    if not conversation or user.id not in {conversation.buyer_id, conversation.seller_id}:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if user.id == conversation.buyer_id:
+        conversation.buyer_hidden_at = datetime.now(UTC)
+    else:
+        conversation.seller_hidden_at = datetime.now(UTC)
+    await session.commit()
 
 
 @router.post("/conversations/{conversation_id}/offers", response_model=PriceOfferOut, status_code=201)
@@ -1176,7 +1248,15 @@ async def profile(user: User = Depends(get_current_user), session: AsyncSession 
     purchase_deals = list((await session.scalars(select(Deal).where(Deal.buyer_id == user.id, Deal.status == "completed"))).all())
     purchases = [await session.get(Listing, item.listing_id) for item in purchase_deals]
     active_deals = list((await session.scalars(select(Deal).where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id), Deal.status.not_in(["completed", "cancelled"])))).all())
-    conversation_values = list((await session.scalars(select(Conversation).where(or_(Conversation.buyer_id == user.id, Conversation.seller_id == user.id)).order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc()))).all())
+    conversation_values = list((await session.scalars(
+        select(Conversation).where(
+            or_(
+                and_(Conversation.buyer_id == user.id, Conversation.buyer_hidden_at.is_(None)),
+                and_(Conversation.seller_id == user.id, Conversation.seller_hidden_at.is_(None)),
+            ),
+            or_(Conversation.last_message_at.is_not(None), Conversation.deal_id.is_not(None)),
+        ).order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc())
+    )).all())
     transactions = list((await session.scalars(select(WalletTransaction).where(WalletTransaction.user_id == user.id).order_by(WalletTransaction.created_at.desc()).limit(100))).all())
     withdrawal_values = list((await session.scalars(select(WithdrawalRequest).where(WithdrawalRequest.user_id == user.id).order_by(WithdrawalRequest.created_at.desc()))).all())
     return ProfileOut(

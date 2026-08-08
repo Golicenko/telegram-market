@@ -99,6 +99,10 @@ class MessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
 
 
+class ConversationMessageCreate(MessageCreate):
+    client_message_id: uuid.UUID
+
+
 class MessageOut(ORMModel):
     id: uuid.UUID
     deal_id: uuid.UUID
@@ -160,6 +164,7 @@ class ConversationMessageOut(ORMModel):
     sender_id: uuid.UUID
     body: str
     message_type: str
+    client_message_id: uuid.UUID | None
 
     is_read: bool
     read_at: datetime | None

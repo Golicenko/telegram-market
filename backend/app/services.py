@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from typing import Awaitable, Callable
 
 from fastapi import HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
@@ -309,7 +309,9 @@ async def delete_account_listing(session: AsyncSession, admin: User, account_id:
         session.add(AdminAction(admin_id=admin.id, action="delete_account_listing", target_type="account_listing", target_id=account.id))
 
 
-async def get_or_create_conversation(session: AsyncSession, buyer: User, listing_id: uuid.UUID) -> tuple[Conversation, User]:
+async def get_or_create_conversation(
+    session: AsyncSession, buyer: User, listing_id: uuid.UUID, *, create: bool = True
+) -> tuple[Conversation | None, User, Listing]:
     async with session.begin():
         listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
         if not listing or listing.status not in {"active", "reserved", "sold"}:
@@ -317,35 +319,51 @@ async def get_or_create_conversation(session: AsyncSession, buyer: User, listing
         if listing.seller_id == buyer.id:
             raise HTTPException(status_code=400, detail="You cannot start a conversation with yourself")
         conversation = await session.scalar(
-            select(Conversation).where(Conversation.listing_id == listing.id, Conversation.buyer_id == buyer.id)
+            select(Conversation).where(
+                or_(
+                    and_(Conversation.buyer_id == buyer.id, Conversation.seller_id == listing.seller_id),
+                    and_(Conversation.buyer_id == listing.seller_id, Conversation.seller_id == buyer.id),
+                )
+            ).with_for_update()
         )
-        if not conversation:
+        if not conversation and create:
             if listing.status != "active":
                 raise HTTPException(status_code=409, detail="A new conversation cannot be started for this listing")
             conversation = Conversation(listing_id=listing.id, buyer_id=buyer.id, seller_id=listing.seller_id)
             session.add(conversation)
             await session.flush()
-            await create_notification(
-                session,
-                listing.seller_id,
-                "conversation_started",
-                "Новый диалог по объявлению",
-                f"Пользователь хочет обсудить {listing.brand} {listing.model}",
-                {"conversation_id": str(conversation.id), "listing_id": str(listing.id)},
-            )
         seller = await session.get(User, listing.seller_id)
-    return conversation, seller
+    return conversation, seller, listing
 
 
-async def send_conversation_message(session: AsyncSession, sender: User, conversation_id: uuid.UUID, body: str) -> tuple[ConversationMessage, User]:
+async def send_conversation_message(
+    session: AsyncSession, sender: User, conversation_id: uuid.UUID, body: str, client_message_id: uuid.UUID
+) -> tuple[ConversationMessage, User, bool]:
     async with session.begin():
         conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id).with_for_update())
         if not conversation or sender.id not in {conversation.buyer_id, conversation.seller_id}:
             raise HTTPException(status_code=404, detail="Conversation not found")
-        message = ConversationMessage(conversation_id=conversation.id, sender_id=sender.id, body=body.strip(), message_type="text")
+        existing = await session.scalar(
+            select(ConversationMessage).where(
+                ConversationMessage.conversation_id == conversation.id,
+                ConversationMessage.sender_id == sender.id,
+                ConversationMessage.client_message_id == client_message_id,
+            )
+        )
+        recipient_id = conversation.seller_id if sender.id == conversation.buyer_id else conversation.buyer_id
+        recipient = await session.get(User, recipient_id)
+        if existing:
+            return existing, recipient, False
+        message = ConversationMessage(
+            conversation_id=conversation.id, sender_id=sender.id, body=body.strip(),
+            message_type="text", client_message_id=client_message_id,
+        )
         session.add(message)
         conversation.last_message_at = datetime.now(UTC)
-        recipient_id = conversation.seller_id if sender.id == conversation.buyer_id else conversation.buyer_id
+        if recipient_id == conversation.buyer_id:
+            conversation.buyer_hidden_at = None
+        else:
+            conversation.seller_hidden_at = None
         await create_notification(
             session,
             recipient_id,
@@ -354,9 +372,8 @@ async def send_conversation_message(session: AsyncSession, sender: User, convers
             body.strip()[:240],
             {"conversation_id": str(conversation.id), "listing_id": str(conversation.listing_id)},
         )
-        recipient = await session.get(User, recipient_id)
         await session.flush()
-    return message, recipient
+    return message, recipient, True
 
 
 async def create_price_offer(session: AsyncSession, actor: User, conversation_id: uuid.UUID, amount: Decimal, parent_offer_id: uuid.UUID | None = None) -> tuple[PriceOffer, User]:
@@ -447,15 +464,26 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
             (
                 await session.scalars(
                     select(Conversation)
-                    .where(Conversation.buyer_id == buyer.id, Conversation.listing_id.in_(listing_ids))
+                    .where(
+                        or_(
+                            and_(Conversation.buyer_id == buyer.id, Conversation.seller_id.in_([item.seller_id for item in ordered])),
+                            and_(Conversation.seller_id == buyer.id, Conversation.buyer_id.in_([item.seller_id for item in ordered])),
+                        )
+                    )
                     .with_for_update()
                 )
             ).all()
         )
-        conversations_by_listing = {item.listing_id: item for item in conversations}
+        conversations_by_seller = {
+            (item.seller_id if item.buyer_id == buyer.id else item.buyer_id): item
+            for item in conversations
+        }
+        conversations_by_listing = {item.id: conversations_by_seller.get(item.seller_id) for item in ordered}
         effective_prices = {
             item.id: money(conversations_by_listing[item.id].accepted_price_af_coins)
-            if item.id in conversations_by_listing and conversations_by_listing[item.id].accepted_price_af_coins is not None
+            if conversations_by_listing.get(item.id)
+            and conversations_by_listing[item.id].listing_id == item.id
+            and conversations_by_listing[item.id].accepted_price_af_coins is not None
             else money(item.price_af_coins)
             for item in ordered
         }
@@ -492,7 +520,12 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
                 session.add(conversation)
                 await session.flush()
                 conversations_by_listing[listing.id] = conversation
+            else:
+                conversation.listing_id = listing.id
+                conversation.accepted_price_af_coins = None
             conversation.deal_id = deal.id
+            conversation.buyer_hidden_at = None
+            conversation.seller_hidden_at = None
             conversation.last_message_at = datetime.now(UTC)
             session.add(
                 ConversationMessage(
