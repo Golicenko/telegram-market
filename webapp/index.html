@@ -12,6 +12,11 @@
     <script src="js/app.js" defer></script>
   </head>
   <body>
+    <div id="introScreen">
+  <video id="introVideo" autoplay muted playsinline>
+    <source src="intro.mp4" type="video/mp4">
+  </video>
+</div>
     <div class="app-shell">
       <section class="startup-status" id="startupStatus" role="status" aria-live="polite">
         <div class="startup-status__brand"><strong>AUTOFLOW</strong><span>MARKET</span></div>
@@ -95,7 +100,7 @@
             <label class="form-row"><span>Мощность (л.с.)</span><input name="power_hp" required type="number" min="1" inputmode="numeric" placeholder="Введите мощность" /></label>
             <label class="form-row"><span>Макс. скорость</span><input name="max_speed_kph" required type="number" min="1" inputmode="numeric" placeholder="км/ч" /></label>
             <label class="form-row form-row--textarea"><span>Описание</span><textarea name="description" required minlength="1" maxlength="3000" rows="4" placeholder="Опишите автомобиль"></textarea></label>
-            <fieldset class="price-field"><legend>Цена в AF Coins</legend><div class="price-presets"><button type="button" data-price="100">100</button><button type="button" data-price="150">150</button><button type="button" data-price="200">200</button><button type="button" data-price="300">300</button><button type="button" data-price="400">400</button><button type="button" data-price="500">500</button></div><label><span class="af-coin"></span><input id="priceInput" name="price_af_coins" type="number" min="100" required inputmode="numeric" placeholder="Своя цена, минимум 100" /></label></fieldset>
+            <fieldset class="price-field"><legend>Цена в AF Coins</legend><div class="price-presets"><button type="button" data-price="100">100</button><button type="button" data-price="150">150</button><button type="button" data-price="200">200</button><button type="button" data-price="300">300</button><button type="button" data-price="400">400</button><button type="button" data-price="500">500</button></div><label><span class="af-coin"></span><input id="priceInput" name="price_af_coins" type="number" min="0" required inputmode="numeric" placeholder="Введите цену" /></label></fieldset>
             <label class="switch-row" id="promoteRow"><span id="promoteLabel">📌 Закрепить объявление — 15 AF Coins</span><input name="promote_for_24h" type="checkbox" /><i aria-hidden="true"></i></label>
             <p class="commission-note" id="promotionNote">Закреплённое объявление будет отображаться выше остальных в течение 24 часов. Стоимость услуги — 15 AF Coins.</p>
             <p class="commission-note" id="publicationNote">Публикация, редактирование и удаление объявлений всегда бесплатны.</p>
@@ -103,10 +108,101 @@
           </form>
         </section>
 
-        <section class="view form-view" data-view="topup" aria-labelledby="topupTitle" hidden>
-          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="topupTitle">Пополнить AF Coins</h1></div>
-          <form class="topup-form" id="topupForm"><div class="currency-hero"><span class="af-coin af-coin--hero"></span><strong>1 Telegram Star = 1 AF Coin</strong></div><label for="topupAmount">Количество Telegram Stars<br /><small>сумма счёта в валюте XTR</small></label><div class="amount-field"><input id="topupAmount" name="amount" type="number" min="100" max="1000" value="100" required /><span>XTR</span></div><div class="amount-chips"><button type="button" data-topup-amount="100">100</button><button type="button" data-topup-amount="200">200</button><button type="button" data-topup-amount="500">500</button><button type="button" data-topup-amount="1000">1000</button></div><button class="pay-button" type="submit">Оплатить через Telegram Stars<small>Начисление только после successful_payment на сервере</small></button><p class="balance-disclaimer">AF Coins — внутренний баланс AUTOFLOW MARKET. Он не является личным балансом Telegram Stars и используется только внутри сервиса.</p><div class="payment-result" id="paymentResult"></div></form>
-        </section>
+<section
+  class="view form-view"
+  data-view="topup"
+  aria-labelledby="topupTitle"
+  hidden
+>
+  <div class="screen-heading screen-heading--back topup-heading">
+    <button
+      class="back-button"
+      type="button"
+      data-back
+      aria-label="Назад"
+    >
+      ‹
+    </button>
+
+    <h1 id="topupTitle">Пополнить AF Coins</h1>
+
+    <button
+      class="topup-help-button"
+      type="button"
+      data-open-topup-info
+      aria-label="Информация об AF Coins"
+    >
+      ?
+    </button>
+  </div>
+
+  <form class="topup-form" id="topupForm">
+    <div class="currency-hero">
+      <span class="af-coin af-coin--hero"></span>
+      <small>1 ⭐ = 1 AF Coin</small>
+    </div>
+
+    <div class="amount-field">
+      <input
+        id="topupAmount"
+        name="amount"
+        type="number"
+        min="50"
+        max="1000"
+        value="100"
+        required
+        inputmode="numeric"
+      />
+    </div>
+
+    <div class="amount-chips">
+      <button type="button" data-topup-amount="50">50</button>
+      <button type="button" data-topup-amount="200">200</button>
+      <button type="button" data-topup-amount="500">500</button>
+      <button type="button" data-topup-amount="1000">1000</button>
+    </div>
+
+    <button class="pay-button" type="submit">
+      Оплатить через Telegram Stars
+    </button>
+
+    <div class="payment-result" id="paymentResult"></div>
+  </form>
+</section>
+
+        <dialog class="modal topup-info-modal" id="topupInfoModal">
+  <div class="modal-head">
+    <div>
+      <span class="eyebrow">AF Coins</span>
+      <h2>Виртуальная валюта сервиса</h2>
+    </div>
+
+    <button
+      type="button"
+      data-close-dialog="topupInfoModal"
+      aria-label="Закрыть"
+    >
+      ×
+    </button>
+  </div>
+
+  <p>
+    AF Coins — внутренняя виртуальная валюта AutoFlow Market.
+  </p>
+
+  <p>
+    При пополнении действует курс: 1 Telegram Star = 1 AF Coin.
+  </p>
+
+  <p>
+    AF Coins используются для покупок и услуг только внутри сервиса.
+  </p>
+
+  <p>
+    Вывод оформляется отдельной заявкой и обрабатывается администрацией
+    по правилам сервиса.
+  </p>
+</dialog>
 
         <section class="view form-view" data-view="cart" aria-labelledby="cartTitle" hidden>
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="cartTitle">Корзина</h1><span class="cart-heading-icon">🛒</span></div><div class="compact-cart-list" id="cartList"></div><div class="empty-state empty-state--tall" id="cartEmptyState"><div class="empty-cart">⌑</div><h2>Корзина пуста</h2><p>Добавьте автомобиль из каталога</p></div><div class="cart-summary" id="cartSummary" hidden><div><span>Итого</span><strong><span id="cartTotal">0</span> <i class="af-coin"></i></strong></div><button class="publish-button" id="checkoutButton" type="button">Купить</button><button class="topup-inline" id="cartTopupButton" type="button" data-open-topup hidden>Недостаточно средств — пополнить</button></div>
@@ -117,7 +213,7 @@
         </section>
 
         <section class="view form-view" data-view="withdraw" aria-labelledby="withdrawTitle" hidden>
-          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="withdrawTitle">Вывести средства</h1></div><form class="withdraw-form" id="withdrawForm"><label>Сумма AF Coins<input name="amount" type="number" min="100" required /></label><label>Способ получения<select name="payout_method" required><option value="">Выберите способ</option><option value="manual">Ручное согласование с администратором</option></select></label><label>Реквизиты или комментарий<textarea name="details" rows="4" required></textarea></label><p>После заявки сумма будет заморожена до решения администратора. Реальная выплата выполняется вручную и пока не автоматизирована.</p><button class="publish-button" type="submit">Подтвердить заявку</button></form>
+          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="withdrawTitle">Вывести средства</h1></div><form class="withdraw-form" id="withdrawForm"><label>Сумма AF Coins<input name="amount" type="number" min="0" required /></label><label>Способ получения<select name="payout_method" required><option value="">Выберите способ</option><option value="manual">Ручное согласование с администратором</option></select></label><label>Реквизиты или комментарий<textarea name="details" rows="4" required></textarea></label><p>После заявки сумма будет заморожена до решения администратора. Реальная выплата выполняется вручную и пока не автоматизирована.</p><button class="publish-button" type="submit">Подтвердить заявку</button></form>
         </section>
 
         <section class="view form-view" data-view="support" aria-labelledby="supportTitle" hidden>
@@ -126,10 +222,10 @@
         </section>
 
         <section class="view form-view" data-view="account-draft" aria-labelledby="accountDraftTitle" hidden>
-          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="accountDraftTitle">Добавить аккаунт</h1></div><form class="account-form" id="accountDraftForm"><label>Название<input name="title" required minlength="2" /></label><label>Уровень<input name="level" type="number" min="0" required /></label><label>Количество машин<input name="cars_count" type="number" min="0" required /></label><label>Игровая валюта<input name="game_currency" required /></label><label>Дополнительная валюта<input name="extra_currency" /></label><label>Дома и другие игровые активы<textarea name="game_assets" rows="3"></textarea></label><label>Привязка электронной почты<select name="email_binding" required><option value="unknown">Не указано</option><option value="linked">Привязана</option><option value="unlinked">Не привязана</option></select></label><label class="switch-row"><span>Автовыдача</span><input name="auto_delivery" type="checkbox" /><i aria-hidden="true"></i></label><label>Описание и условия передачи<textarea name="description" rows="4" required minlength="5"></textarea></label><label>Цена в AF Coins<input name="price_af_coins" type="number" min="100" required /></label><label>Одна фотография<input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required /></label><div class="account-warning">Перед публикацией убедитесь, что передача аккаунта разрешена правилами соответствующей платформы или игры. Логины и пароли приложение не хранит.</div><button class="publish-button" type="submit">Опубликовать</button></form>
+          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="accountDraftTitle">Добавить аккаунт</h1></div><form class="account-form" id="accountDraftForm"><label>Название<input name="title" required minlength="2" /></label><label>Уровень<input name="level" type="number" min="0" required /></label><label>Количество машин<input name="cars_count" type="number" min="0" required /></label><label>Игровая валюта<input name="game_currency" required /></label><label>Дополнительная валюта<input name="extra_currency" /></label><label>Дома и другие игровые активы<textarea name="game_assets" rows="3"></textarea></label><label>Привязка электронной почты<select name="email_binding" required><option value="unknown">Не указано</option><option value="linked">Привязана</option><option value="unlinked">Не привязана</option></select></label><label class="switch-row"><span>Автовыдача</span><input name="auto_delivery" type="checkbox" /><i aria-hidden="true"></i></label><label>Описание и условия передачи<textarea name="description" rows="4" required minlength="5"></textarea></label><label>Цена в AF Coins<input name="price_af_coins" type="number" min="0" required /></label><label>Одна фотография<input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required /></label><div class="account-warning">Перед публикацией убедитесь, что передача аккаунта разрешена правилами соответствующей платформы или игры. Логины и пароли приложение не хранит.</div><button class="publish-button" type="submit">Опубликовать</button></form>
         </section>
 
-        <section class="view form-view" data-view="admin" aria-labelledby="adminTitle" hidden>
+        <section class="view form-view" data-view="admin" aria-labelledby="adminTitle" hidden>++
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="adminTitle">Администрирование</h1></div><div class="admin-panel"><div class="admin-tabs"><button class="is-active" type="button" data-admin-tab="users">Пользователи</button><button type="button" data-admin-tab="listings">Объявления</button><button type="button" data-admin-tab="deals">Сделки</button><button type="button" data-admin-tab="withdrawals">Выводы</button><button type="button" data-admin-tab="support">Поддержка</button><button type="button" data-admin-tab="advertisement">Реклама</button></div><section data-admin-panel="users"><form class="admin-search" id="adminUserSearch"><input name="q" placeholder="Имя, username или Telegram ID" /><button type="submit">Найти</button></form><div id="adminUsers"></div><div class="admin-user-history" id="adminUserHistory" hidden></div><h2>Корректировка баланса</h2><form id="balanceAdjustmentForm"><input name="user_id" placeholder="UUID пользователя" required /><input name="amount" type="number" step="0.01" placeholder="Сумма со знаком" required /><textarea name="reason" placeholder="Обязательная причина" required></textarea><button class="publish-button" type="submit">Создать операцию</button></form></section><section data-admin-panel="listings" hidden><div id="adminListings"></div></section><section data-admin-panel="deals" hidden><div id="adminDeals"></div></section><section data-admin-panel="withdrawals" hidden><h2>Заявки на вывод</h2><div id="adminWithdrawals"></div></section><section data-admin-panel="support" hidden><div id="adminSupportTickets"></div></section><section data-admin-panel="advertisement" hidden><form id="advertisementForm"><label>Изображение 1200 × 400, до 2 МБ<input name="image" type="file" accept="image/jpeg,image/png,image/webp" /></label><label>Ссылка перехода<input name="link_url" type="url" placeholder="https://..." /></label><label class="switch-row"><span>Показывать баннер</span><input name="is_active" type="checkbox" checked /><i aria-hidden="true"></i></label><div class="advertisement-preview" id="advertisementPreview">Баннер пока не загружен</div><button class="publish-button" type="submit">Сохранить рекламу</button><button class="ghost-button" id="deleteAdvertisementButton" type="button">Удалить рекламу</button></form></section></div>
         </section>
       </main>
@@ -139,5 +235,47 @@
 
     <dialog class="modal" id="infoModal"><div class="modal-head"><div><span class="eyebrow">О приложении</span><h2>AUTOFLOW MARKET</h2></div><button type="button" data-close-dialog="infoModal" aria-label="Закрыть">×</button></div><p>AUTOFLOW MARKET — удобная площадка внутри Telegram для размещения и поиска автомобильных предложений. Сделки проходят через систему резервирования: средства не начисляются продавцу до подтверждения получения покупателем. Все объявления, операции и статусы сделки сохраняются в истории.</p><p>Внутри сервиса используется AF Coins. При завершённой сделке продавец получает 70% цены, комиссия платформы составляет 30%.</p><p class="security-note">Никому не передавайте пароль, коды подтверждения или доступ к Telegram. Перед подтверждением сделки убедитесь, что получили именно заявленный товар.</p><button class="publish-button" type="button" data-close-dialog="infoModal">Понятно</button></dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+     <!-- Плавающая кнопка чата -->
+<button
+    id="floatingChatButton"
+    class="floating-chat-button"
+    type="button"
+    hidden
+>
+    💬
+    <span id="chatUnreadBadge" class="chat-unread-badge" hidden>0</span>
+</button>
+
+<!-- Уведомление о новом сообщении -->
+<div id="chatNotification" class="chat-notification" hidden>
+    <strong>Новое сообщение</strong>
+    <span id="chatNotificationText">Вам пришло сообщение</span>
+</div>
+
+<!-- Экран успешной операции -->
+<div id="successOverlay" class="success-overlay" hidden>
+    <div class="success-card">
+        <div class="success-check">✓</div>
+
+        <h2 id="successTitle">
+            Покупка успешно завершена
+        </h2>
+
+        <p id="successText"></p>
+    </div>
+</div>
+    <script>
+window.addEventListener("load", () => {
+  const intro = document.getElementById("introScreen");
+  const video = document.getElementById("introVideo");
+
+  if (!intro || !video) return;
+
+  video.onended = () => {
+    intro.style.opacity = "0";
+    setTimeout(() => intro.remove(), 500);
+  };
+});
+</script>
   </body>
 </html>

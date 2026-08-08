@@ -23,6 +23,9 @@
     notifications: [],
     failedOptional: new Set(),
     optionalRecoveryUsed: false,
+    unreadConversations: [],
+    totalUnread: 0,
+    messagePollingId: null,
     serverAvailable: true,
   };
 
@@ -88,6 +91,13 @@
     syncStatus: document.getElementById("syncStatus"),
     syncStatusText: document.getElementById("syncStatusText"),
     syncRetry: document.getElementById("syncRetry"),
+    floatingChatButton: document.getElementById("floatingChatButton"),
+    chatUnreadBadge: document.getElementById("chatUnreadBadge"),
+    chatNotification: document.getElementById("chatNotification"),
+    chatNotificationText: document.getElementById("chatNotificationText"),
+    successOverlay: document.getElementById("successOverlay"),
+    successTitle: document.getElementById("successTitle"),
+    successText: document.getElementById("successText"),
   };
 
   let bootstrapPromise = null;
@@ -152,6 +162,7 @@
     bind(document.getElementById("adminUserSearch"), "submit", searchAdminUsers, "adminUserSearch");
     bind(elements.startupRetry, "click", () => void bootstrap({ manual: true }), "startupRetry");
     bind(elements.syncRetry, "click", () => void retryFailedOptional(), "syncRetry");
+    bind(elements.floatingChatButton, "click", openFloatingChat, "floatingChatButton");
   }
 
   function bootstrap(options = {}) {
@@ -195,6 +206,8 @@
     renderUser();
     renderBalance();
     renderAll();
+    updateFloatingChatVisibility();
+    startMessagePolling();
     hideStartup();
     void loadOptionalData();
   }
@@ -260,27 +273,85 @@
     });
   }
 
-  function handleClick(event) {
-    const target = event.target;
-    const navButton = target.closest("[data-nav-target]");
-    if (navButton) return void navigate(navButton.dataset.navTarget);
-    if (target.closest("[data-open-add]")) return void openListingForm("regular");
-    if (target.closest("[data-open-unique]")) return void openListingForm("unique");
-    if (target.closest("[data-open-account]")) return void openAdminAccountDraft();
-    if (target.closest("[data-open-cart]")) return void openSecondary("cart");
-    if (target.closest("[data-open-topup]")) return void openSecondary("topup");
-    if (target.closest("[data-open-withdraw]")) return void openSecondary("withdraw");
-    if (target.closest("[data-open-support]")) return void openSupport();
-    if (target.closest("[data-open-admin]")) return void openAdminPanel();
-    if (target.closest("[data-open-frozen]")) return void openFrozenDeals();
-    if (target.closest("[data-open-info]")) return void openDialog(elements.infoModal);
-    const topupAmount = target.closest("[data-topup-amount]");
-    if (topupAmount) return void (document.getElementById("topupAmount").value = topupAmount.dataset.topupAmount);
-    if (target.closest("[data-ad-banner]") && !state.advertisement?.link_url) {
-      event.preventDefault();
-      return void notify("Для баннера не указана ссылка");
+function handleClick(event) {
+  const target = event.target;
+
+  const navButton = target.closest("[data-nav-target]");
+  if (navButton) {
+    return void navigate(navButton.dataset.navTarget);
+  }
+
+  if (target.closest("[data-open-add]")) {
+    return void openListingForm("regular");
+  }
+
+  if (target.closest("[data-open-unique]")) {
+    return void openListingForm("unique");
+  }
+
+  if (target.closest("[data-open-account]")) {
+    return void openAdminAccountDraft();
+  }
+
+  if (target.closest("[data-open-cart]")) {
+    return void openSecondary("cart");
+  }
+
+  if (target.closest("[data-open-topup]")) {
+    return void openSecondary("topup");
+  }
+
+  if (target.closest("[data-open-withdraw]")) {
+    return void openSecondary("withdraw");
+  }
+
+  if (target.closest("[data-open-support]")) {
+    return void openSupport();
+  }
+
+  if (target.closest("[data-open-admin]")) {
+    return void openAdminPanel();
+  }
+
+  if (target.closest("[data-open-frozen]")) {
+    return void openFrozenDeals();
+  }
+
+  if (target.closest("[data-open-info]")) {
+    return void openDialog(elements.infoModal);
+  }
+
+  if (target.closest("[data-open-topup-info]")) {
+    return void openDialog(
+      document.getElementById("topupInfoModal")
+    );
+  }
+
+  const topupAmount = target.closest("[data-topup-amount]");
+
+  if (topupAmount) {
+    const amount = Number(topupAmount.dataset.topupAmount);
+    const input = document.getElementById("topupAmount");
+
+    if (amount < 50 || amount > 1000) {
+      return void notify("Сумма должна быть от 50 до 1000 Stars");
     }
-    if (target.closest("[data-back]")) return void navigate(state.previousView || "market");
+
+    input.value = String(amount);
+    return;
+  }
+
+  if (
+    target.closest("[data-ad-banner]") &&
+    !state.advertisement?.link_url
+  ) {
+    event.preventDefault();
+    return void notify("Для баннера не указана ссылка");
+  }
+
+  if (target.closest("[data-back]")) {
+    return void navigate(state.previousView || "market");
+  }
 
     const closeDialog = target.closest("[data-close-dialog]");
     if (closeDialog) return void document.getElementById(closeDialog.dataset.closeDialog).close();
@@ -307,7 +378,17 @@
     const profileSection = target.closest("[data-profile-section]");
     if (profileSection) return void toggleProfileSection(profileSection.dataset.profileSection);
     const conversationButton = target.closest("[data-open-conversation]");
-    if (conversationButton) return void openConversation(conversationButton.dataset.openConversation);
+    if (conversationButton) {
+      return void openConversation(conversationButton.dataset.openConversation);
+    }
+
+    const hideConversationButton = target.closest("[data-hide-conversation]");
+    if (hideConversationButton) {
+      return void hideConversation(
+        hideConversationButton.dataset.hideConversation
+      );
+    }
+
     const dealAction = target.closest("[data-deal-action]");
     if (dealAction) return void runDealAction(dealAction.dataset.dealAction);
     const adminWithdrawal = target.closest("[data-withdrawal-action]");
@@ -339,6 +420,7 @@
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
     state.currentView = viewName;
+    updateFloatingChatVisibility();
     elements.views.forEach((view) => {
       const active = view === next;
       view.hidden = !active;
@@ -356,7 +438,130 @@
       try { await refreshMarketplace(); } catch (error) { notify(error.message); }
     }
   }
+  async function refreshUnreadMessages() {
+  if (!state.serverAvailable || document.hidden) return;
 
+  try {
+    const summary = await api.request("/conversations/unread-summary");
+
+    const previousTotal = state.totalUnread;
+
+    state.totalUnread = Number(summary.total_unread || 0);
+    state.unreadConversations = summary.conversations || [];
+
+    renderUnreadBadge();
+
+    if (state.totalUnread > previousTotal) {
+      showNewMessageNotification();
+    }
+
+    if (
+      state.currentView === "deal-chat" &&
+      state.currentConversation?.id
+    ) {
+      await refreshOpenConversation();
+    }
+  } catch (error) {
+    console.error("Не удалось обновить сообщения", error);
+  }
+}
+
+  function renderUnreadBadge() {
+  const count = state.totalUnread;
+
+  elements.chatUnreadBadge.textContent =
+    count > 99 ? "99+" : String(count);
+
+  elements.chatUnreadBadge.hidden = count === 0;
+}
+
+  function showNewMessageNotification() {
+  elements.chatNotificationText.textContent =
+    state.totalUnread === 1
+      ? "Вам пришло новое сообщение"
+      : `У вас ${state.totalUnread} непрочитанных сообщений`;
+
+  elements.chatNotification.hidden = false;
+
+  window.clearTimeout(showNewMessageNotification.timeoutId);
+
+  showNewMessageNotification.timeoutId = window.setTimeout(() => {
+    elements.chatNotification.hidden = true;
+  }, 4000);
+}
+
+  async function refreshOpenConversation() {
+  const conversationId = state.currentConversation?.id;
+
+  if (!conversationId) return;
+
+  const messages = await api.request(
+    `/conversations/${conversationId}/messages`
+  );
+
+  const oldLastMessageId = state.messages.at(-1)?.id;
+  const newLastMessageId = messages.at(-1)?.id;
+
+  if (oldLastMessageId !== newLastMessageId) {
+    state.messages = messages;
+    renderConversation();
+  }
+
+  await markConversationRead(conversationId);
+}
+
+  async function markConversationRead(conversationId) {
+  await api.request(
+    `/conversations/${conversationId}/read`,
+    { method: "POST" }
+  );
+
+  state.unreadConversations =
+    state.unreadConversations.filter(
+      (item) => item.conversation_id !== conversationId
+    );
+
+  state.totalUnread = state.unreadConversations.reduce(
+    (total, item) => total + Number(item.unread_count || 0),
+    0
+  );
+
+  renderUnreadBadge();
+}
+
+  function startMessagePolling() {
+  if (state.messagePollingId) {
+    window.clearInterval(state.messagePollingId);
+  }
+
+  refreshUnreadMessages();
+
+  state.messagePollingId = window.setInterval(
+    refreshUnreadMessages,
+    2000
+  );
+  }
+
+  function updateFloatingChatVisibility() {
+  const visibleViews = ["market", "unique", "accounts", "profile"];
+  const shouldShow = visibleViews.includes(state.currentView);
+
+  elements.floatingChatButton.hidden = !shouldShow;
+}
+
+  async function openFloatingChat() {
+  elements.chatNotification.hidden = true;
+
+  if (state.unreadConversations.length === 1) {
+    await openConversation(
+      state.unreadConversations[0].conversation_id
+    );
+    return;
+  }
+
+  await navigate("profile");
+  switchProfileTab("chats");
+  }
   function openSecondary(viewName) {
     state.previousView = ["add", "topup", "cart", "deal-chat", "withdraw", "support", "account-draft", "admin"].includes(state.currentView) ? "market" : state.currentView;
     navigate(viewName);
@@ -943,16 +1148,90 @@
     }));
   }
 
-  function renderConversations(conversations) {
-    document.getElementById("conversationsEmpty").hidden = conversations.length > 0;
-    elements.conversationList.replaceChildren(...conversations.map((conversation) => {
-      const button = document.createElement("button"); button.className = "deal-row"; button.dataset.openConversation = conversation.id;
-      const copy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = `${conversation.listing.brand} ${conversation.listing.model}`;
-      const other = document.createElement("small"); other.textContent = conversation.counterparty.name || conversation.counterparty.username || "Пользователь"; copy.append(title, other);
-      const status = document.createElement("b"); status.textContent = conversation.deal ? dealStatusLabel(conversation.deal.status) : "Переписка"; button.append(copy, status); return button;
-    }));
+function renderConversations(conversations) {
+  const hiddenIds = getHiddenConversationIds();
+
+  const visibleConversations = conversations.filter(
+    (conversation) => !hiddenIds.includes(String(conversation.id))
+  );
+
+  const empty = document.getElementById("conversationsEmpty");
+
+  empty.hidden = visibleConversations.length > 0;
+  elements.conversationList.replaceChildren();
+
+  visibleConversations.forEach((conversation) => {
+    const row = document.createElement("div");
+    row.className = "conversation-row";
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "conversation-open";
+    open.dataset.openConversation = conversation.id;
+
+    const name = document.createElement("strong");
+    name.className = "conversation-name";
+    name.textContent =
+      conversation.counterparty.name ||
+      conversation.counterparty.username ||
+      "Пользователь";
+
+    open.append(name);
+
+    const unreadSummary = state.unreadConversations.find(
+      (item) => String(item.conversation_id) === String(conversation.id)
+    );
+    const unreadCount = Number(
+      conversation.unread_count || unreadSummary?.unread_count || 0
+    );
+
+    if (unreadCount > 0) {
+      const badge = document.createElement("span");
+      badge.className = "conversation-unread";
+      badge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+      open.append(badge);
+    }
+
+    const del = document.createElement("button");
+    del.className = "conversation-delete";
+    del.dataset.hideConversation = conversation.id;
+    del.textContent = "🗑";
+
+    row.append(open, del);
+    elements.conversationList.append(row);
+  });
+}
+function getHiddenConversationIds() {
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem("hiddenConversationIds") || "[]"
+    );
+
+    return Array.isArray(saved) ? saved.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHiddenConversationIds(ids) {
+  localStorage.setItem(
+    "hiddenConversationIds",
+    JSON.stringify(ids.map(String))
+  );
+}
+
+function hideConversation(conversationId) {
+  const hiddenIds = getHiddenConversationIds();
+  const id = String(conversationId);
+
+  if (!hiddenIds.includes(id)) {
+    hiddenIds.push(id);
+    saveHiddenConversationIds(hiddenIds);
   }
 
+  renderConversations(state.profile?.conversations || []);
+  notify("Диалог удалён из вашего списка");
+}
   function openFrozenDeals() {
     switchProfileTab("deals");
     const frozen = Number(state.profile?.wallet.frozen_balance || 0);
@@ -1033,13 +1312,47 @@
       }
       const transfer = document.createElement("button"); transfer.className = "deal-confirm"; transfer.dataset.dealAction = "transfer"; transfer.textContent = "Передали машину"; elements.dealControls.append(transfer);
     }
-    if (isBuyer && deal.status === "transfer_in_progress") {
-      const warning = document.createElement("p"); warning.textContent = "Подтверждайте получение только после того, как действительно получили товар. После подтверждения сделка будет завершена";
-      const confirm = document.createElement("button"); confirm.className = "deal-confirm"; confirm.dataset.dealAction = "confirm"; confirm.textContent = "Машина передана мне";
-      const availableAt = new Date(new Date(deal.transfer_started_at).getTime() + 5 * 60 * 1000);
-      confirm.disabled = Date.now() < availableAt.getTime(); if (confirm.disabled) confirm.title = `Доступно после ${availableAt.toLocaleTimeString("ru-RU")}`;
-      elements.dealControls.append(warning, confirm);
+   if (isBuyer && deal.status === "transfer_in_progress") {
+  const warning = document.createElement("p");
+  warning.textContent =
+    "Подтверждайте получение только после того, как действительно получили машину.";
+
+  const timer = document.createElement("p");
+  timer.className = "deal-timer";
+
+  const confirm = document.createElement("button");
+  confirm.className = "deal-confirm";
+  confirm.dataset.dealAction = "confirm";
+  confirm.textContent = "Машина передана мне";
+  confirm.hidden = true;
+
+  const availableAt =
+    new Date(deal.transfer_started_at).getTime() + 60 * 1000;
+
+  const updateTimer = () => {
+    const remainingMs = availableAt - Date.now();
+    const remainingSeconds = Math.max(
+      0,
+      Math.ceil(remainingMs / 1000)
+    );
+
+    if (remainingSeconds > 0) {
+      timer.textContent =
+        `Подтвердить получение можно через ${remainingSeconds} сек.`;
+      confirm.hidden = true;
+      return;
     }
+
+    timer.textContent = "Теперь можно подтвердить получение машины.";
+    confirm.hidden = false;
+    clearInterval(timer.intervalId);
+  };
+
+  updateTimer();
+  timer.intervalId = window.setInterval(updateTimer, 1000);
+
+  elements.dealControls.append(warning, timer, confirm);
+}
     const dispute = document.createElement("button"); dispute.className = "deal-dispute"; dispute.dataset.dealAction = "dispute"; dispute.textContent = "Возникла проблема"; elements.dealControls.append(dispute);
     if (["paid", "seller_contacted"].includes(deal.status)) {
       const cancel = document.createElement("button"); cancel.className = "deal-secondary"; cancel.dataset.dealAction = "cancel"; cancel.textContent = "Отменить сделку"; elements.dealControls.append(cancel);
@@ -1358,20 +1671,59 @@
     document.querySelectorAll("[data-admin-panel]").forEach((panel) => { panel.hidden = panel.dataset.adminPanel !== tab; });
   }
 
-  function renderAdminWithdrawals(withdrawals) {
-    if (!withdrawals.length) { elements.adminWithdrawals.textContent = "Заявок пока нет"; return; }
-    elements.adminWithdrawals.replaceChildren(...withdrawals.map((item) => {
-      const card = document.createElement("div"); card.className = "admin-withdrawal";
-      const title = document.createElement("strong"); title.textContent = `${formatNumber(item.amount)} AF Coins · ${item.status}`;
-      const user = document.createElement("span"); user.textContent = `${item.user_name || "Пользователь"} · Telegram ID ${item.user_telegram_id}`;
-      const details = document.createElement("small"); details.textContent = item.details;
-      const actions = document.createElement("div"); actions.className = "admin-withdrawal__actions";
-      if (item.status === "pending") actions.append(adminActionButton(item.id, "approve", "Одобрить"), adminActionButton(item.id, "reject", "Отклонить"));
-      if (item.status === "approved") actions.append(adminActionButton(item.id, "paid", "Отметить выплаченной"), adminActionButton(item.id, "reject", "Отклонить"));
-      const history = document.createElement("button"); history.dataset.financialHistory = item.user_id; history.textContent = "Финансовая история"; actions.append(history);
-      card.append(title, user, details, actions); return card;
-    }));
+ function renderAdminWithdrawals(withdrawals) {
+  if (!withdrawals.length) {
+    elements.adminWithdrawals.textContent = "Заявок пока нет";
+    return;
   }
+
+  elements.adminWithdrawals.replaceChildren(
+    ...withdrawals.map((item) => {
+      const card = document.createElement("div");
+      card.className = "admin-withdrawal";
+
+      const title = document.createElement("strong");
+      title.textContent = `${formatNumber(item.amount)} AF Coins · ${withdrawalStatusLabel(item.status)}`;
+
+      const user = document.createElement("span");
+      const username = item.user_username
+        ? `@${item.user_username}`
+        : "username не указан";
+
+      user.textContent =
+        `${item.user_name || "Пользователь"} · ${username} · Telegram ID ${item.user_telegram_id}`;
+
+      const details = document.createElement("small");
+      details.textContent =
+        `${item.payout_method} · ${item.details}`;
+
+      const actions = document.createElement("div");
+      actions.className = "admin-withdrawal__actions";
+
+      if (item.status === "pending") {
+        actions.append(
+          adminActionButton(item.id, "approve", "Одобрить"),
+          adminActionButton(item.id, "reject", "Отклонить")
+        );
+      }
+
+      if (item.status === "approved") {
+        actions.append(
+          adminActionButton(item.id, "paid", "Завершено"),
+          adminActionButton(item.id, "reject", "Отклонить")
+        );
+      }
+
+      const history = document.createElement("button");
+      history.dataset.financialHistory = item.user_id;
+      history.textContent = "Финансовая история";
+      actions.append(history);
+
+      card.append(title, user, details, actions);
+      return card;
+    })
+  );
+}
 
   function adminActionButton(id, action, label) { const button = document.createElement("button"); button.dataset.withdrawalAction = action; button.dataset.withdrawalId = id; button.textContent = label; return button; }
 

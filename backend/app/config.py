@@ -4,7 +4,6 @@ from functools import lru_cache
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://autoflow:autoflow@localhost:5432/autoflow"
 
 
@@ -48,11 +47,11 @@ class Settings(BaseSettings):
     railway_public_domain: str | None = None
     public_base_url: str | None = None
     upload_dir: str | None = None
-    min_withdrawal_af_coins: int = 100
+    min_withdrawal_af_coins: int = 15
     listing_promotion_cost_af_coins: int = 15
     listing_promotion_hours: int = 24
     seller_payout_percent: int = Field(default=70, ge=1, le=100)
-    star_topup_min: int = Field(default=100, ge=1)
+    star_topup_min: int = Field(default=50, ge=1)
     star_topup_max: int = Field(default=1000, ge=1)
     upload_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
     debug: bool = False

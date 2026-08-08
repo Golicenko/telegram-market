@@ -8,7 +8,12 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import get_current_user, require_admin
-from .bot import answer_pre_checkout_query, create_star_invoice_link, send_bot_notification
+from .bot import (
+    answer_pre_checkout_query,
+    create_star_invoice_link,
+    send_bot_notification,
+    send_bot_photo,
+)
 from .config import Settings, get_settings
 from .database import get_session
 from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportMessage, SupportTicket, User, Wallet, WalletTransaction, WithdrawalRequest
@@ -312,7 +317,7 @@ async def list_listings(
     listing_type: str = Query(alias="type", pattern="^(regular|unique)$"),
     brand: str | None = None,
     model: str | None = None,
-    max_price: Decimal | None = Query(default=None, ge=100),
+    max_price: Decimal | None = Query(default=None, ge=50),
     min_power: int | None = Query(default=None, gt=0),
     min_speed: int | None = Query(default=None, gt=0),
     session: AsyncSession = Depends(get_session),
@@ -519,6 +524,62 @@ async def list_conversations(user: User = Depends(get_current_user), session: As
     )
     return [await conversation_details(session, item, user) for item in values]
 
+@router.get("/conversations/unread-summary")
+async def conversation_unread_summary(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    conversations = list(
+        (
+            await session.scalars(
+                select(Conversation).where(
+                    or_(
+                        Conversation.buyer_id == user.id,
+                        Conversation.seller_id == user.id,
+                    )
+                )
+            )
+        ).all()
+    )
+
+    conversation_ids = [conversation.id for conversation in conversations]
+
+    if not conversation_ids:
+        return {
+            "total_unread": 0,
+            "conversations": [],
+        }
+
+    unread_rows = (
+        await session.execute(
+            select(
+                ConversationMessage.conversation_id,
+                func.count(ConversationMessage.id),
+            )
+            .where(
+                ConversationMessage.conversation_id.in_(conversation_ids),
+                ConversationMessage.sender_id != user.id,
+                ConversationMessage.is_read.is_(False),
+            )
+            .group_by(ConversationMessage.conversation_id)
+        )
+    ).all()
+
+    unread_by_conversation = {
+        str(conversation_id): unread_count
+        for conversation_id, unread_count in unread_rows
+    }
+
+    return {
+        "total_unread": sum(unread_by_conversation.values()),
+        "conversations": [
+            {
+                "conversation_id": conversation_id,
+                "unread_count": unread_count,
+            }
+            for conversation_id, unread_count in unread_by_conversation.items()
+        ],
+    }
 
 @router.get("/conversations/{conversation_id}")
 async def get_conversation(conversation_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
@@ -534,6 +595,38 @@ async def get_conversation_messages(conversation_id: uuid.UUID, user: User = Dep
     if not conversation or user.id not in {conversation.buyer_id, conversation.seller_id}:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return list((await session.scalars(select(ConversationMessage).where(ConversationMessage.conversation_id == conversation.id).order_by(ConversationMessage.created_at))).all())
+
+@router.post("/conversations/{conversation_id}/read", status_code=204)
+async def mark_conversation_as_read(
+    conversation_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    conversation = await session.get(Conversation, conversation_id)
+
+    if not conversation or user.id not in {
+        conversation.buyer_id,
+        conversation.seller_id,
+    }:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found",
+        )
+
+    await session.execute(
+        update(ConversationMessage)
+        .where(
+            ConversationMessage.conversation_id == conversation.id,
+            ConversationMessage.sender_id != user.id,
+            ConversationMessage.is_read.is_(False),
+        )
+        .values(
+            is_read=True,
+            read_at=datetime.now(UTC),
+        )
+    )
+
+    await session.commit()
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=ConversationMessageOut, status_code=201)
@@ -834,7 +927,10 @@ async def admin_conversation(conversation_id: uuid.UUID, admin: User = Depends(r
 
 
 @router.get("/admin/withdrawals", response_model=list[AdminWithdrawalOut])
-async def admin_withdrawals(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+async def admin_withdrawals(
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
     rows = (
         await session.execute(
             select(WithdrawalRequest, User)
@@ -842,15 +938,18 @@ async def admin_withdrawals(admin: User = Depends(require_admin), session: Async
             .order_by(WithdrawalRequest.created_at.desc())
         )
     ).all()
+
     return [
         AdminWithdrawalOut(
-            **WithdrawalOut.model_validate(request).model_dump(),
+            **WithdrawalOut.model_validate(withdrawal).model_dump(),
             user_telegram_id=user.telegram_id,
-            user_name=" ".join(filter(None, [user.first_name, user.last_name])),
+            user_name=" ".join(
+                filter(None, [user.first_name, user.last_name])
+            ),
+            user_username=user.username,
         )
-        for request, user in rows
+        for withdrawal, user in rows
     ]
-
 
 @router.post("/admin/withdrawals/{withdrawal_id}/{action}", response_model=WithdrawalOut)
 async def admin_withdrawal_action(
@@ -1130,6 +1229,99 @@ async def telegram_webhook(
         return {"ok": True}
     message = update.get("message") or {}
     sender = message.get("from") or {}
+    # Админская рассылка
+    if sender.get("id") in settings.admin_telegram_ids:
+        text_value = message.get("text") or ""
+
+        if text_value.startswith("#рассылка"):
+            text = text_value.replace("#рассылка", "", 1).strip()
+
+            users = list(
+                (
+                    await session.scalars(
+                        select(User).where(User.bot_started.is_(True))
+                    )
+                ).all()
+            )
+
+            sent_count = 0
+            failed_count = 0
+
+            for item in users:
+                sent = await send_bot_notification(
+                    item.telegram_id,
+                    text,
+                )
+
+                if sent:
+                    sent_count += 1
+                else:
+                    failed_count += 1
+
+            await send_bot_notification(
+                int(sender["id"]),
+                (
+                    "✅ Рассылка завершена.\n\n"
+                    f"Получили: {sent_count}\n"
+                    f"Не удалось отправить: {failed_count}"
+                ),
+            )
+
+            return {
+                "ok": True,
+                "sent": sent_count,
+                "failed": failed_count,
+            }
+
+        if message.get("photo"):
+            caption_value = message.get("caption") or ""
+
+            if caption_value.startswith("#рассылка"):
+                caption = caption_value.replace(
+                    "#рассылка",
+                    "",
+                    1,
+                ).strip()
+
+                photo = message["photo"][-1]["file_id"]
+
+                users = list(
+                    (
+                        await session.scalars(
+                            select(User).where(User.bot_started.is_(True))
+                        )
+                    ).all()
+                )
+
+                sent_count = 0
+                failed_count = 0
+
+                for item in users:
+                    sent = await send_bot_photo(
+                        item.telegram_id,
+                        photo,
+                        caption,
+                    )
+
+                    if sent:
+                        sent_count += 1
+                    else:
+                        failed_count += 1
+
+                await send_bot_notification(
+                    int(sender["id"]),
+                    (
+                        "✅ Рассылка завершена.\n\n"
+                        f"Получили: {sent_count}\n"
+                        f"Не удалось отправить: {failed_count}"
+                    ),
+                )
+
+                return {
+                    "ok": True,
+                    "sent": sent_count,
+                    "failed": failed_count,
+                }
     if message.get("text") == "/start" and sender.get("id"):
         user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
         if not user:
