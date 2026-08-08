@@ -63,6 +63,7 @@ cd backend
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m compileall app migrations
 .\.venv\Scripts\python.exe -m alembic upgrade head --sql
+node --test ..\webapp\tests\*.test.cjs
 ```
 
 ## Railway
@@ -103,6 +104,17 @@ STAR_TOPUP_MAX=1000
 Для постоянного хранения фотографий подключите Railway Volume к `/data` и задайте `UPLOAD_DIR=/data/uploads`. Без Volume файлы внутри контейнера исчезнут при новом деплое. Healthcheck: `GET /api/health`.
 
 После первого успешного деплоя укажите публичный HTTPS URL в BotFather как Menu Button / Mini App URL. Секреты не добавляйте в GitHub.
+
+## Устойчивый запуск Mini App
+
+- HTML сразу показывает фирменный экран `AutoFlow Market — Загрузка…`; загрузка Telegram SDK не блокирует отображение страницы.
+- Для входа критичны только настоящий `Telegram.WebApp.initData` и `GET /api/me`. В production нет автоматического входа под debug/admin-пользователем.
+- Каталог, аккаунты, корзина, профиль, реклама и уведомления загружаются независимо через `Promise.allSettled`. Ошибка одного раздела не скрывает интерфейс и не ломает навигацию.
+- GET-запросы имеют timeout 12 секунд и один ограниченный retry; `/me` использует timeout 10 секунд на попытку. Зависшие запросы отменяются через `AbortController`.
+- После временной ошибки выполняется одно автоматическое восстановление, а событие `online` повторяет только недоступные данные. Бесконечных циклов retry нет.
+- При открытии обычным браузером без Telegram initData показывается «Откройте AutoFlow Market через Telegram» без бесконечного loader.
+- API по умолчанию всегда same-origin: `<публичный HTTPS-домен>/api`. `localhost` и `127.0.0.1` отсутствуют во frontend production-коде.
+- Railway-логи API содержат endpoint, HTTP status, длительность, тип ошибки, проверенный Telegram ID, платформу и время. Токен бота, полный initData и тела запросов не логируются.
 
 ## Схема данных
 

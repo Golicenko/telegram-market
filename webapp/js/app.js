@@ -2,7 +2,7 @@
   "use strict";
 
   const api = window.AutoFlowApi;
-  const telegram = window.Telegram?.WebApp || null;
+  let telegram = window.Telegram?.WebApp || null;
   const state = {
     currentView: "market",
     previousView: "market",
@@ -20,6 +20,9 @@
     currentConversation: null,
     editingListingId: null,
     messages: [],
+    notifications: [],
+    failedOptional: new Set(),
+    optionalRecoveryUsed: false,
     serverAvailable: true,
   };
 
@@ -77,100 +80,184 @@
     adminSupportTickets: document.getElementById("adminSupportTickets"),
     advertisementForm: document.getElementById("advertisementForm"),
     advertisementPreview: document.getElementById("advertisementPreview"),
+    startupStatus: document.getElementById("startupStatus"),
+    startupSpinner: document.getElementById("startupSpinner"),
+    startupTitle: document.getElementById("startupTitle"),
+    startupMessage: document.getElementById("startupMessage"),
+    startupRetry: document.getElementById("startupRetry"),
+    syncStatus: document.getElementById("syncStatus"),
+    syncStatusText: document.getElementById("syncStatusText"),
+    syncRetry: document.getElementById("syncRetry"),
   };
 
-  initTelegram();
-  bindEvents();
-  bootstrap();
+  let bootstrapPromise = null;
+  let criticalRecoveryUsed = false;
+  let optionalRecoveryTimer = null;
+
+  installGlobalErrorHandlers();
+  startApplication();
+
+  function startApplication() {
+    try {
+      const telegramSdk = document.getElementById("telegramSdk");
+      telegramSdk?.addEventListener("load", () => {
+        telegram = window.Telegram?.WebApp || null;
+        initTelegram();
+        if (!state.me) void bootstrap({ automatic: true });
+      });
+      telegramSdk?.addEventListener("error", () => reportClientError("telegram_sdk_load", new Error("Telegram SDK load failed")));
+      initTelegram();
+      bindEvents();
+      renderAll();
+      void bootstrap();
+    } catch (error) {
+      reportClientError("startup", error);
+      showStartupError("Не удалось запустить интерфейс. Попробуйте ещё раз.", true);
+    }
+  }
 
   function initTelegram() {
     if (!telegram) return;
-    telegram.ready();
-    telegram.expand();
-    if (typeof telegram.isVersionAtLeast !== "function" || telegram.isVersionAtLeast("6.1")) {
-      telegram.setHeaderColor?.("#030912");
-      telegram.setBackgroundColor?.("#030912");
-    }
+    safeTelegramCall("ready", () => telegram.ready());
+    safeTelegramCall("expand", () => telegram.expand());
+    safeTelegramCall("theme", () => {
+      if (typeof telegram.isVersionAtLeast !== "function" || telegram.isVersionAtLeast("6.1")) {
+        telegram.setHeaderColor?.("#030912");
+        telegram.setBackgroundColor?.("#030912");
+      }
+    });
   }
 
   function bindEvents() {
     document.addEventListener("click", handleClick);
-    document.getElementById("infoButton").addEventListener("click", () => openDialog(elements.infoModal));
-    document.getElementById("settingsButton").addEventListener("click", () => notify("Настройки появятся в следующей версии"));
-    elements.extraFiltersButton.addEventListener("click", toggleExtraFilters);
-    document.getElementById("resetFiltersButton").addEventListener("click", resetFilters);
-    document.getElementById("applyFiltersButton").addEventListener("click", renderListings);
-    [elements.brandFilter, elements.modelFilter, elements.priceFilter].forEach((control) => control.addEventListener("change", renderListings));
-    elements.brandInput.addEventListener("input", updateBrandSuggestions);
-    elements.modelInput.addEventListener("input", updateModelSuggestions);
-    elements.carPhotos.addEventListener("change", previewPhotos);
-    elements.carForm.addEventListener("submit", submitListing);
-    document.getElementById("checkoutButton").addEventListener("click", checkout);
-    document.getElementById("topupForm").addEventListener("submit", requestStarInvoice);
-    elements.chatForm.addEventListener("submit", sendChatMessage);
-    elements.withdrawForm.addEventListener("submit", createWithdrawal);
-    document.getElementById("accountDraftForm").addEventListener("submit", submitAccountListing);
-    elements.supportForm.addEventListener("submit", submitSupportTicket);
-    elements.advertisementForm.addEventListener("submit", submitAdvertisement);
-    document.getElementById("deleteAdvertisementButton").addEventListener("click", deleteAdvertisement);
-    document.getElementById("balanceAdjustmentForm").addEventListener("submit", createBalanceAdjustment);
-    document.getElementById("adminUserSearch").addEventListener("submit", searchAdminUsers);
+    bind(document.getElementById("infoButton"), "click", () => openDialog(elements.infoModal), "infoButton");
+    bind(document.getElementById("settingsButton"), "click", () => notify("Настройки появятся в следующей версии"), "settingsButton");
+    bind(elements.extraFiltersButton, "click", toggleExtraFilters, "extraFiltersButton");
+    bind(document.getElementById("resetFiltersButton"), "click", resetFilters, "resetFiltersButton");
+    bind(document.getElementById("applyFiltersButton"), "click", renderListings, "applyFiltersButton");
+    [elements.brandFilter, elements.modelFilter, elements.priceFilter].forEach((control) => bind(control, "change", renderListings, "filter"));
+    bind(elements.brandInput, "input", updateBrandSuggestions, "brandInput");
+    bind(elements.modelInput, "input", updateModelSuggestions, "modelInput");
+    bind(elements.carPhotos, "change", previewPhotos, "carPhotos");
+    bind(elements.carForm, "submit", submitListing, "carForm");
+    bind(document.getElementById("checkoutButton"), "click", checkout, "checkoutButton");
+    bind(document.getElementById("topupForm"), "submit", requestStarInvoice, "topupForm");
+    bind(elements.chatForm, "submit", sendChatMessage, "chatForm");
+    bind(elements.withdrawForm, "submit", createWithdrawal, "withdrawForm");
+    bind(document.getElementById("accountDraftForm"), "submit", submitAccountListing, "accountDraftForm");
+    bind(elements.supportForm, "submit", submitSupportTicket, "supportForm");
+    bind(elements.advertisementForm, "submit", submitAdvertisement, "advertisementForm");
+    bind(document.getElementById("deleteAdvertisementButton"), "click", deleteAdvertisement, "deleteAdvertisementButton");
+    bind(document.getElementById("balanceAdjustmentForm"), "submit", createBalanceAdjustment, "balanceAdjustmentForm");
+    bind(document.getElementById("adminUserSearch"), "submit", searchAdminUsers, "adminUserSearch");
+    bind(elements.startupRetry, "click", () => void bootstrap({ manual: true }), "startupRetry");
+    bind(elements.syncRetry, "click", () => void retryFailedOptional(), "syncRetry");
   }
 
-  async function bootstrap() {
+  function bootstrap(options = {}) {
+    if (bootstrapPromise) return bootstrapPromise;
+    bootstrapPromise = runBootstrap(options).finally(() => { bootstrapPromise = null; });
+    return bootstrapPromise;
+  }
+
+  async function runBootstrap(options) {
+    showStartupLoading(options.automatic ? "Восстанавливаем соединение…" : "Загрузка…");
+    if (!api) return showStartupError("Не удалось загрузить API-клиент.", true);
+    if (!telegram?.initData && hasTelegramLaunchHint()) await waitForTelegramSdk(8000);
+    if (!telegram?.initData && window.AUTO_FLOW_ALLOW_BROWSER_DEV !== true) {
+      state.serverAvailable = false;
+      const telegramLaunch = hasTelegramLaunchHint();
+      showStartupError(
+        telegramLaunch ? "Не удалось загрузить Telegram WebApp. Проверьте соединение и повторите запуск." : "Откройте AutoFlow Market через Telegram.",
+        telegramLaunch,
+      );
+      return;
+    }
     try {
-      const [catalog, me, regular, unique, accounts, cart, profile, advertisement] = await Promise.all([
-        fetch("data/vehicle_catalog.json").then((response) => response.json()),
-        api.request("/me"),
-        api.request("/listings?type=regular"),
-        api.request("/listings?type=unique"),
-        api.request("/accounts"),
-        api.request("/cart"),
-        api.request("/profile"),
-        api.request("/advertisement"),
-      ]);
-      state.catalog = catalog;
-      state.me = me;
-      state.regular = regular;
-      state.unique = unique;
-      state.accounts = accounts;
-      state.cart = cart;
-      state.profile = profile;
-      state.advertisement = advertisement;
-      state.serverAvailable = true;
-      applyRole();
-      renderUser();
-      updateFilterOptions();
-      renderAll();
+      state.me = await api.request("/me", { timeoutMs: 10000, retries: 1, retryDelayMs: 700 });
     } catch (error) {
       state.serverAvailable = false;
-      renderAll();
-      showServerState(error);
+      reportClientError("bootstrap_me", error);
+      const message = error.status === 401
+        ? "Не удалось подтвердить вход через Telegram. Закройте Mini App и откройте снова."
+        : "Сервер запускается дольше обычного. Приложение попробует подключиться ещё раз.";
+      showStartupError(message, true);
+      if (!criticalRecoveryUsed && !options.manual) {
+        criticalRecoveryUsed = true;
+        window.setTimeout(() => void bootstrap({ automatic: true }), 3500);
+      }
+      return;
     }
+    state.serverAvailable = true;
+    state.optionalRecoveryUsed = false;
+    criticalRecoveryUsed = false;
+    applyRole();
+    renderUser();
+    renderBalance();
+    renderAll();
+    hideStartup();
+    void loadOptionalData();
+  }
+
+  const optionalLoaders = {
+    catalog: async () => { state.catalog = await api.resource("data/vehicle_catalog.json", { timeoutMs: 8000, retries: 1 }); },
+    regular: async () => { state.regular = await api.request("/listings?type=regular"); },
+    unique: async () => { state.unique = await api.request("/listings?type=unique"); },
+    accounts: async () => { state.accounts = await api.request("/accounts"); },
+    cart: async () => { state.cart = await api.request("/cart"); },
+    profile: async () => { state.profile = await api.request("/profile"); },
+    advertisement: async () => { state.advertisement = await api.request("/advertisement", { timeoutMs: 8000 }); },
+    notifications: async () => { state.notifications = await api.request("/notifications"); },
+  };
+
+  async function loadOptionalData(keys = Object.keys(optionalLoaders), options = {}) {
+    if (!state.serverAvailable) return [];
+    const results = await Promise.allSettled(keys.map((key) => optionalLoaders[key]()));
+    results.forEach((result, index) => {
+      const key = keys[index];
+      if (result.status === "fulfilled") state.failedOptional.delete(key);
+      else {
+        state.failedOptional.add(key);
+        reportClientError(`optional_${key}`, result.reason);
+      }
+    });
+    updateFilterOptions();
+    renderAll();
+    updateSyncStatus();
+    if (state.failedOptional.size && options.allowRecovery !== false && !state.optionalRecoveryUsed) {
+      state.optionalRecoveryUsed = true;
+      window.clearTimeout(optionalRecoveryTimer);
+      optionalRecoveryTimer = window.setTimeout(() => void retryFailedOptional(), 4000);
+    }
+    return results;
+  }
+
+  async function retryFailedOptional() {
+    const keys = [...state.failedOptional];
+    if (!keys.length) return updateSyncStatus();
+    elements.syncStatusText.textContent = "Восстанавливаем данные…";
+    await loadOptionalData(keys, { allowRecovery: false });
   }
 
   async function refreshMarketplace() {
     if (!state.serverAvailable) return;
-    const [regular, unique, accounts, cart, profile, me, advertisement] = await Promise.all([
-      api.request("/listings?type=regular"),
-      api.request("/listings?type=unique"),
-      api.request("/accounts"),
-      api.request("/cart"),
-      api.request("/profile"),
-      api.request("/me"),
-      api.request("/advertisement"),
-    ]);
-    state.regular = regular;
-    state.unique = unique;
-    state.accounts = accounts;
-    state.cart = cart;
-    state.profile = profile;
-    state.me = me;
-    state.advertisement = advertisement;
-    applyRole();
-    renderUser();
-    updateFilterOptions();
-    renderAll();
+    await loadOptionalData(["regular", "unique", "accounts", "cart", "profile", "advertisement"], { allowRecovery: false });
+  }
+
+  function hasTelegramLaunchHint() {
+    return /tgWebApp(Data|Version|Platform)/.test(window.location.href);
+  }
+
+  function waitForTelegramSdk(timeoutMs) {
+    return new Promise((resolve) => {
+      const deadline = Date.now() + timeoutMs;
+      const check = () => {
+        telegram = window.Telegram?.WebApp || null;
+        if (telegram?.initData || Date.now() >= deadline) return resolve(telegram);
+        window.setTimeout(check, 100);
+      };
+      check();
+    });
   }
 
   function handleClick(event) {
@@ -310,9 +397,10 @@
   async function openAdminPanel() {
     if (state.me?.user.role !== "admin") return notify("Требуется роль администратора");
     openSecondary("admin");
-    try {
-      await Promise.all([loadAdminUsers(), loadAdminListings(), loadAdminDeals(), loadAdminWithdrawals(), loadAdminSupport(), loadAdvertisementAdmin()]);
-    } catch (error) { notify(error.message); }
+    const results = await Promise.allSettled([loadAdminUsers(), loadAdminListings(), loadAdminDeals(), loadAdminWithdrawals(), loadAdminSupport(), loadAdvertisementAdmin()]);
+    const rejected = results.filter((result) => result.status === "rejected");
+    rejected.forEach((result) => reportClientError("admin_optional", result.reason));
+    if (rejected.length) notify("Часть данных админ-панели временно недоступна");
   }
 
   function applyRole() {
@@ -558,7 +646,7 @@
         notify("Недостаточно средств");
       } else {
         notify(error.message);
-        await refreshMarketplace().catch(() => {});
+        await refreshMarketplace().catch((refreshError) => reportClientError("refresh_after_checkout", refreshError));
       }
     }
   }
@@ -705,7 +793,14 @@
 
   async function loadCatalog() {
     if (state.catalog.brands?.length) return;
-    state.catalog = await fetch("data/vehicle_catalog.json").then((response) => response.json());
+    try {
+      state.catalog = await api.resource("data/vehicle_catalog.json", { timeoutMs: 8000, retries: 1 });
+      state.failedOptional.delete("catalog");
+    } catch (error) {
+      state.failedOptional.add("catalog");
+      reportClientError("catalog_suggestions", error);
+      updateSyncStatus();
+    }
   }
 
   async function updateBrandSuggestions() {
@@ -1325,11 +1420,68 @@
     }
   }
 
-  function showServerState(error) {
-    const existing = document.querySelector(".server-state"); if (existing) existing.remove();
-    const notice = document.createElement("div"); notice.className = "server-state";
-    notice.textContent = `Сервер API не подключён: ${error.message}. Запустите PostgreSQL и backend по инструкции.`;
-    document.querySelector('[data-view="market"]').prepend(notice);
+  function bind(element, eventName, handler, label) {
+    if (!element) {
+      reportClientError("missing_dom_element", new Error(`Не найден элемент ${label}`));
+      return;
+    }
+    element.addEventListener(eventName, handler);
+  }
+
+  function installGlobalErrorHandlers() {
+    window.addEventListener("error", (event) => reportClientError("window_error", event.error || new Error(event.message)));
+    window.addEventListener("unhandledrejection", (event) => reportClientError("unhandled_rejection", event.reason));
+    window.addEventListener("online", () => {
+      if (state.me) void retryFailedOptional();
+      else void bootstrap({ automatic: true });
+    });
+  }
+
+  function safeTelegramCall(operation, callback) {
+    try { callback(); }
+    catch (error) { reportClientError(`telegram_${operation}`, error); }
+  }
+
+  function reportClientError(context, error) {
+    const expectedDegradation = context.startsWith("optional_") || context === "admin_optional" || context === "catalog_suggestions" || context === "refresh_after_checkout";
+    console[expectedDegradation ? "warn" : "error"]("[AutoFlow Client]", {
+      context,
+      endpoint: error?.endpoint || null,
+      status: Number(error?.status || 0),
+      error_type: error?.errorType || error?.name || typeof error,
+      telegram_user_id: state.me?.user?.telegram_id || null,
+      platform: telegram?.platform || "browser",
+      time: new Date().toISOString(),
+    });
+  }
+
+  function showStartupLoading(message) {
+    if (!elements.startupStatus) return;
+    elements.startupStatus.hidden = false;
+    elements.startupSpinner.hidden = false;
+    elements.startupTitle.textContent = "AutoFlow Market";
+    elements.startupMessage.textContent = message;
+    elements.startupRetry.hidden = true;
+  }
+
+  function showStartupError(message, canRetry) {
+    if (!elements.startupStatus) return;
+    elements.startupStatus.hidden = false;
+    elements.startupSpinner.hidden = true;
+    elements.startupTitle.textContent = "AutoFlow Market";
+    elements.startupMessage.textContent = message;
+    elements.startupRetry.hidden = !canRetry;
+  }
+
+  function hideStartup() {
+    if (elements.startupStatus) elements.startupStatus.hidden = true;
+  }
+
+  function updateSyncStatus() {
+    if (!elements.syncStatus) return;
+    const count = state.failedOptional.size;
+    elements.syncStatus.hidden = count === 0;
+    if (count) elements.syncStatusText.textContent = "Некоторые данные временно недоступны. Основные функции продолжают работать.";
   }
 
   function openDialog(dialog) { typeof dialog.showModal === "function" ? dialog.showModal() : dialog.setAttribute("open", ""); }

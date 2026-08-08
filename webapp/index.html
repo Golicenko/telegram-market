@@ -7,12 +7,19 @@
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
     <link rel="stylesheet" href="css/style.css" />
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
     <script src="js/api.js" defer></script>
     <script src="js/app.js" defer></script>
   </head>
   <body>
     <div class="app-shell">
+      <section class="startup-status" id="startupStatus" role="status" aria-live="polite">
+        <div class="startup-status__brand"><strong>AUTOFLOW</strong><span>MARKET</span></div>
+        <i class="startup-spinner" id="startupSpinner" aria-hidden="true"></i>
+        <h1 id="startupTitle">AutoFlow Market</h1>
+        <p id="startupMessage">Загрузка…</p>
+        <button id="startupRetry" type="button" hidden>Повторить</button>
+      </section>
       <header class="app-header" id="appHeader">
         <button class="header-balance" type="button" data-open-topup aria-label="Пополнить баланс AF Coins"><span data-balance>0.00</span><span class="af-coin" aria-label="AF Coins"></span><span class="balance-plus">＋</span></button>
         <div class="logo" aria-label="AutoFlow Market"><span class="logo__auto">AUTOFLOW</span><span class="logo__speed" aria-hidden="true"></span><span class="logo__market">MARKET</span></div>
@@ -25,6 +32,7 @@
 
       <main id="mainContent">
         <section class="view is-active" data-view="market" aria-labelledby="marketTitle">
+          <div class="sync-status" id="syncStatus" role="status" hidden><span id="syncStatusText">Часть данных временно недоступна</span><button id="syncRetry" type="button">Обновить</button></div>
           <a class="ad-banner" id="marketAdvertisement" data-ad-banner aria-label="Открыть рекламную ссылку" target="_blank" rel="noopener noreferrer" hidden><img id="marketAdvertisementImage" alt="Реклама" /></a>
           <div class="section-title-row"><h1 id="marketTitle">Сортировка</h1><button class="cart-shortcut" type="button" data-open-cart aria-label="Открыть корзину"><span aria-hidden="true">🛒</span><span class="cart-badge" data-cart-count hidden>0</span></button></div>
 
