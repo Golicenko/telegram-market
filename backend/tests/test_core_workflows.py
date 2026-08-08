@@ -17,8 +17,11 @@ from app.models import Deal, Listing, StarPayment, StarPaymentIntent, User, Wall
 from app.schemas import ListingCreate
 from app.services import (
     charge_listing_promotion,
+    create_withdrawal,
     create_listing,
+    hold_for_purchase,
     process_successful_payment,
+    release_purchase_hold,
     settlement_amounts,
 )
 
@@ -64,6 +67,24 @@ def test_server_commission_is_single_70_30_formula():
     assert payout == Decimal("70.70")
     assert commission == Decimal("30.30")
     assert payout + commission == Decimal("101.00")
+
+
+def test_minimum_topup_is_ten_stars():
+    assert Settings(bot_token="123456:TEST_TOKEN").star_topup_min == 10
+
+
+def test_purchase_hold_preserves_fund_origin_and_refund():
+    wallet = Wallet(
+        user_id=uuid.uuid4(), purchased_balance=Decimal("70"), earned_balance=Decimal("50"),
+        purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=Decimal("50"), version=0,
+    )
+    purchased, earned = hold_for_purchase(wallet, Decimal("100"))
+    assert (purchased, earned) == (Decimal("70.00"), Decimal("30.00"))
+    assert wallet.available_balance == Decimal("20.00")
+    assert wallet.frozen_balance == Decimal("100.00")
+    release_purchase_hold(wallet, purchased, earned)
+    assert wallet.purchased_balance == Decimal("70.00")
+    assert wallet.earned_balance == Decimal("50.00")
 
 
 @pytest.mark.asyncio
@@ -126,7 +147,7 @@ async def test_creating_multiple_regular_listings_is_free():
 async def test_promotion_costs_15_and_retry_does_not_charge_twice():
     user_id = uuid.uuid4()
     user = User(id=user_id, telegram_id=8, first_name="Seller", role="user")
-    wallet = Wallet(user_id=user_id, available_balance=Decimal("100"), frozen_balance=0, total_earned=0, version=0)
+    wallet = Wallet(user_id=user_id, purchased_balance=Decimal("100"), earned_balance=0, purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=0, version=0)
     listing = Listing(
         id=uuid.uuid4(), seller_id=user_id, listing_type="regular", status="active",
         brand="BMW", model="M5", power_hp=600, max_speed_kph=300,
@@ -145,26 +166,45 @@ async def test_promotion_costs_15_and_retry_does_not_charge_twice():
 async def test_successful_star_payment_is_credited_once():
     user_id = uuid.uuid4()
     user = User(id=user_id, telegram_id=99, first_name="Buyer", role="user")
-    wallet = Wallet(user_id=user_id, available_balance=Decimal("5"), frozen_balance=0, total_earned=0, version=0)
+    wallet = Wallet(user_id=user_id, purchased_balance=Decimal("5"), earned_balance=0, purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=0, version=0)
     intent = StarPaymentIntent(
         id=uuid.uuid4(), user_id=user_id, invoice_payload="autoflow_topup:test",
-        invoice_link="https://t.me/$test", xtr_amount=100, status="pending",
+        invoice_link="https://t.me/$test", xtr_amount=10, status="pending",
         expires_at=time_to_datetime(time.time() + 600),
     )
     payment = {
         "currency": "XTR",
         "invoice_payload": intent.invoice_payload,
         "telegram_payment_charge_id": "charge-unique",
-        "total_amount": 100,
+        "total_amount": 10,
     }
     session = FakeSession([None, intent, user, wallet])
     assert await process_successful_payment(session, 99, payment) is True
-    assert wallet.available_balance == Decimal("105.00")
+    assert wallet.available_balance == Decimal("15.00")
     assert intent.status == "paid"
     assert len([item for item in session.added if isinstance(item, StarPayment)]) == 1
 
     duplicate_session = FakeSession([uuid.uuid4()])
     assert await process_successful_payment(duplicate_session, 99, payment) is False
+
+
+@pytest.mark.asyncio
+async def test_purchased_af_coins_cannot_be_withdrawn():
+    from types import SimpleNamespace
+
+    user_id = uuid.uuid4()
+    user = User(id=user_id, telegram_id=100, first_name="Buyer", role="user")
+    wallet = Wallet(
+        user_id=user_id, purchased_balance=Decimal("500"), earned_balance=Decimal("0"),
+        purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=0, version=0,
+    )
+    with pytest.raises(HTTPException) as error:
+        await create_withdrawal(
+            FakeSession([wallet]), user,
+            SimpleNamespace(amount=Decimal("15"), payout_method="manual", details="test"),
+        )
+    assert error.value.status_code == 402
+    assert "продаж" in error.value.detail
 
 
 def time_to_datetime(timestamp: float):

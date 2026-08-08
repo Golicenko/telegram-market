@@ -120,6 +120,8 @@ class Deal(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_payment", index=True)
     price_af_coins: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    purchased_frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    earned_frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
     seller_payout: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     platform_commission: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     transfer_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -238,12 +240,29 @@ class Wallet(Base):
     __tablename__ = "wallets"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, unique=True)
-    available_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
-    frozen_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    purchased_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    earned_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    purchased_frozen_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    earned_frozen_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
     total_earned: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    __table_args__ = (CheckConstraint("available_balance >= 0 AND frozen_balance >= 0 AND total_earned >= 0", name="ck_wallet_nonnegative"),)
+    __table_args__ = (
+        CheckConstraint(
+            "purchased_balance >= 0 AND earned_balance >= 0 "
+            "AND purchased_frozen_balance >= 0 AND earned_frozen_balance >= 0 "
+            "AND total_earned >= 0",
+            name="ck_wallet_nonnegative",
+        ),
+    )
+
+    @property
+    def available_balance(self) -> Decimal:
+        return Decimal(self.purchased_balance or 0) + Decimal(self.earned_balance or 0)
+
+    @property
+    def frozen_balance(self) -> Decimal:
+        return Decimal(self.purchased_frozen_balance or 0) + Decimal(self.earned_frozen_balance or 0)
 
 
 class WalletTransaction(Base):
@@ -296,12 +315,15 @@ class StarPaymentIntent(Base):
     invoice_payload: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     invoice_link: Mapped[str | None] = mapped_column(Text)
     xtr_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    purpose: Mapped[str] = mapped_column(String(24), nullable=False, default="topup")
+    context: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
-        CheckConstraint("xtr_amount BETWEEN 50 AND 10000", name="ck_star_payment_intent_amount"),
+        CheckConstraint("xtr_amount BETWEEN 10 AND 1000", name="ck_star_payment_intent_amount"),
+        CheckConstraint("purpose IN ('topup','cart_checkout')", name="ck_star_payment_intent_purpose"),
         CheckConstraint("status IN ('pending','paid','cancelled','expired')", name="ck_star_payment_intent_status"),
     )
 

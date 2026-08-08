@@ -24,6 +24,10 @@ class WalletOut(ORMModel):
     available_balance: Decimal
     frozen_balance: Decimal
     total_earned: Decimal
+    purchased_balance: Decimal
+    earned_balance: Decimal
+    purchased_frozen_balance: Decimal
+    earned_frozen_balance: Decimal
 
 
 class MeOut(BaseModel):
@@ -231,7 +235,8 @@ class NotificationOut(ORMModel):
 
 
 class StarPaymentIntentCreate(BaseModel):
-    amount: int = Field(gt=0, le=1000)
+    amount: int = Field(ge=10, le=1000)
+    purpose: str = Field(default="topup", pattern="^(topup|cart_checkout)$")
 
 
 class StarPaymentIntentOut(BaseModel):
