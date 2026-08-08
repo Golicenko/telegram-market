@@ -24,7 +24,12 @@ test("training has list, details and an admin-only editor", () => {
   assert.match(app, /\/training\/\$\{id\}/);
 });
 
-test("training purchase is deliberately deferred", () => {
-  assert.match(html, /Покупка и выдача материалов будут подключены на следующем этапе/);
-  assert.match(app, /Покупка обучения будет подключена на следующем этапе/);
+test("training purchase and library use authenticated backend workflows", () => {
+  assert.match(html, /data-profile-tab="training"/);
+  assert.match(html, /id="adminTrainingProducts"/);
+  assert.match(html, /id="trainingMaterialForm"/);
+  assert.match(app, /\/training\/\$\{product\.id\}\/purchase/);
+  assert.match(app, /\/training\/purchases\/\$\{button\.dataset\.trainingRedeliver\}\/redeliver/);
+  assert.match(app, /\/admin\/training\/management\?filter=/);
+  assert.doesNotMatch(app, /Покупка обучения будет подключена на следующем этапе/);
 });

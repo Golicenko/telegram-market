@@ -97,6 +97,7 @@ LISTING_PROMOTION_HOURS=24
 SELLER_PAYOUT_PERCENT=70
 STAR_TOPUP_MIN=100
 STAR_TOPUP_MAX=1000
+TRAINING_DELIVERY_COOLDOWN_SECONDS=300
 ```
 
 Если имя PostgreSQL-сервиса отличается от `Postgres`, исправьте ссылку `${{<имя сервиса>.DATABASE_URL}}`. Railway предоставляет `RAILWAY_PUBLIC_DOMAIN`; приложение регистрирует `https://<domain>/api/telegram/webhook` автоматически. Можно явно задать `PUBLIC_BASE_URL`.
@@ -124,6 +125,8 @@ STAR_TOPUP_MAX=1000
 | `listings`, `listing_images` | объявления строго типа `regular` или `unique`, одна фотография, просмотры, срок закрепления |
 | `account_listings` | прежние карточки аккаунтов; таблица сохранена для безопасной миграции, но скрыта из пользовательского UI |
 | `training_products` | отдельные продукты раздела «Обучение», публикация, закрепление и soft delete |
+| `training_materials` | закрытые ссылки/file_id материалов автовыдачи, порядок и метаданные; публичный API не отдаёт секрет выдачи |
+| `training_purchases` | бессрочная серверная история покупок, снимок продукта, статусы персонального обучения и автовыдачи |
 | `favorites`, `cart_items` | избранное и серверная корзина |
 | `conversations`, `conversation_messages`, `price_offers` | постоянный диалог и торг до/после покупки |
 | `deals`, `deal_messages` | защищённые средства и жизненный цикл сделки |
@@ -152,8 +155,14 @@ STAR_TOPUP_MAX=1000
 - `GET /api/listings?type=regular|unique`, `GET /api/listings/{id}`, `POST /api/listings`
 - `PATCH|DELETE /api/listings/{id}`, `POST /api/listings/{id}/promote`
 - `POST /api/admin/listings/unique`, `PATCH|DELETE /api/admin/listings/{id}`
-- `GET /api/training`, `GET /api/training/{id}`
+- `GET /api/training`, `GET /api/training/{id}`, `GET /api/training/mine`
+- `POST /api/training/{id}/purchase`, `POST /api/training/purchases/{purchase_id}/redeliver`
 - `GET|POST /api/admin/training`, `PATCH|DELETE /api/admin/training/{id}`
+- `GET /api/admin/training/management`, `GET /api/admin/training/stats`
+- `POST /api/admin/training/{id}/state/{publish|hide|pin|unpin}`
+- `GET|POST /api/admin/training/{id}/materials`, `PATCH|DELETE /api/admin/training/materials/{material_id}`
+- `POST /api/admin/training/materials/upload`
+- `GET /api/admin/training/{id}/purchases`, `PATCH /api/admin/training/purchases/{purchase_id}/status`
 - Устаревшие маршруты `/api/accounts` временно сохранены для совместимости и анализа старых данных, но пользовательский интерфейс их не вызывает.
 - `GET /api/cart`, `POST|DELETE /api/cart/items/{listing_id}`, `POST /api/cart/checkout`
 - `GET|POST|DELETE /api/favorites...`
@@ -178,13 +187,17 @@ STAR_TOPUP_MAX=1000
 - `GET /api/admin/support/tickets`, `POST|PATCH /api/admin/support/tickets/{id}...`
 - `POST /api/telegram/webhook`
 
-## Обучение — первый этап
+## Обучение — библиотека и управление
 
 Пользовательская вкладка «Аккаунты» заменена вкладкой «Обучение». Старые записи и таблица `account_listings` не удаляются: они временно скрыты из интерфейса и сохранены для аудита и безопасного отката.
 
 Продукты обучения хранятся отдельно в `training_products` и поддерживают типы `personal` и `automatic`. Публичный API возвращает только опубликованные и не удалённые продукты; закреплённые продукты сортируются первыми. Создание, редактирование, публикация, снятие с публикации, бесплатное закрепление и soft delete доступны только администратору и повторно проверяются backend.
 
-Закрытые материалы в модели и публичных ответах отсутствуют. Покупка, Telegram-выдача, библиотека курса и completion workflow намеренно не подключены на этом этапе. В навигации и пустом состоянии используется предоставленная администратором эмблема `webapp/images/gg-training-icon.jpg`.
+Миграция `0009_training_library` добавляет `training_materials`, `training_purchases` и связь с неизменяемой историей кошелька. Она не удаляет старые аккаунты, пользователей, покупки, сделки или балансы. Продукт с покупками архивируется через `published/deleted_at`, а покупка и её финансовый снимок сохраняются.
+
+Покупка выполняется только backend: продукт и кошельки блокируются, повторный запрос возвращает существующую покупку, а уникальное ограничение `(product_id, buyer_id)` не позволяет списать деньги дважды. Для `personal` деньги остаются под защитой до статуса «Завершено»; для `automatic` расчёт фиксируется сразу и бот отправляет текущий упорядоченный набор материалов. Публичные ответы содержат только название, тип, размер и порядок материала — Telegram `file_id`, закрытый текст или ссылка остаются на сервере.
+
+В профиле есть «Мои обучения» с отдельными списками персональных и автоматических покупок. Повторная выдача проверяет покупателя и покупку на сервере, использует блокировку отправки и настраиваемый cooldown. Администратор видит статистику из реальных `training_purchases`, фильтры каталога, покупателей, статусы персонального обучения и CRUD материалов. Новые материалы становятся доступны всем прежним законным покупателям при следующей выдаче. В навигации используется предоставленная эмблема `webapp/images/gg-training-icon.jpg`.
 
 ### Мобильный запуск и диагностика
 

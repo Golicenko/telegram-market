@@ -25,7 +25,9 @@ from .models import (
     StarPaymentIntent,
     SupportMessage,
     SupportTicket,
+    TrainingMaterial,
     TrainingProduct,
+    TrainingPurchase,
     User,
     Wallet,
     WalletTransaction,
@@ -56,6 +58,7 @@ def wallet_transaction(
     *,
     deal_id: uuid.UUID | None = None,
     withdrawal_id: uuid.UUID | None = None,
+    training_purchase_id: uuid.UUID | None = None,
     external_reference: str | None = None,
 ) -> WalletTransaction:
     return WalletTransaction(
@@ -68,6 +71,7 @@ def wallet_transaction(
         frozen_after=money(wallet.frozen_balance),
         related_deal_id=deal_id,
         related_withdrawal_id=withdrawal_id,
+        related_training_purchase_id=training_purchase_id,
         external_reference=external_reference,
         description=description,
     )
@@ -338,7 +342,7 @@ async def update_training_product(session: AsyncSession, admin: User, product_id
         raise HTTPException(status_code=403, detail="Требуется роль администратора")
     async with session.begin():
         product = await session.scalar(select(TrainingProduct).where(TrainingProduct.id == product_id).with_for_update())
-        if not product or product.deleted_at is not None:
+        if not product:
             raise HTTPException(status_code=404, detail="Обучение не найдено")
         if product.admin_id != admin.id:
             raise HTTPException(status_code=403, detail="Можно изменять только собственные обучения")
@@ -366,6 +370,289 @@ async def delete_training_product(session: AsyncSession, admin: User, product_id
         product.pinned = False
         product.deleted_at = datetime.now(UTC)
         session.add(AdminAction(admin_id=admin.id, action="delete_training_product", target_type="training_product", target_id=product.id))
+
+
+async def set_training_product_state(
+    session: AsyncSession, admin: User, product_id: uuid.UUID, action: str
+) -> TrainingProduct:
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Требуется роль администратора")
+    if action not in {"publish", "hide", "pin", "unpin"}:
+        raise HTTPException(status_code=400, detail="Неизвестное действие")
+    async with session.begin():
+        product = await session.scalar(select(TrainingProduct).where(TrainingProduct.id == product_id).with_for_update())
+        if not product:
+            raise HTTPException(status_code=404, detail="Обучение не найдено")
+        if product.admin_id != admin.id:
+            raise HTTPException(status_code=403, detail="Можно управлять только собственными обучениями")
+        if action == "publish":
+            product.deleted_at = None
+            product.published = True
+        elif action == "hide":
+            product.published = False
+            product.pinned = False
+        elif action == "pin":
+            if product.deleted_at is not None:
+                raise HTTPException(status_code=409, detail="Сначала восстановите обучение")
+            product.pinned = True
+        else:
+            product.pinned = False
+        session.add(AdminAction(admin_id=admin.id, action=f"{action}_training_product", target_type="training_product", target_id=product.id))
+    return product
+
+
+async def create_training_material(session: AsyncSession, admin: User, product_id: uuid.UUID, payload) -> TrainingMaterial:
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Требуется роль администратора")
+    async with session.begin():
+        product = await session.scalar(select(TrainingProduct).where(TrainingProduct.id == product_id).with_for_update())
+        if not product or product.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Обучение не найдено")
+        if product.admin_id != admin.id:
+            raise HTTPException(status_code=403, detail="Можно изменять только собственные обучения")
+        if product.product_type != "automatic":
+            raise HTTPException(status_code=409, detail="Материалы доступны только для автовыдачи")
+        material = TrainingMaterial(
+            product_id=product.id,
+            title=payload.title.strip(),
+            material_type=payload.material_type,
+            delivery_reference=payload.delivery_reference.strip(),
+            mime_type=payload.mime_type,
+            file_size=payload.file_size,
+            metadata_json=payload.metadata_json,
+            position=payload.position,
+        )
+        session.add(material)
+        await session.flush()
+        session.add(AdminAction(admin_id=admin.id, action="create_training_material", target_type="training_material", target_id=material.id))
+    return material
+
+
+async def update_training_material(session: AsyncSession, admin: User, material_id: uuid.UUID, payload) -> TrainingMaterial:
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Требуется роль администратора")
+    async with session.begin():
+        material = await session.scalar(select(TrainingMaterial).where(TrainingMaterial.id == material_id).with_for_update())
+        if not material or not material.is_active:
+            raise HTTPException(status_code=404, detail="Материал не найден")
+        product = await session.get(TrainingProduct, material.product_id)
+        if not product or product.admin_id != admin.id:
+            raise HTTPException(status_code=403, detail="Нет доступа к материалу")
+        changes = payload.model_dump(exclude_unset=True)
+        for field, value in changes.items():
+            if isinstance(value, str):
+                value = value.strip()
+            setattr(material, field, value)
+        session.add(AdminAction(admin_id=admin.id, action="update_training_material", target_type="training_material", target_id=material.id, metadata_json={"fields": sorted(changes)}))
+    return material
+
+
+async def delete_training_material(session: AsyncSession, admin: User, material_id: uuid.UUID) -> None:
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Требуется роль администратора")
+    async with session.begin():
+        material = await session.scalar(select(TrainingMaterial).where(TrainingMaterial.id == material_id).with_for_update())
+        if not material or not material.is_active:
+            raise HTTPException(status_code=404, detail="Материал не найден")
+        product = await session.get(TrainingProduct, material.product_id)
+        if not product or product.admin_id != admin.id:
+            raise HTTPException(status_code=403, detail="Нет доступа к материалу")
+        material.is_active = False
+        session.add(AdminAction(admin_id=admin.id, action="delete_training_material", target_type="training_material", target_id=material.id))
+
+
+def credit_training_seller(wallet: Wallet, amount: Decimal) -> None:
+    wallet.earned_balance = money(wallet.earned_balance + amount)
+    wallet.total_earned = money(wallet.total_earned + amount)
+
+
+async def purchase_training_product(
+    session: AsyncSession, buyer: User, product_id: uuid.UUID
+) -> tuple[TrainingPurchase, bool]:
+    now = datetime.now(UTC)
+    async with session.begin():
+        product = await session.scalar(select(TrainingProduct).where(TrainingProduct.id == product_id).with_for_update())
+        if not product or product.deleted_at is not None or not product.published:
+            raise HTTPException(status_code=404, detail="Обучение недоступно")
+        if product.availability != "available":
+            raise HTTPException(status_code=409, detail="Обучение сейчас недоступно для покупки")
+        if product.admin_id == buyer.id:
+            raise HTTPException(status_code=409, detail="Нельзя купить собственное обучение")
+        existing = await session.scalar(select(TrainingPurchase).where(
+            TrainingPurchase.product_id == product.id,
+            TrainingPurchase.buyer_id == buyer.id,
+        ))
+        if existing:
+            return existing, False
+        if product.product_type == "automatic" and not await session.scalar(
+            select(TrainingMaterial.id).where(
+                TrainingMaterial.product_id == product.id,
+                TrainingMaterial.is_active.is_(True),
+            ).limit(1)
+        ):
+            raise HTTPException(status_code=409, detail="Материалы курса ещё не подготовлены")
+        buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id).with_for_update())
+        if not buyer_wallet:
+            raise HTTPException(status_code=409, detail="Кошелёк пользователя не найден")
+
+        price = money(product.price_af_coins)
+        payout, commission = settlement_amounts(price)
+        buyer_available_before, buyer_frozen_before = wallet_snapshot(buyer_wallet)
+        if product.product_type == "personal":
+            purchased_part, earned_part = hold_for_purchase(buyer_wallet, price)
+            status_value = "awaiting_start"
+            delivery_status = "not_applicable"
+            settled_at = None
+            completed_at = None
+        else:
+            purchased_part, earned_part = debit_spendable(buyer_wallet, price)
+            status_value = "completed"
+            delivery_status = "pending"
+            settled_at = now
+            completed_at = now
+
+        purchase = TrainingPurchase(
+            product_id=product.id,
+            buyer_id=buyer.id,
+            seller_id=product.admin_id,
+            product_type=product.product_type,
+            title_snapshot=product.title,
+            cover_url_snapshot=product.cover_url,
+            price_af_coins=price,
+            seller_payout=payout,
+            platform_commission=commission,
+            status=status_value,
+            delivery_status=delivery_status,
+            purchased_frozen_amount=purchased_part if product.product_type == "personal" else Decimal("0"),
+            earned_frozen_amount=earned_part if product.product_type == "personal" else Decimal("0"),
+            settled_at=settled_at,
+            completed_at=completed_at,
+        )
+        session.add(purchase)
+        await session.flush()
+        session.add(wallet_transaction(
+            buyer_wallet,
+            "training_purchase_reserved" if product.product_type == "personal" else "training_purchase",
+            -price,
+            buyer_available_before,
+            buyer_frozen_before,
+            f"Покупка обучения: {product.title}",
+            training_purchase_id=purchase.id,
+            external_reference=f"training:{purchase.id}:buyer",
+        ))
+
+        if product.product_type == "automatic":
+            seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == product.admin_id).with_for_update())
+            if not seller_wallet:
+                raise HTTPException(status_code=409, detail="Кошелёк продавца не найден")
+            seller_available_before, seller_frozen_before = wallet_snapshot(seller_wallet)
+            credit_training_seller(seller_wallet, payout)
+            session.add(wallet_transaction(
+                seller_wallet,
+                "training_sale",
+                payout,
+                seller_available_before,
+                seller_frozen_before,
+                f"Продажа обучения: {product.title}",
+                training_purchase_id=purchase.id,
+                external_reference=f"training:{purchase.id}:seller",
+            ))
+
+        await create_notification(session, buyer.id, "training_purchase", "Обучение куплено", product.title, {"purchase_id": str(purchase.id)})
+        await create_notification(session, product.admin_id, "training_sale", "Новая покупка обучения", product.title, {"purchase_id": str(purchase.id)})
+    return purchase, True
+
+
+async def update_training_purchase_status(
+    session: AsyncSession, admin: User, purchase_id: uuid.UUID, next_status: str
+) -> TrainingPurchase:
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Требуется роль администратора")
+    if next_status not in {"in_progress", "completed"}:
+        raise HTTPException(status_code=400, detail="Недопустимый статус")
+    async with session.begin():
+        purchase = await session.scalar(select(TrainingPurchase).where(TrainingPurchase.id == purchase_id).with_for_update())
+        if not purchase:
+            raise HTTPException(status_code=404, detail="Покупка не найдена")
+        if purchase.seller_id != admin.id or purchase.product_type != "personal":
+            raise HTTPException(status_code=403, detail="Нет доступа к персональному обучению")
+        if purchase.status == next_status:
+            return purchase
+        if next_status == "in_progress" and purchase.status != "awaiting_start":
+            raise HTTPException(status_code=409, detail="Обучение уже начато или завершено")
+        if next_status == "completed" and purchase.status != "in_progress":
+            raise HTTPException(status_code=409, detail="Сначала начните обучение")
+        purchase.status = next_status
+        if next_status == "completed":
+            buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == purchase.buyer_id).with_for_update())
+            seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == purchase.seller_id).with_for_update())
+            if not buyer_wallet or not seller_wallet:
+                raise HTTPException(status_code=409, detail="Кошелёк участника не найден")
+            buyer_available_before, buyer_frozen_before = wallet_snapshot(buyer_wallet)
+            seller_available_before, seller_frozen_before = wallet_snapshot(seller_wallet)
+            consume_purchase_hold(buyer_wallet, purchase.purchased_frozen_amount, purchase.earned_frozen_amount)
+            credit_training_seller(seller_wallet, purchase.seller_payout)
+            now = datetime.now(UTC)
+            purchase.completed_at = now
+            purchase.settled_at = now
+            session.add(wallet_transaction(
+                buyer_wallet, "training_purchase_completed", Decimal("0"), buyer_available_before, buyer_frozen_before,
+                f"Персональное обучение завершено: {purchase.title_snapshot}", training_purchase_id=purchase.id,
+                external_reference=f"training:{purchase.id}:buyer:completed",
+            ))
+            session.add(wallet_transaction(
+                seller_wallet, "training_sale", purchase.seller_payout, seller_available_before, seller_frozen_before,
+                f"Персональное обучение завершено: {purchase.title_snapshot}", training_purchase_id=purchase.id,
+                external_reference=f"training:{purchase.id}:seller",
+            ))
+        await create_notification(
+            session, purchase.buyer_id, "training_status", "Статус обучения изменён",
+            "Обучение началось" if next_status == "in_progress" else "Обучение завершено",
+            {"purchase_id": str(purchase.id), "status": next_status},
+        )
+        session.add(AdminAction(admin_id=admin.id, action=f"training_{next_status}", target_type="training_purchase", target_id=purchase.id))
+    return purchase
+
+
+async def begin_training_delivery(
+    session: AsyncSession, buyer_id: uuid.UUID, purchase_id: uuid.UUID, *, cooldown_seconds: int
+) -> TrainingPurchase:
+    now = datetime.now(UTC)
+    async with session.begin():
+        purchase = await session.scalar(select(TrainingPurchase).where(TrainingPurchase.id == purchase_id).with_for_update())
+        if not purchase or purchase.buyer_id != buyer_id:
+            raise HTTPException(status_code=404, detail="Покупка не найдена")
+        if purchase.product_type != "automatic" or purchase.status != "completed":
+            raise HTTPException(status_code=409, detail="Повторная выдача для этой покупки недоступна")
+        if purchase.delivery_lock_until and purchase.delivery_lock_until > now:
+            raise HTTPException(status_code=409, detail="Материалы уже отправляются")
+        if purchase.last_delivery_requested_at:
+            retry_at = purchase.last_delivery_requested_at + timedelta(seconds=cooldown_seconds)
+            if retry_at > now:
+                seconds = max(1, int((retry_at - now).total_seconds()))
+                raise HTTPException(status_code=429, detail=f"Повторная выдача будет доступна через {seconds} сек.")
+        purchase.delivery_status = "sending"
+        purchase.delivery_attempts += 1
+        purchase.last_delivery_requested_at = now
+        purchase.delivery_lock_until = now + timedelta(minutes=2)
+    return purchase
+
+
+async def finish_training_delivery(session: AsyncSession, purchase_id: uuid.UUID, success: bool) -> None:
+    async with session.begin():
+        purchase = await session.scalar(select(TrainingPurchase).where(TrainingPurchase.id == purchase_id).with_for_update())
+        if not purchase:
+            return
+        purchase.delivery_status = "delivered" if success else "failed"
+        purchase.delivery_lock_until = None
+        await create_notification(
+            session,
+            purchase.buyer_id,
+            "training_delivery",
+            "Материалы отправлены" if success else "Не удалось отправить материалы",
+            purchase.title_snapshot,
+            {"purchase_id": str(purchase.id), "success": success},
+        )
 
 
 async def get_or_create_conversation(

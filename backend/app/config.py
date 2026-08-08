@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     min_withdrawal_af_coins: int = 15
     listing_promotion_cost_af_coins: int = 15
     listing_promotion_hours: int = 24
+    training_delivery_cooldown_seconds: int = Field(default=300, ge=30, le=86400)
     seller_payout_percent: int = Field(default=70, ge=1, le=100)
     star_topup_min: int = Field(default=10, ge=1)
     star_topup_max: int = Field(default=1000, ge=1)
