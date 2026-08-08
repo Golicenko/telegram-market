@@ -36,3 +36,13 @@ def test_client_message_id_is_required_and_long_messages_are_supported():
 def test_read_receipt_fields_are_server_backed():
     assert "is_read" in ConversationMessage.__table__.columns
     assert "read_at" in ConversationMessage.__table__.columns
+
+
+def test_mobile_migration_drops_legacy_uniqueness_before_context_merge():
+    from pathlib import Path
+
+    migration = Path(__file__).parents[1] / "migrations" / "versions" / "0007_mobile_conversations.py"
+    source = migration.read_text(encoding="utf-8")
+    drop_position = source.index('op.drop_constraint("uq_conversation_listing_buyer"')
+    context_move_position = source.index("UPDATE conversations c\n        SET listing_id")
+    assert drop_position < context_move_position

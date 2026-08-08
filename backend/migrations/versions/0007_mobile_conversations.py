@@ -19,6 +19,10 @@ def upgrade() -> None:
         "conversation_messages",
         ["conversation_id", "sender_id", "client_message_id"],
     )
+    # The legacy uniqueness can block the temporary context move while duplicate
+    # conversations still coexist. Remove it before merging; the migration is
+    # transactional, so a failure restores the original constraint and data.
+    op.drop_constraint("uq_conversation_listing_buyer", "conversations", type_="unique")
 
     # Preserve all history. Existing duplicates are merged into the oldest
     # conversation for each unordered participant pair before uniqueness is added.
@@ -83,7 +87,6 @@ def upgrade() -> None:
           AND GREATEST(c.buyer_id, c.seller_id) = GREATEST(older.buyer_id, older.seller_id)
           AND (c.created_at, c.id) > (older.created_at, older.id)
     """)
-    op.drop_constraint("uq_conversation_listing_buyer", "conversations", type_="unique")
     op.create_index(
         "uq_conversations_participant_pair",
         "conversations",
