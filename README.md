@@ -108,7 +108,7 @@ TRAINING_DELIVERY_COOLDOWN_SECONDS=300
 
 ## Устойчивый запуск Mini App
 
-- HTML сразу показывает фирменный экран `AutoFlow Market — Загрузка…`; загрузка Telegram SDK не блокирует отображение страницы.
+- HTML сразу показывает рабочую оболочку Market. Полноэкранной заставки нет; состояние авторизации и холодного запуска отображается компактной строкой над интерфейсом.
 - Для входа критичны только настоящий `Telegram.WebApp.initData` и `GET /api/me`. В production нет автоматического входа под debug/admin-пользователем.
 - Каталог, аккаунты, корзина, профиль, реклама и уведомления загружаются независимо через `Promise.allSettled`. Ошибка одного раздела не скрывает интерфейс и не ломает навигацию.
 - GET-запросы имеют timeout 12 секунд и один ограниченный retry; `/me` использует timeout 10 секунд на попытку. Зависшие запросы отменяются через `AbortController`.
@@ -132,7 +132,7 @@ TRAINING_DELIVERY_COOLDOWN_SECONDS=300
 | `deals`, `deal_messages` | защищённые средства и жизненный цикл сделки |
 | `wallets` | `available_balance`, `frozen_balance`, `total_earned` |
 | `wallet_transactions` | неизменяемая история с балансами до/после |
-| `star_payment_intents`, `star_payments` | XTR invoice, статус и уникальный Telegram charge ID |
+| `star_payment_intents`, `star_payments` | XTR invoice, привязка точного пополнения к объявлению, статус автоматического продолжения покупки и уникальный Telegram charge ID |
 | `withdrawal_requests` | ручной вывод и статусы заявки |
 | `notifications` | уведомления внутри приложения и постановка Bot API уведомлений |
 | `support_tickets`, `support_messages` | обращения пользователя и переписка с администратором |
@@ -153,6 +153,8 @@ TRAINING_DELIVERY_COOLDOWN_SECONDS=300
 - `POST /api/uploads`
 - `GET /api/advertisement`
 - `GET /api/listings?type=regular|unique`, `GET /api/listings/{id}`, `POST /api/listings`
+- `POST /api/listings/{id}/purchase`, `POST /api/listings/{id}/purchase-topup-intent`
+- `GET /api/wallet/star-payments/intents/{id}`, `POST /api/wallet/star-payments/intents/{id}/resume-checkout`
 - `PATCH|DELETE /api/listings/{id}`, `POST /api/listings/{id}/promote`
 - `POST /api/admin/listings/unique`, `PATCH|DELETE /api/admin/listings/{id}`
 - `GET /api/training`, `GET /api/training/{id}`, `GET /api/training/mine`
@@ -222,11 +224,13 @@ TRAINING_DELIVERY_COOLDOWN_SECONDS=300
 - Создание нескольких обычных объявлений бесплатно; редактирование, удаление и продвижение проверяются сервером.
 - Корзина хранится в PostgreSQL, а доступность и баланс повторно проверяются непосредственно перед покупкой.
 - Покупка переводит AF Coins под защиту, блокирует объявление, создаёт сделку и постоянный внутренний диалог.
+- На обычных и уникальных карточках доступна одинаковая серверная покупка. При недостатке баланса интерфейс показывает точную недостающую сумму и выставляет привязанный к объявлению XTR invoice; после `successful_payment` backend автоматически пытается завершить ту же покупку. Если объявление уже занял другой покупатель, начисленные AF Coins остаются на балансе.
 - Сделка поддерживает статусы, торг, сообщения, отмену, спор, подтверждение через пять минут и расчёт продавцу 70% / платформе 30%.
 - Профиль показывает объявления, покупки, активные сделки, диалоги и неизменяемую историю кошелька.
 - Заявка на ручной вывод принимает только заработанные AF Coins и защищает их от повторной траты; администратор может approve/paid/reject с обязательной причиной отказа.
 - Telegram `initData` проверяется по HMAC на сервере; роли нельзя подменить через CSS или JavaScript.
-- Пополнение от 10 Stars создаёт настоящий XTR invoice через Bot API. `pre_checkout_query` проверяется сервером; AF Coins начисляются только после `successful_payment`. Уникальный `telegram_payment_charge_id` предотвращает двойное начисление.
+- Обычное пополнение от 10 Stars создаёт настоящий XTR invoice через Bot API. Для конкретной покупки разрешён счёт ровно на недостающую сумму от 1 XTR. `pre_checkout_query` проверяется сервером; AF Coins начисляются только после `successful_payment`. Уникальный `telegram_payment_charge_id` предотвращает двойное начисление.
+- Команда `/start` показывает приветственное меню с кнопкой открытия Mini App и переключаемым разделом «Как это работает»; `/start <payload>` не перехватывается и остаётся доступным для deep-link сценариев.
 - Обращения в поддержку, ответы администратора и один рекламный баннер хранятся в PostgreSQL.
 - Верхний блок Market адаптирован под 320, 360, 390 и 430 px без горизонтальной прокрутки всей страницы.
 

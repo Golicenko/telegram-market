@@ -35,6 +35,7 @@
     totalUnread: 0,
     messagePollingId: null,
     pendingCheckoutTopup: false,
+    purchaseFlow: null,
     serverAvailable: true,
   };
 
@@ -114,6 +115,12 @@
     successOverlay: document.getElementById("successOverlay"),
     successTitle: document.getElementById("successTitle"),
     successText: document.getElementById("successText"),
+    purchaseModal: document.getElementById("purchaseModal"),
+    purchaseModalTitle: document.getElementById("purchaseModalTitle"),
+    purchaseModalText: document.getElementById("purchaseModalText"),
+    purchaseModalAmount: document.getElementById("purchaseModalAmount"),
+    purchaseModalNote: document.getElementById("purchaseModalNote"),
+    purchaseModalAction: document.getElementById("purchaseModalAction"),
   };
 
   let bootstrapPromise = null;
@@ -190,6 +197,7 @@
     bind(elements.startupRetry, "click", () => void bootstrap({ manual: true }), "startupRetry");
     bind(elements.syncRetry, "click", () => void retryFailedOptional(), "syncRetry");
     bind(elements.floatingChatButton, "click", openFloatingChat, "floatingChatButton");
+    bind(elements.purchaseModalAction, "click", runPurchaseFlowAction, "purchaseModalAction");
   }
 
   function bootstrap(options = {}) {
@@ -247,7 +255,6 @@
     updateFloatingChatVisibility();
     startMessagePolling();
     hideStartup();
-    dismissIntro();
     reportStartupStage("shell_rendered");
     reportStartupStage("market_loading");
     void loadOptionalData();
@@ -384,6 +391,10 @@ function handleClick(event) {
 
   if (target.closest("[data-open-info]")) {
     return void openDialog(elements.infoModal);
+  }
+
+  if (target.closest("[data-close-purchase]")) {
+    return void closePurchaseFlow();
   }
 
   if (target.closest("[data-open-topup-info]")) {
@@ -804,7 +815,7 @@ function handleClick(event) {
       chat.className = "card-message"; chat.dataset.chatListing = listing.id; chat.textContent = "Написать продавцу";
       actions.append(chat);
     }
-    if (!isOwner && listing.listing_type === "unique") {
+    if (!isOwner) {
       const buy = document.createElement("button");
       buy.className = "card-buy";
       buy.dataset.buyNow = listing.id;
@@ -853,8 +864,109 @@ function handleClick(event) {
   }
 
   async function buyNowFlow(id) {
-    if (!state.cart.some((item) => item.id === id)) await toggleCart(id);
-    if (state.cart.some((item) => item.id === id)) openSecondary("cart");
+    const listing = [...state.regular, ...state.unique].find((item) => String(item.id) === String(id));
+    if (!listing) return notify("Объявление не найдено");
+    if (listing.status !== "active") return notify("Объявление уже недоступно");
+    if (state.me?.user.id === listing.seller_id) return notify("Нельзя купить собственное объявление");
+    const price = Number(listing.effective_price_af_coins ?? listing.price_af_coins);
+    state.purchaseFlow = { listing, stage: "confirm", busy: false, intentId: null };
+    elements.purchaseModalTitle.textContent = `Купить ${listing.brand} ${listing.model}?`;
+    elements.purchaseModalText.textContent = "Вы оплачиваете, но продавец не получит деньги, пока вы не подтвердите, что всё получили.";
+    elements.purchaseModalAmount.replaceChildren(document.createTextNode(`${formatNumber(price)} `), coin("af-coin--small"));
+    elements.purchaseModalNote.textContent = "Деньги будут находиться под защитой AutoFlow Market.";
+    elements.purchaseModalAction.textContent = "Оплатить безопасно";
+    elements.purchaseModalAction.disabled = false;
+    openDialog(elements.purchaseModal);
+  }
+
+  function closePurchaseFlow() {
+    if (state.purchaseFlow?.busy) return;
+    if (elements.purchaseModal?.open) elements.purchaseModal.close();
+    state.purchaseFlow = null;
+  }
+
+  async function runPurchaseFlowAction() {
+    const flow = state.purchaseFlow;
+    if (!flow || flow.busy) return;
+    if (flow.stage === "confirm") return executeSafeListingPurchase(flow);
+    if (flow.stage === "topup") return payListingShortfall(flow);
+    closePurchaseFlow();
+  }
+
+  async function executeSafeListingPurchase(flow) {
+    flow.busy = true; elements.purchaseModalAction.disabled = true; elements.purchaseModalAction.textContent = "Проверяем…";
+    try {
+      const deal = await api.request(`/listings/${flow.listing.id}/purchase`, { method: "POST" });
+      await finishListingPurchase(deal);
+    } catch (error) {
+      if (Number(error.status) === 402 && error.detail?.code === "insufficient_af_coins") {
+        const missing = Number(error.detail.missing_af_coins || 0);
+        flow.stage = "topup"; flow.busy = false;
+        elements.purchaseModalTitle.textContent = "Нужна точная доплата";
+        elements.purchaseModalText.textContent = `Для покупки не хватает ${formatNumber(missing)} AF Coins`;
+        elements.purchaseModalAmount.textContent = `${Math.ceil(missing)} Telegram Stars`;
+        elements.purchaseModalNote.textContent = "AF Coins начисляются только после подтверждения оплаты Telegram. Затем покупка продолжится автоматически.";
+        elements.purchaseModalAction.textContent = `Пополнить ${Math.ceil(missing)} ⭐ и купить`;
+        elements.purchaseModalAction.disabled = false;
+      } else {
+        flow.busy = false; elements.purchaseModalAction.disabled = false; elements.purchaseModalAction.textContent = "Оплатить безопасно";
+        elements.purchaseModalText.textContent = error.message;
+        await refreshMarketplace().catch((refreshError) => reportClientError("refresh_after_purchase", refreshError));
+      }
+    }
+  }
+
+  async function payListingShortfall(flow) {
+    if (!telegram?.initData || typeof telegram.openInvoice !== "function") {
+      elements.purchaseModalNote.textContent = "Откройте AUTOFLOW MARKET внутри Telegram, чтобы оплатить счёт.";
+      return;
+    }
+    flow.busy = true; elements.purchaseModalAction.disabled = true; elements.purchaseModalAction.textContent = "Создаём счёт…";
+    try {
+      const intent = await api.request(`/listings/${flow.listing.id}/purchase-topup-intent`, { method: "POST" });
+      flow.intentId = intent.id;
+      elements.purchaseModalAction.textContent = "Счёт открыт в Telegram";
+      const invoiceStatus = await new Promise((resolve, reject) => {
+        try { telegram.openInvoice(intent.invoice_url, resolve); }
+        catch (error) { reject(error); }
+      });
+      if (invoiceStatus === "cancelled" || invoiceStatus === "failed") {
+        flow.busy = false; elements.purchaseModalAction.disabled = false;
+        elements.purchaseModalAction.textContent = `Пополнить ${intent.amount} ⭐ и купить`;
+        elements.purchaseModalNote.textContent = invoiceStatus === "cancelled" ? "Оплата отменена. Баланс не изменён." : "Telegram не завершил оплату. Баланс не изменён.";
+        return;
+      }
+      elements.purchaseModalText.textContent = "Telegram подтвердил оплату. Завершаем безопасную покупку…";
+      const payment = await waitForStarPayment(intent.id);
+      if (payment.status !== "paid") throw new Error("Сервер ещё не получил подтверждение оплаты. Попробуйте проверить через несколько секунд.");
+      const result = await api.request(`/wallet/star-payments/intents/${intent.id}/resume-checkout`, { method: "POST" });
+      state.me.wallet = result.wallet;
+      if (result.checkout_status === "completed") return await finishListingPurchase({ id: result.deal_id });
+      flow.stage = "done"; flow.busy = false; elements.purchaseModalAction.disabled = false; elements.purchaseModalAction.textContent = "Закрыть";
+      elements.purchaseModalTitle.textContent = result.checkout_status === "listing_unavailable" ? "Объявление уже недоступно" : "Покупка не завершена";
+      elements.purchaseModalText.textContent = result.message || "Пополненные AF Coins сохранены на вашем балансе.";
+      elements.purchaseModalAmount.textContent = "AF Coins сохранены";
+      elements.purchaseModalNote.textContent = "Средства не потеряны и доступны в вашем внутреннем балансе.";
+      await refreshMarketplace();
+    } catch (error) {
+      flow.busy = false; elements.purchaseModalAction.disabled = false; elements.purchaseModalAction.textContent = "Повторить"; elements.purchaseModalText.textContent = error.message;
+    }
+  }
+
+  async function finishListingPurchase(deal) {
+    if (elements.purchaseModal?.open) elements.purchaseModal.close();
+    state.purchaseFlow = null;
+    await refreshMarketplace();
+    showPurchaseSuccess("Покупка оформлена", "Деньги находятся под защитой до подтверждения получения.");
+    if (!deal?.id) return;
+    const conversations = await api.request("/conversations");
+    const conversation = conversations.find((item) => item.deal?.id === deal.id);
+    if (conversation) await openConversation(conversation.id);
+  }
+
+  function showPurchaseSuccess(title, message) {
+    elements.successTitle.textContent = title; elements.successText.textContent = message; elements.successOverlay.hidden = false;
+    window.setTimeout(() => { elements.successOverlay.hidden = true; }, 2200);
   }
 
   async function removeFromCart(id) {
@@ -2192,11 +2304,6 @@ async function hideCurrentConversation() {
     catch (_error) { /* Diagnostics must never block startup. */ }
   }
 
-  function dismissIntro() {
-    try { window.AutoFlowIntro?.dismiss?.(); }
-    catch (error) { reportClientError("intro_dismiss", error); }
-  }
-
   function showStartupLoading(message) {
     if (!elements.startupStatus) return;
     elements.startupStatus.hidden = false;
@@ -2213,7 +2320,6 @@ async function hideCurrentConversation() {
     elements.startupTitle.textContent = "AutoFlow Market";
     elements.startupMessage.textContent = message;
     elements.startupRetry.hidden = !canRetry;
-    dismissIntro();
   }
 
   function hideStartup() {

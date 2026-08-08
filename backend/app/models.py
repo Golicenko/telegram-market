@@ -404,14 +404,30 @@ class StarPaymentIntent(Base):
     xtr_amount: Mapped[int] = mapped_column(Integer, nullable=False)
     purpose: Mapped[str] = mapped_column(String(24), nullable=False, default="topup")
     context: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    listing_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"), index=True)
+    seller_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    deal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("deals.id", ondelete="SET NULL"), index=True)
+    listing_price_af_coins: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    available_balance_at_creation: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    missing_af_coins: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    checkout_status: Mapped[str] = mapped_column(String(24), nullable=False, default="not_requested", index=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
-        CheckConstraint("xtr_amount BETWEEN 10 AND 1000", name="ck_star_payment_intent_amount"),
-        CheckConstraint("purpose IN ('topup','cart_checkout')", name="ck_star_payment_intent_purpose"),
+        CheckConstraint("(purpose = 'listing_checkout' AND xtr_amount >= 1) OR (purpose <> 'listing_checkout' AND xtr_amount BETWEEN 10 AND 1000)", name="ck_star_payment_intent_amount"),
+        CheckConstraint("purpose IN ('topup','cart_checkout','listing_checkout')", name="ck_star_payment_intent_purpose"),
         CheckConstraint("status IN ('pending','paid','cancelled','expired')", name="ck_star_payment_intent_status"),
+        CheckConstraint("checkout_status IN ('not_requested','pending','completed','listing_unavailable','failed')", name="ck_star_payment_intent_checkout_status"),
+        CheckConstraint("missing_af_coins IS NULL OR missing_af_coins > 0", name="ck_star_payment_intent_missing"),
+        Index(
+            "uq_star_payment_intents_pending_listing",
+            "user_id",
+            "listing_id",
+            unique=True,
+            postgresql_where=text("purpose = 'listing_checkout' AND status = 'pending'"),
+        ),
     )
 
 

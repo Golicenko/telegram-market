@@ -379,6 +379,10 @@ class StarPaymentIntentOut(BaseModel):
     invoice_url: str
     amount: int
     status: str
+    purpose: str = "topup"
+    listing_id: uuid.UUID | None = None
+    missing_af_coins: Decimal | None = None
+    checkout_status: str = "not_requested"
 
 
 class StarPaymentStatusOut(BaseModel):
@@ -386,6 +390,11 @@ class StarPaymentStatusOut(BaseModel):
     status: str
     amount: int
     wallet: WalletOut
+    purpose: str = "topup"
+    listing_id: uuid.UUID | None = None
+    deal_id: uuid.UUID | None = None
+    checkout_status: str = "not_requested"
+    message: str | None = None
 
 
 class SupportTicketCreate(BaseModel):

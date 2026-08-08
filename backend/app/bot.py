@@ -4,6 +4,123 @@ from fastapi import HTTPException
 from .config import get_settings
 
 
+START_MENU_TEXT = """👋 Добро пожаловать в AutoFlow Market
+
+Здесь вы можете:
+
+🚗 Покупать и продавать машины
+Сделки проходят через защищённую систему оплаты.
+
+👑 Покупать эксклюзивные автомобили
+Редкие и уникальные машины по выгодным ценам.
+
+🎓 Покупать обучение
+Персональные занятия и готовые материалы по работе с Game Guardian и скриптами — в рамках разрешённого и безопасного использования.
+
+🛡 Безопасная покупка
+Продавец получает средства только после завершения сделки.
+
+Нажмите кнопку ниже, чтобы открыть маркет."""
+
+
+HOW_IT_WORKS_TEXT = """ℹ️ Как работает AutoFlow Market
+
+AutoFlow Market — единый маркет для CRMP: машины, эксклюзивы и обучение прямо в Telegram.
+
+Здесь не нужно искать продавцов, машины и обучение по разным чатам и каналам — всё собрано в одном месте.
+
+🚗 Как проходит покупка машины
+
+Вы выбираете автомобиль в маркете и нажимаете «Купить».
+
+Если средств хватает, создаётся безопасная сделка.
+
+Если средств не хватает, AutoFlow Market показывает, сколько именно не хватает, и предлагает пополнить ровно недостающую сумму через Telegram Stars.
+
+После подтверждённой оплаты покупка продолжается автоматически.
+
+🛡 Как работает безопасная сделка
+
+Деньги не передаются продавцу сразу.
+
+После оплаты они находятся под защитой AutoFlow Market.
+
+Продавец получает средства только после того, как покупатель подтверждает, что получил всё необходимое.
+
+После подтверждения сделка считается завершённой.
+
+👑 Эксклюзивные автомобили
+
+В отдельном разделе доступны редкие и уникальные машины.
+
+Их можно приобрести напрямую через AutoFlow Market по установленной цене.
+
+🎓 Обучение
+
+В AutoFlow Market доступны два формата обучения.
+
+👑 Персональное обучение
+
+Индивидуальная работа и сопровождение.
+
+После покупки администратор получает уведомление с данными покупателя и связывается с ним для проведения обучения.
+
+⚡ Автовыдача
+
+Готовый цифровой курс.
+
+После подтверждённой оплаты бот автоматически отправляет покупателю приобретённые видео, файлы и другие материалы.
+
+⭐ Оплата
+
+Оплата внутри AutoFlow Market проходит через Telegram Stars.
+
+Всё происходит прямо в Telegram — без переходов на сторонние сайты для самой оплаты.
+
+👥 О проекте
+
+За AutoFlow Market стоит команда с большим опытом работы с сообществом.
+
+Наша совокупная аудитория на разных площадках — более 10 000 подписчиков.
+
+Мы хотим сделать единое место, где покупка, продажа и обучение проходят быстро, удобно и понятно.
+
+AutoFlow Market — всё необходимое в одном Telegram-маркете. 🚘"""
+
+
+def bot_menu_payload(detailed: bool, public_url: str, *, chat_id: int, message_id: int | None = None) -> tuple[str, dict]:
+    keyboard = [[{"text": "🚘 Открыть AutoFlow Market", "web_app": {"url": public_url}}]]
+    keyboard.append([{"text": "⬅️ Назад" if detailed else "❓ Как это работает", "callback_data": "autoflow:start" if detailed else "autoflow:how"}])
+    payload: dict = {
+        "chat_id": chat_id,
+        "text": HOW_IT_WORKS_TEXT if detailed else START_MENU_TEXT,
+        "reply_markup": {"inline_keyboard": keyboard},
+    }
+    if message_id is not None:
+        payload["message_id"] = message_id
+    return ("editMessageText" if message_id is not None else "sendMessage"), payload
+
+
+async def send_bot_menu(telegram_id: int, *, detailed: bool = False, message_id: int | None = None) -> bool:
+    public_url = get_settings().externally_reachable_url
+    if not public_url:
+        return await send_bot_notification(telegram_id, "AutoFlow Market временно недоступен. Попробуйте открыть приложение позже.")
+    method, payload = bot_menu_payload(detailed, public_url, chat_id=telegram_id, message_id=message_id)
+    try:
+        await call_bot_api(method, payload)
+        return True
+    except HTTPException:
+        return False
+
+
+async def answer_bot_callback(callback_query_id: str) -> bool:
+    try:
+        await call_bot_api("answerCallbackQuery", {"callback_query_id": callback_query_id})
+        return True
+    except HTTPException:
+        return False
+
+
 async def call_bot_api(method: str, payload: dict) -> dict:
     settings = get_settings()
     if not settings.bot_token:
@@ -28,7 +145,6 @@ async def create_star_invoice_link(amount: int, invoice_payload: str) -> str:
             "title": "Пополнение AF Coins",
             "description": f"{amount} AF Coins для использования внутри AUTOFLOW MARKET",
             "payload": invoice_payload,
-            "provider_token": "",
             "currency": "XTR",
             "prices": [{"label": f"{amount} AF Coins", "amount": amount}],
         },
@@ -157,7 +273,7 @@ async def configure_telegram_webhook() -> bool:
         return False
     payload: dict[str, object] = {
         "url": f"{public_url}/api/telegram/webhook",
-        "allowed_updates": ["message", "pre_checkout_query"],
+        "allowed_updates": ["message", "pre_checkout_query", "callback_query"],
         "drop_pending_updates": False,
     }
     if settings.telegram_webhook_secret:
