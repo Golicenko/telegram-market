@@ -5,8 +5,9 @@ import time
 from datetime import UTC, datetime
 from urllib.parse import parse_qsl
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import Settings, get_settings
@@ -33,6 +34,7 @@ def validate_init_data(init_data: str, bot_token: str, max_age_seconds: int = 36
 
 
 async def get_current_user(
+    request: Request,
     x_telegram_init_data: str | None = Header(default=None),
     x_dev_telegram_id: int | None = Header(default=None),
     session: AsyncSession = Depends(get_session),
@@ -50,29 +52,36 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     telegram_id = int(telegram_user["id"])
+    request.state.telegram_user_id = telegram_id
     role = "admin" if telegram_id in settings.admin_telegram_ids else "user"
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     now = datetime.now(UTC)
     if user is None:
-        user = User(
-            telegram_id=telegram_id,
-            role=role,
-            first_name=telegram_user.get("first_name") or "Telegram User",
-            last_name=telegram_user.get("last_name"),
-            username=telegram_user.get("username"),
-            photo_url=telegram_user.get("photo_url"),
-            mini_app_last_active_at=now,
-        )
-        session.add(user)
-        await session.flush()
-        session.add(Wallet(user_id=user.id))
-    else:
-        user.role = role
-        user.first_name = telegram_user.get("first_name") or user.first_name
-        user.last_name = telegram_user.get("last_name")
-        user.username = telegram_user.get("username")
-        user.photo_url = telegram_user.get("photo_url")
-        user.mini_app_last_active_at = now
+        try:
+            async with session.begin_nested():
+                user = User(
+                    telegram_id=telegram_id,
+                    role=role,
+                    first_name=telegram_user.get("first_name") or "Telegram User",
+                    last_name=telegram_user.get("last_name"),
+                    username=telegram_user.get("username"),
+                    photo_url=telegram_user.get("photo_url"),
+                    mini_app_last_active_at=now,
+                )
+                session.add(user)
+                await session.flush()
+                session.add(Wallet(user_id=user.id))
+        except IntegrityError:
+            # Two Mini App windows can authorize the same new Telegram account at once.
+            user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+            if user is None:
+                raise HTTPException(status_code=503, detail="Не удалось завершить регистрацию. Повторите вход.")
+    user.role = role
+    user.first_name = telegram_user.get("first_name") or user.first_name
+    user.last_name = telegram_user.get("last_name")
+    user.username = telegram_user.get("username")
+    user.photo_url = telegram_user.get("photo_url")
+    user.mini_app_last_active_at = now
     await session.commit()
     if user.is_blocked:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is blocked")

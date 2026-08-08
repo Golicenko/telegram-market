@@ -42,4 +42,3 @@ def downgrade():
 
     op.drop_column("conversation_messages", "read_at")
     op.drop_column("conversation_messages", "is_read")
-  

@@ -9,8 +9,10 @@ from urllib.parse import urlencode
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
+from starlette.requests import Request
 
-from app.auth import require_admin, validate_init_data
+from app.auth import get_current_user, require_admin, validate_init_data
+from app.config import Settings
 from app.models import Deal, Listing, StarPayment, StarPaymentIntent, User, Wallet, WalletTransaction
 from app.schemas import ListingCreate
 from app.services import (
@@ -175,3 +177,100 @@ def test_database_has_concurrent_purchase_guard():
     index = next(item for item in Deal.__table__.indexes if item.name == "uq_deals_open_listing")
     assert index.unique is True
     assert index.dialect_options["postgresql"]["where"] is not None
+
+
+def auth_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/me",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "https",
+            "server": ("autoflow.example", 443),
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+
+
+class FakeAuthSession:
+    def __init__(self, existing_user=None):
+        self.existing_user = existing_user
+        self.added = []
+        self.commits = 0
+
+    async def scalar(self, _query):
+        return self.existing_user
+
+    def begin_nested(self):
+        return FakeTransaction()
+
+    def add(self, value):
+        if isinstance(value, User) and value.id is None:
+            value.id = uuid.uuid4()
+            self.existing_user = value
+        self.added.append(value)
+
+    async def flush(self):
+        return None
+
+    async def commit(self):
+        self.commits += 1
+
+
+@pytest.mark.asyncio
+async def test_new_telegram_user_without_username_or_photo_is_created_with_wallet():
+    token = "123456:TEST_TOKEN"
+    init_data = signed_init_data(token, {"id": 501, "first_name": "Новый"})
+    session = FakeAuthSession()
+    request = auth_request()
+    user = await get_current_user(
+        request=request,
+        x_telegram_init_data=init_data,
+        x_dev_telegram_id=None,
+        session=session,
+        settings=Settings(bot_token=token, debug=False),
+    )
+    assert user.telegram_id == 501
+    assert user.username is None
+    assert user.photo_url is None
+    assert user.role == "user"
+    assert user.mini_app_last_active_at is not None
+    assert request.state.telegram_user_id == 501
+    assert any(isinstance(item, Wallet) and item.user_id == user.id for item in session.added)
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_existing_admin_profile_is_refreshed_from_verified_init_data():
+    token = "123456:TEST_TOKEN"
+    existing = User(id=uuid.uuid4(), telegram_id=777, first_name="Старое", username="old", role="user")
+    session = FakeAuthSession(existing)
+    user = await get_current_user(
+        request=auth_request(),
+        x_telegram_init_data=signed_init_data(token, {"id": 777, "first_name": "Админ", "photo_url": "https://example.test/avatar.jpg"}),
+        x_dev_telegram_id=None,
+        session=session,
+        settings=Settings(bot_token=token, debug=False, admin_id=777),
+    )
+    assert user is existing
+    assert user.role == "admin"
+    assert user.first_name == "Админ"
+    assert user.username is None
+    assert user.photo_url == "https://example.test/avatar.jpg"
+    assert not any(isinstance(item, Wallet) for item in session.added)
+
+
+@pytest.mark.asyncio
+async def test_browser_without_init_data_is_rejected_in_production():
+    with pytest.raises(HTTPException) as error:
+        await get_current_user(
+            request=auth_request(),
+            x_telegram_init_data=None,
+            x_dev_telegram_id=None,
+            session=FakeAuthSession(),
+            settings=Settings(bot_token="123456:TEST_TOKEN", debug=False, dev_telegram_id=999),
+        )
+    assert error.value.status_code == 401
+    assert "Telegram" in error.value.detail

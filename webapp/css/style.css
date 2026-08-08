@@ -30,6 +30,8 @@ img { display: block; max-width: 100%; }
 [hidden] { display: none !important; }
 
 .app-shell { position: relative; width: min(100%, 520px); min-height: 100dvh; margin: 0 auto; padding-bottom: calc(78px + var(--safe-bottom)); border-inline: 1px solid rgba(255, 164, 23, .08); }
+.startup-status { position:fixed; z-index:70; inset:0; width:min(100%,520px); min-height:100dvh; margin:0 auto; padding:calc(var(--safe-top) + 24px) 22px calc(var(--safe-bottom) + 24px); display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; color:var(--text); background:radial-gradient(circle at 50% 28%,rgba(255,139,0,.13),transparent 16rem),linear-gradient(180deg,#07111d,#02070d 72%); }
+.startup-status[hidden]{display:none!important}.startup-status__brand{display:grid;line-height:.9;transform:skew(-7deg)}.startup-status__brand strong{font-size:31px;font-weight:1000;letter-spacing:-.06em}.startup-status__brand span{margin-left:42px;color:var(--orange-2);font-size:25px;font-style:italic;font-weight:1000}.startup-status h1{margin:20px 0 5px;font-size:17px}.startup-status p{max-width:310px;margin:0;color:#aeb8c3;font-size:12px;line-height:1.5}.startup-status button{min-width:130px;min-height:40px;margin-top:16px;border:1px solid rgba(255,187,42,.55);border-radius:9px;color:#211405;background:linear-gradient(135deg,#ffb318,#ff7a00);font-weight:850}.startup-spinner{width:32px;height:32px;margin-top:24px;border:3px solid rgba(255,255,255,.13);border-top-color:var(--orange-2);border-radius:50%;animation:startupSpin .8s linear infinite}@keyframes startupSpin{to{transform:rotate(360deg)}}
 .app-shell.is-focused .app-header { display:none; }
 .app-shell.is-focused main { padding-top:var(--safe-top); }
 .app-header { position: relative; min-height: 158px; padding: var(--safe-top) 10px 8px; overflow: hidden; background: radial-gradient(circle at 50% 44%, rgba(255, 141, 0, .1), transparent 44%), repeating-linear-gradient(-10deg, transparent 0 22px, rgba(255,255,255,.015) 23px 24px); }
@@ -49,6 +51,7 @@ img { display: block; max-width: 100%; }
 .header-spacer { width: 96px; }
 
 main { padding: 0 10px 20px; }
+.sync-status{min-height:36px;margin:0 0 8px;padding:7px 8px;display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid rgba(255,161,16,.32);border-radius:9px;color:#d8b77b;background:rgba(255,139,0,.055);font-size:9px}.sync-status button{min-height:26px;padding:0 8px;border:1px solid rgba(255,174,31,.42);border-radius:6px;color:#ffb51d;background:#15202c;font-size:9px}
 .view { animation: viewIn .19s ease both; }
 @keyframes viewIn { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:none; } }
 

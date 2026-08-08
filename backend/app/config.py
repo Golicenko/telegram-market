@@ -57,7 +57,8 @@ class Settings(BaseSettings):
     debug: bool = False
     dev_telegram_id: int | None = None
     dev_telegram_name: str = "Local User"
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://127.0.0.1:4173", "http://localhost:4173"])
+    # Production is same-origin. Local cross-origin values belong in .env, not defaults.
+    cors_origins: list[str] = Field(default_factory=list)
 
     @field_validator("database_url", mode="before")
     @classmethod
