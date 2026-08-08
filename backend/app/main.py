@@ -57,6 +57,7 @@ async def diagnostic_request_log(request: Request, call_next):
                         "error_type": error_type,
                         "telegram_user_id": getattr(request.state, "telegram_user_id", None),
                         "platform": request.headers.get("X-Telegram-Platform", "unknown")[:32],
+                        "startup_stage": request.headers.get("X-AutoFlow-Startup-Stage", "unknown")[:48],
                         "time": datetime.now(UTC).isoformat(),
                     },
                     ensure_ascii=False,

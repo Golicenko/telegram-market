@@ -12,6 +12,8 @@ function loadApi(fetchImpl, initData = "") {
     AUTO_FLOW_API_BASE: undefined,
     location: { origin: "https://autoflow.example", protocol: "https:", href: "https://autoflow.example/" },
     Telegram: { WebApp: { initData, platform: "android" } },
+    AutoFlowStartupStage: "auth_started",
+    navigator: { userAgent: "Telegram Android WebView" },
     setTimeout,
     clearTimeout,
     dispatchEvent() {},
@@ -53,7 +55,18 @@ test("uses the public same-origin API and sends Telegram auth without logging in
   assert.equal(captured.url, "https://autoflow.example/api/me");
   assert.equal(captured.options.headers["X-Telegram-Init-Data"], initData);
   assert.equal(captured.options.headers["X-Telegram-Platform"], "android");
+  assert.equal(captured.options.headers["X-AutoFlow-Startup-Stage"], "auth_started");
   assert.equal(warnings.length, 0);
+});
+
+test("diagnostics include safe startup context but never full initData", async () => {
+  const { api, warnings } = loadApi(async () => { throw new Error("offline"); }, "user=%7B%22id%22%3A99%7D&hash=do-not-log");
+  await assert.rejects(api.request("/me", { retries: 0, timeoutMs: 20 }));
+  const diagnostic = warnings[0][1];
+  assert.equal(diagnostic.startup_stage, "auth_started");
+  assert.equal(diagnostic.telegram_user_id, 99);
+  assert.equal(diagnostic.user_agent, "Telegram Android WebView");
+  assert.equal(JSON.stringify(warnings).includes("do-not-log"), false);
 });
 
 test("retries one temporary 500 and recovers", async () => {

@@ -122,7 +122,8 @@ STAR_TOPUP_MAX=1000
 |---|---|
 | `users` | Telegram-профиль, роль `user/admin`, блокировка и активность Mini App |
 | `listings`, `listing_images` | объявления строго типа `regular` или `unique`, одна фотография, просмотры, срок закрепления |
-| `account_listings` | управляемые администратором карточки аккаунтов без логинов и паролей |
+| `account_listings` | прежние карточки аккаунтов; таблица сохранена для безопасной миграции, но скрыта из пользовательского UI |
+| `training_products` | отдельные продукты раздела «Обучение», публикация, закрепление и soft delete |
 | `favorites`, `cart_items` | избранное и серверная корзина |
 | `conversations`, `conversation_messages`, `price_offers` | постоянный диалог и торг до/после покупки |
 | `deals`, `deal_messages` | защищённые средства и жизненный цикл сделки |
@@ -151,7 +152,9 @@ STAR_TOPUP_MAX=1000
 - `GET /api/listings?type=regular|unique`, `GET /api/listings/{id}`, `POST /api/listings`
 - `PATCH|DELETE /api/listings/{id}`, `POST /api/listings/{id}/promote`
 - `POST /api/admin/listings/unique`, `PATCH|DELETE /api/admin/listings/{id}`
-- `GET /api/accounts`, `POST /api/admin/accounts`, `PATCH|DELETE /api/admin/accounts/{id}`
+- `GET /api/training`, `GET /api/training/{id}`
+- `GET|POST /api/admin/training`, `PATCH|DELETE /api/admin/training/{id}`
+- Устаревшие маршруты `/api/accounts` временно сохранены для совместимости и анализа старых данных, но пользовательский интерфейс их не вызывает.
 - `GET /api/cart`, `POST|DELETE /api/cart/items/{listing_id}`, `POST /api/cart/checkout`
 - `GET|POST|DELETE /api/favorites...`
 - `POST /api/conversations/listing/{listing_id}`, `GET /api/conversations`
@@ -174,6 +177,20 @@ STAR_TOPUP_MAX=1000
 - `GET /api/admin/users/{id}/financial-history`, `POST /api/admin/balance-adjustments`
 - `GET /api/admin/support/tickets`, `POST|PATCH /api/admin/support/tickets/{id}...`
 - `POST /api/telegram/webhook`
+
+## Обучение — первый этап
+
+Пользовательская вкладка «Аккаунты» заменена вкладкой «Обучение». Старые записи и таблица `account_listings` не удаляются: они временно скрыты из интерфейса и сохранены для аудита и безопасного отката.
+
+Продукты обучения хранятся отдельно в `training_products` и поддерживают типы `personal` и `automatic`. Публичный API возвращает только опубликованные и не удалённые продукты; закреплённые продукты сортируются первыми. Создание, редактирование, публикация, снятие с публикации, бесплатное закрепление и soft delete доступны только администратору и повторно проверяются backend.
+
+Закрытые материалы в модели и публичных ответах отсутствуют. Покупка, Telegram-выдача, библиотека курса и completion workflow намеренно не подключены на этом этапе. В навигации и пустом состоянии используется предоставленная администратором эмблема `webapp/images/gg-training-icon.jpg`.
+
+### Мобильный запуск и диагностика
+
+Критический bootstrap загружает только Telegram `initData` и `/api/me`, после чего сразу показывает shell. Каталог, профиль, корзина, реклама, уведомления и обучение загружаются независимо: ошибка или timeout одного вторичного endpoint не блокирует Market. Для Railway cold start предусмотрены ограниченные повторные попытки без бесконечного цикла.
+
+Диагностика фиксирует endpoint, HTTP-статус, длительность, тип ошибки, Telegram ID, платформу и startup stage (`telegram_ready`, `auth_started`, `auth_success`, `me_loaded`, `shell_rendered`, `market_loading`, `market_loaded`). Полный `initData`, токены и платёжные секреты не логируются.
 
 ## Публикация и продвижение объявлений
 

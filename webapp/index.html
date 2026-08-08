@@ -62,12 +62,13 @@
           <div class="empty-state empty-state--tall" id="uniqueEmptyState"><div class="empty-star" aria-hidden="true">☆</div><h2>Уникальных машин пока нет</h2><p>Раздел заполняет только администратор</p></div>
         </section>
 
-        <section class="view" data-view="accounts" aria-labelledby="accountsTitle" hidden>
-          <div class="compact-page-title admin-title-row"><div><span class="eyebrow">Проверенные продавцы</span><h1 id="accountsTitle">Аккаунты</h1></div><button class="admin-add-button" type="button" data-open-account data-admin-only hidden>＋ Добавить аккаунт</button></div>
-          <div class="account-warning">Перед покупкой внимательно ознакомьтесь с описанием товара и правилами сервиса. Доступность передачи аккаунта зависит от правил соответствующей платформы или игры.</div>
-          <div class="account-list" id="accountCards"></div>
-          <div class="empty-state empty-state--tall" id="accountsEmptyState"><div class="empty-user" aria-hidden="true"></div><h2>Аккаунтов пока нет</h2></div>
+        <section class="view" data-view="training" aria-labelledby="trainingTitle" hidden>
+          <div class="compact-page-title admin-title-row"><div><span class="eyebrow">Премиальные материалы</span><h1 id="trainingTitle">Обучение</h1></div><button class="admin-add-button" type="button" data-open-training data-admin-only hidden>＋ Создать</button></div>
+          <div class="training-list" id="trainingCards"></div>
+          <div class="empty-state empty-state--tall" id="trainingEmptyState"><img class="training-identity" src="images/gg-training-icon.jpg" alt="" aria-hidden="true" /><h2>Обучений пока нет</h2><p>Новые программы появятся здесь</p></div>
         </section>
+
+        <section class="view training-detail" data-view="training-detail" aria-labelledby="trainingDetailTitle" hidden><div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><span class="premium-mark">PREMIUM</span></div><img class="training-detail__cover" id="trainingDetailCover" alt="Обложка обучения" /><div class="training-detail__body"><span class="training-type" id="trainingDetailType"></span><h1 id="trainingDetailTitle"></h1><p id="trainingDetailDescription"></p><div class="training-detail__meta"><span id="trainingDetailAvailability"></span><strong><span id="trainingDetailPrice">0</span> <i class="af-coin af-coin--small"></i></strong></div><video id="trainingDetailVideo" controls playsinline hidden></video><button class="publish-button" id="trainingBuyButton" type="button">Купить обучение</button><p class="commission-note">Покупка и выдача материалов будут подключены на следующем этапе.</p></div></section>
 
         <section class="view profile-view" data-view="profile" aria-labelledby="profileTitle" hidden>
           <div class="screen-heading"><h1 id="profileTitle">Профиль</h1><button class="settings-button" id="settingsButton" type="button" aria-label="Настройки">⚙</button></div>
@@ -221,16 +222,16 @@
           <form class="support-form" id="supportForm"><label>Тема<select name="topic" required><option value="">Выберите тему</option><option value="payment">Оплата и баланс</option><option value="deal">Сделка</option><option value="listing">Объявление</option><option value="withdrawal">Вывод средств</option><option value="other">Другое</option></select></label><label>Сообщение<textarea name="message" rows="5" minlength="2" maxlength="4000" required></textarea></label><label>Скриншот, не более одного<input name="screenshot" type="file" accept="image/jpeg,image/png,image/webp" /></label><button class="publish-button" type="submit">Отправить обращение</button></form><h2 class="profile-subtitle">Мои обращения</h2><div class="support-list" id="supportTickets"></div>
         </section>
 
-        <section class="view form-view" data-view="account-draft" aria-labelledby="accountDraftTitle" hidden>
-          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="accountDraftTitle">Добавить аккаунт</h1></div><form class="account-form" id="accountDraftForm"><label>Название<input name="title" required minlength="2" /></label><label>Уровень<input name="level" type="number" min="0" required /></label><label>Количество машин<input name="cars_count" type="number" min="0" required /></label><label>Игровая валюта<input name="game_currency" required /></label><label>Дополнительная валюта<input name="extra_currency" /></label><label>Дома и другие игровые активы<textarea name="game_assets" rows="3"></textarea></label><label>Привязка электронной почты<select name="email_binding" required><option value="unknown">Не указано</option><option value="linked">Привязана</option><option value="unlinked">Не привязана</option></select></label><label class="switch-row"><span>Автовыдача</span><input name="auto_delivery" type="checkbox" /><i aria-hidden="true"></i></label><label>Описание и условия передачи<textarea name="description" rows="4" required minlength="5"></textarea></label><label>Цена в AF Coins<input name="price_af_coins" type="number" min="0" required /></label><label>Одна фотография<input name="photo" type="file" accept="image/jpeg,image/png,image/webp" required /></label><div class="account-warning">Перед публикацией убедитесь, что передача аккаунта разрешена правилами соответствующей платформы или игры. Логины и пароли приложение не хранит.</div><button class="publish-button" type="submit">Опубликовать</button></form>
+        <section class="view form-view" data-view="training-editor" aria-labelledby="trainingEditorTitle" hidden>
+          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="trainingEditorTitle">Создать обучение</h1></div><form class="account-form" id="trainingForm"><input name="product_id" type="hidden" /><label>Название<input name="title" required minlength="2" maxlength="180" /></label><label>Краткое описание<textarea name="short_description" rows="2" required minlength="5" maxlength="360"></textarea></label><label>Полное описание<textarea name="full_description" rows="7" required minlength="10" maxlength="12000"></textarea></label><label>Тип<select name="product_type" required><option value="personal">Персональное</option><option value="automatic">Автоматическое</option></select></label><label>Доступность<select name="availability" required><option value="available">Доступно</option><option value="coming_soon">Скоро</option><option value="unavailable">Недоступно</option></select></label><label>Цена в AF Coins<input name="price_af_coins" type="number" min="0" step="0.01" required /></label><label>Одна основная обложка<input name="cover" type="file" accept="image/jpeg,image/png,image/webp" /></label><label>Ссылка на промо-видео (необязательно)<input name="promo_video_url" type="url" /></label><label class="switch-row"><span>Опубликовано</span><input name="published" type="checkbox" /><i aria-hidden="true"></i></label><label class="switch-row"><span>Закрепить бесплатно</span><input name="pinned" type="checkbox" /><i aria-hidden="true"></i></label><button class="publish-button" type="submit">Сохранить обучение</button></form>
         </section>
 
-        <section class="view form-view" data-view="admin" aria-labelledby="adminTitle" hidden>++
+        <section class="view form-view" data-view="admin" aria-labelledby="adminTitle" hidden>
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="adminTitle">Администрирование</h1></div><div class="admin-panel"><div class="admin-tabs"><button class="is-active" type="button" data-admin-tab="users">Пользователи</button><button type="button" data-admin-tab="listings">Объявления</button><button type="button" data-admin-tab="deals">Сделки</button><button type="button" data-admin-tab="withdrawals">Выводы</button><button type="button" data-admin-tab="support">Поддержка</button><button type="button" data-admin-tab="advertisement">Реклама</button></div><section data-admin-panel="users"><form class="admin-search" id="adminUserSearch"><input name="q" placeholder="Имя, username или Telegram ID" /><button type="submit">Найти</button></form><div id="adminUsers"></div><div class="admin-user-history" id="adminUserHistory" hidden></div><h2>Корректировка баланса</h2><form id="balanceAdjustmentForm"><input name="user_id" placeholder="UUID пользователя" required /><input name="amount" type="number" step="0.01" placeholder="Сумма со знаком" required /><textarea name="reason" placeholder="Обязательная причина" required></textarea><button class="publish-button" type="submit">Создать операцию</button></form></section><section data-admin-panel="listings" hidden><div id="adminListings"></div></section><section data-admin-panel="deals" hidden><div id="adminDeals"></div></section><section data-admin-panel="withdrawals" hidden><h2>Заявки на вывод</h2><div id="adminWithdrawals"></div></section><section data-admin-panel="support" hidden><div id="adminSupportTickets"></div></section><section data-admin-panel="advertisement" hidden><form id="advertisementForm"><label>Изображение 1200 × 400, до 2 МБ<input name="image" type="file" accept="image/jpeg,image/png,image/webp" /></label><label>Ссылка перехода<input name="link_url" type="url" placeholder="https://..." /></label><label class="switch-row"><span>Показывать баннер</span><input name="is_active" type="checkbox" checked /><i aria-hidden="true"></i></label><div class="advertisement-preview" id="advertisementPreview">Баннер пока не загружен</div><button class="publish-button" type="submit">Сохранить рекламу</button><button class="ghost-button" id="deleteAdvertisementButton" type="button">Удалить рекламу</button></form></section></div>
         </section>
       </main>
 
-      <nav class="bottom-nav" id="bottomNav" aria-label="Основная навигация"><button class="nav-item" type="button" data-nav-target="unique"><span class="nav-icon">◇</span><span>Уникальные</span></button><button class="nav-item" type="button" data-nav-target="accounts"><span class="nav-icon">♟</span><span>Аккаунты</span></button><button class="nav-market is-active" type="button" data-nav-target="market" aria-current="page"><span>★</span><small>Market</small></button><button class="nav-item" type="button" data-nav-target="profile"><span class="nav-icon">♟</span><span>Профиль</span></button><button class="nav-item" type="button" data-nav-target="more"><span class="nav-icon nav-grid">▪▪<br />▪▪</span><span>Ещё</span></button></nav>
+      <nav class="bottom-nav" id="bottomNav" aria-label="Основная навигация"><button class="nav-item" type="button" data-nav-target="unique"><span class="nav-icon">◇</span><span>Уникальные</span></button><button class="nav-item" type="button" data-nav-target="training"><img class="gg-nav-icon" src="images/gg-training-icon.jpg" alt="" aria-hidden="true" /><span>Обучение</span></button><button class="nav-market is-active" type="button" data-nav-target="market" aria-current="page"><span>★</span><small>Market</small></button><button class="nav-item" type="button" data-nav-target="profile"><span class="nav-icon">♟</span><span>Профиль</span></button><button class="nav-item" type="button" data-nav-target="more"><span class="nav-icon nav-grid">▪▪<br />▪▪</span><span>Ещё</span></button></nav>
     </div>
 
     <dialog class="modal" id="infoModal"><div class="modal-head"><div><span class="eyebrow">О приложении</span><h2>AUTOFLOW MARKET</h2></div><button type="button" data-close-dialog="infoModal" aria-label="Закрыть">×</button></div><p>AUTOFLOW MARKET — удобная площадка внутри Telegram для размещения и поиска автомобильных предложений. Вы оплачиваете, но продавец не получит деньги, пока вы не подтвердите, что всё получили. Все объявления, операции и статусы сделки сохраняются в истории.</p><p>AF Coins, купленные через Telegram Stars, можно тратить внутри сервиса, но нельзя выводить. Для вывода доступны только AF Coins, заработанные после продаж. При завершённой сделке продавец получает 70% цены, комиссия платформы составляет 30%.</p><p class="security-note">Никому не передавайте пароль, коды подтверждения или доступ к Telegram. Перед подтверждением сделки убедитесь, что получили именно заявленный товар.</p><button class="publish-button" type="button" data-close-dialog="infoModal">Понятно</button></dialog>
@@ -265,17 +266,25 @@
     </div>
 </div>
     <script>
-window.addEventListener("load", () => {
+(() => {
   const intro = document.getElementById("introScreen");
   const video = document.getElementById("introVideo");
-
-  if (!intro || !video) return;
-
-  video.onended = () => {
+  let removed = false;
+  const dismiss = () => {
+    if (removed || !intro) return;
+    removed = true;
+    intro.style.pointerEvents = "none";
     intro.style.opacity = "0";
-    setTimeout(() => intro.remove(), 500);
+    window.setTimeout(() => intro.remove(), 500);
   };
-});
+  window.AutoFlowIntro = Object.freeze({ dismiss });
+  if (!video) return dismiss();
+  video.addEventListener("ended", dismiss, { once: true });
+  video.addEventListener("error", dismiss, { once: true });
+  if (video.ended) dismiss();
+  else video.play().catch(() => {});
+  window.setTimeout(dismiss, 4500);
+})();
 </script>
   </body>
 </html>

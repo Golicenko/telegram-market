@@ -464,10 +464,28 @@ body.chat-open{height:var(--chat-viewport-height,100dvh);overflow:hidden}.chat-o
     transition: opacity .5s ease;
 }
 
-.chat-view{inset:auto auto auto 50%;top:var(--chat-viewport-top,0px)}.conversation-primary,.conversation-secondary{grid-column:2/4}
+.conversation-primary,.conversation-secondary{grid-column:2/4}
+
+/* Telegram mobile WebViews use different layout and visual viewports. Keep the
+   open conversation anchored to both physical edges instead of centering it
+   with a transform, which caused the half-screen offset on real phones. */
+.chat-view{top:var(--chat-viewport-top,0px);right:0;bottom:auto;left:0;inset-inline:0;width:100%;max-width:none;transform:none;overflow-x:clip;padding-inline:max(10px,env(safe-area-inset-left)) max(10px,env(safe-area-inset-right))}
+@media(min-width:620px){.chat-view{right:auto;left:50%;width:min(100%,520px);transform:translateX(-50%)}}
+
+.wallet-breakdown small{color:#707d8a;font-size:7px;font-weight:400;line-height:1.25}
+.wallet-breakdown>div small{display:block}
+.chat-header,.chat-listing,.offer-panel,.chat-compose,.chat-form{min-width:0;max-width:100%}
+.chat-listing strong,.chat-listing small,.offer-panel span{overflow-wrap:anywhere}
+.message{min-width:0;word-break:break-word}
+@media(max-width:360px){.chat-view{padding-inline:max(7px,env(safe-area-inset-left)) max(7px,env(safe-area-inset-right))}.chat-header{grid-template-columns:30px 36px minmax(0,1fr) auto;gap:5px}.chat-avatar{width:36px;height:36px}.chat-hide{max-width:58px;padding-inline:5px;white-space:normal;line-height:1.15}.chat-listing{grid-template-columns:38px minmax(0,1fr) auto;padding-inline:6px}.chat-listing img{width:38px;height:36px}.message{max-width:88%}}
 
 #introVideo {
     width: 100%;
     height: 100%;
     object-fit: cover;
 }
+
+/* Premium training products use the administrator-provided silver emblem. */
+.gg-nav-icon{width:27px;height:27px;margin:auto;border:1px solid rgba(216,180,83,.38);border-radius:9px;object-fit:cover;object-position:center;box-shadow:0 0 10px rgba(204,170,84,.13)}
+.training-identity{width:78px;height:78px;margin-bottom:3px;border:1px solid rgba(216,180,83,.4);border-radius:22px;object-fit:cover;object-position:center;box-shadow:0 0 24px rgba(200,154,48,.12)}
+.gg-nav-placeholder,.gg-placeholder{display:grid;place-items:center;color:#d9b85b;font-weight:1000;letter-spacing:-.08em}.gg-nav-placeholder{width:25px;height:25px;margin:auto;border:1px solid rgba(216,180,83,.55);border-radius:8px;font-size:10px}.gg-placeholder{width:76px;height:76px;border:1px solid rgba(216,180,83,.45);border-radius:22px;background:radial-gradient(circle,rgba(211,171,68,.12),transparent 70%);box-shadow:0 0 24px rgba(200,154,48,.1);font-size:22px}.training-list{display:grid;gap:13px;margin-top:12px}.training-card{position:relative;overflow:hidden;border:1px solid rgba(213,174,76,.58);border-radius:16px;background:linear-gradient(145deg,#141512,#090c10 65%);box-shadow:0 14px 30px rgba(0,0,0,.34),inset 0 0 0 1px rgba(255,226,142,.04)}.training-card::before{content:"";position:absolute;z-index:2;inset:5px;border:1px solid rgba(224,190,95,.13);border-radius:11px;pointer-events:none}.training-card.is-pinned{box-shadow:0 14px 34px rgba(0,0,0,.42),0 0 19px rgba(205,157,49,.15)}.training-card.is-draft{opacity:.7}.training-card__open{width:100%;padding:0;border:0;color:var(--text);background:transparent;text-align:left}.training-card__media{position:relative;aspect-ratio:16/8;overflow:hidden;background:#131713}.training-card__media::after{content:"";position:absolute;inset:45% 0 0;background:linear-gradient(transparent,rgba(6,8,10,.82))}.training-card__media img{width:100%;height:100%;object-fit:cover}.premium-mark{display:inline-flex;align-items:center;min-height:22px;padding:0 8px;border:1px solid rgba(232,198,105,.55);border-radius:7px;color:#efd27d;background:rgba(16,14,8,.76);font-size:8px;font-weight:900;letter-spacing:.12em}.training-card__media .premium-mark{position:absolute;z-index:2;left:10px;top:10px}.training-card__body{padding:12px 13px 14px}.training-type{display:inline-block;color:#cba94f;font-size:8px;font-weight:850;letter-spacing:.08em;text-transform:uppercase}.training-card h3{margin:5px 0 6px;font-size:16px}.training-card p{display:-webkit-box;margin:0;overflow:hidden;color:#aeb5bc;font-size:10px;line-height:1.5;-webkit-box-orient:vertical;-webkit-line-clamp:2}.training-card__footer{display:flex;align-items:center;justify-content:space-between;margin-top:11px}.training-card__footer strong{color:#efc65f;font-size:14px}.training-card__footer>span{color:#b6a16a;font-size:9px}.training-admin-actions{position:relative;z-index:3;display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:0 12px 12px}.training-admin-actions button{min-height:32px;border:1px solid rgba(211,175,80,.3);border-radius:8px;color:#d7bd78;background:#11151a;font-size:9px}.training-detail{padding-bottom:calc(90px + var(--safe-bottom));background:linear-gradient(180deg,#11130f,#05090e 60%)}.training-detail .screen-heading{padding:0 8px}.training-detail__cover{width:calc(100% + 20px);max-height:290px;margin-left:-10px;aspect-ratio:4/3;object-fit:cover}.training-detail__body{position:relative;margin-top:-26px;padding:18px 14px;border:1px solid rgba(213,174,76,.38);border-radius:18px 18px 0 0;background:linear-gradient(180deg,rgba(16,18,16,.98),#070b10)}.training-detail h1{margin:7px 0 10px;font-size:23px;line-height:1.12}.training-detail__body>p{white-space:pre-line;color:#bdc3c8;font-size:11px;line-height:1.65}.training-detail__meta{display:flex;align-items:center;justify-content:space-between;margin:15px 0;padding:11px;border:1px solid rgba(213,174,76,.25);border-radius:10px;background:rgba(210,170,68,.045)}.training-detail__meta span{color:#cab474;font-size:10px}.training-detail__meta strong{color:#efc65f;font-size:16px}.training-detail video{width:100%;max-height:240px;margin:0 0 14px;border-radius:10px;background:#000}
