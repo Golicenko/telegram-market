@@ -25,6 +25,7 @@
     const initData = window.Telegram?.WebApp?.initData;
     if (initData) headers["X-Telegram-Init-Data"] = initData;
     headers["X-Telegram-Platform"] = window.Telegram?.WebApp?.platform || "browser";
+    if (window.AutoFlowStartupStage) headers["X-AutoFlow-Startup-Stage"] = window.AutoFlowStartupStage;
     return headers;
   }
 
@@ -50,6 +51,8 @@
       error_type: error?.errorType || error?.name || "Error",
       telegram_user_id: telegramUserId(),
       platform: window.Telegram?.WebApp?.platform || "browser",
+      startup_stage: window.AutoFlowStartupStage || "unknown",
+      user_agent: String(window.navigator?.userAgent || "unknown").slice(0, 180),
       attempt,
       time: new Date().toISOString(),
     };

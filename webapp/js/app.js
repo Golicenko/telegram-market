@@ -10,7 +10,8 @@
     me: null,
     regular: [],
     unique: [],
-    accounts: [],
+    training: [],
+    selectedTraining: null,
     cart: [],
     advertisement: null,
     supportTickets: [],
@@ -38,8 +39,8 @@
     uniqueCars: document.getElementById("uniqueCars"),
     marketEmpty: document.getElementById("marketEmptyState"),
     uniqueEmpty: document.getElementById("uniqueEmptyState"),
-    accountCards: document.getElementById("accountCards"),
-    accountsEmpty: document.getElementById("accountsEmptyState"),
+    trainingCards: document.getElementById("trainingCards"),
+    trainingEmpty: document.getElementById("trainingEmptyState"),
     brandFilter: document.getElementById("brandFilter"),
     modelFilter: document.getElementById("modelFilter"),
     priceFilter: document.getElementById("priceFilter"),
@@ -104,6 +105,8 @@
   let bootstrapPromise = null;
   let criticalRecoveryUsed = false;
   let optionalRecoveryTimer = null;
+  let startupRecoveryTimer = null;
+  let initializedTelegram = null;
 
   installGlobalErrorHandlers();
   startApplication();
@@ -129,7 +132,8 @@
   }
 
   function initTelegram() {
-    if (!telegram) return;
+    if (!telegram || initializedTelegram === telegram) return;
+    initializedTelegram = telegram;
     safeTelegramCall("ready", () => telegram.ready());
     safeTelegramCall("expand", () => telegram.expand());
     safeTelegramCall("viewport", () => telegram.onEvent?.("viewportChanged", updateChatViewport));
@@ -139,6 +143,7 @@
         telegram.setBackgroundColor?.("#030912");
       }
     });
+    reportStartupStage("telegram_ready");
   }
 
   function bindEvents() {
@@ -160,7 +165,8 @@
     bind(document.getElementById("chatInput"), "input", resizeChatInput, "chatInput");
     bind(elements.chatListing, "click", openChatListing, "chatListing");
     bind(elements.withdrawForm, "submit", createWithdrawal, "withdrawForm");
-    bind(document.getElementById("accountDraftForm"), "submit", submitAccountListing, "accountDraftForm");
+    bind(document.getElementById("trainingForm"), "submit", submitTrainingProduct, "trainingForm");
+    bind(document.getElementById("trainingBuyButton"), "click", () => notify("Покупка обучения будет подключена на следующем этапе"), "trainingBuyButton");
     bind(elements.supportForm, "submit", submitSupportTicket, "supportForm");
     bind(elements.advertisementForm, "submit", submitAdvertisement, "advertisementForm");
     bind(document.getElementById("deleteAdvertisementButton"), "click", deleteAdvertisement, "deleteAdvertisementButton");
@@ -179,32 +185,43 @@
 
   async function runBootstrap(options) {
     showStartupLoading(options.automatic ? "Восстанавливаем соединение…" : "Загрузка…");
-    if (!api) return showStartupError("Не удалось загрузить API-клиент.", true);
-    if (!telegram?.initData && hasTelegramLaunchHint()) await waitForTelegramSdk(8000);
+    if (!api) return showStartupError("Не удалось загрузить приложение. Попробуйте ещё раз.", true);
+    if (!telegram?.initData) await waitForTelegramSdk(6000);
+    if (telegram?.initData) initTelegram();
     if (!telegram?.initData && window.AUTO_FLOW_ALLOW_BROWSER_DEV !== true) {
       state.serverAvailable = false;
       const telegramLaunch = hasTelegramLaunchHint();
+      reportStartupStage("auth_missing_init_data", { telegram_launch_hint: telegramLaunch });
       showStartupError(
-        telegramLaunch ? "Не удалось загрузить Telegram WebApp. Проверьте соединение и повторите запуск." : "Откройте AutoFlow Market через Telegram.",
+        telegramLaunch ? "Не удалось подтвердить запуск через Telegram. Закройте Mini App и откройте снова." : "Откройте AutoFlow Market через Telegram.",
         telegramLaunch,
       );
       return;
     }
+    reportStartupStage("auth_started");
     try {
-      state.me = await api.request("/me", { timeoutMs: 10000, retries: 1, retryDelayMs: 700 });
+      state.me = await authenticateCurrentUser();
     } catch (error) {
       state.serverAvailable = false;
       reportClientError("bootstrap_me", error);
-      const message = error.status === 401
+      const unauthorized = error.status === 401;
+      const forbidden = error.status === 403;
+      const retryable = !unauthorized && !forbidden;
+      const message = unauthorized
         ? "Не удалось подтвердить вход через Telegram. Закройте Mini App и откройте снова."
-        : "Сервер запускается дольше обычного. Приложение попробует подключиться ещё раз.";
-      showStartupError(message, true);
-      if (!criticalRecoveryUsed && !options.manual) {
+        : forbidden
+          ? "Доступ к приложению ограничен."
+          : "Не удалось подключиться к серверу. Попробуйте ещё раз.";
+      showStartupError(message, retryable || unauthorized);
+      if (retryable && !criticalRecoveryUsed && !options.manual) {
         criticalRecoveryUsed = true;
-        window.setTimeout(() => void bootstrap({ automatic: true }), 3500);
+        window.clearTimeout(startupRecoveryTimer);
+        startupRecoveryTimer = window.setTimeout(() => void bootstrap({ automatic: true }), 5000);
       }
       return;
     }
+    reportStartupStage("auth_success");
+    reportStartupStage("me_loaded");
     state.serverAvailable = true;
     state.optionalRecoveryUsed = false;
     criticalRecoveryUsed = false;
@@ -215,14 +232,37 @@
     updateFloatingChatVisibility();
     startMessagePolling();
     hideStartup();
+    dismissIntro();
+    reportStartupStage("shell_rendered");
+    reportStartupStage("market_loading");
     void loadOptionalData();
+  }
+
+  async function authenticateCurrentUser() {
+    const delays = [0, 1200, 2600];
+    let lastError;
+    for (let attempt = 0; attempt < delays.length; attempt += 1) {
+      if (delays[attempt]) {
+        showStartupLoading("Сервер запускается. Восстанавливаем соединение…");
+        await new Promise((resolve) => window.setTimeout(resolve, delays[attempt]));
+      }
+      try {
+        return await api.request("/me", { timeoutMs: 18000, retries: 0 });
+      } catch (error) {
+        lastError = error;
+        reportClientError(`bootstrap_me_attempt_${attempt + 1}`, error);
+        const retryable = error?.errorType === "timeout" || error?.errorType === "network" || Number(error?.status || 0) >= 500;
+        if (!retryable) throw error;
+      }
+    }
+    throw lastError;
   }
 
   const optionalLoaders = {
     catalog: async () => { state.catalog = await api.resource("data/vehicle_catalog.json", { timeoutMs: 8000, retries: 1 }); },
     regular: async () => { state.regular = await api.request("/listings?type=regular"); },
     unique: async () => { state.unique = await api.request("/listings?type=unique"); },
-    accounts: async () => { state.accounts = await api.request("/accounts"); },
+    training: async () => { state.training = await api.request(state.me?.user.role === "admin" ? "/admin/training" : "/training"); },
     cart: async () => { state.cart = await api.request("/cart"); },
     profile: async () => { state.profile = await api.request("/profile"); },
     advertisement: async () => { state.advertisement = await api.request("/advertisement", { timeoutMs: 8000 }); },
@@ -231,17 +271,20 @@
 
   async function loadOptionalData(keys = Object.keys(optionalLoaders), options = {}) {
     if (!state.serverAvailable) return [];
-    const results = await Promise.allSettled(keys.map((key) => optionalLoaders[key]()));
-    results.forEach((result, index) => {
-      const key = keys[index];
-      if (result.status === "fulfilled") state.failedOptional.delete(key);
-      else {
+    const tasks = keys.map(async (key) => {
+      try {
+        await optionalLoaders[key]();
+        state.failedOptional.delete(key);
+        if (key === "regular") reportStartupStage("market_loaded");
+        updateFilterOptions();
+        renderAll();
+      } catch (error) {
         state.failedOptional.add(key);
-        reportClientError(`optional_${key}`, result.reason);
+        reportClientError(`optional_${key}`, error);
+        throw error;
       }
     });
-    updateFilterOptions();
-    renderAll();
+    const results = await Promise.allSettled(tasks);
     updateSyncStatus();
     if (state.failedOptional.size && options.allowRecovery !== false && !state.optionalRecoveryUsed) {
       state.optionalRecoveryUsed = true;
@@ -260,7 +303,7 @@
 
   async function refreshMarketplace() {
     if (!state.serverAvailable) return;
-    await loadOptionalData(["regular", "unique", "accounts", "cart", "profile", "advertisement"], { allowRecovery: false });
+    await loadOptionalData(["regular", "unique", "training", "cart", "profile", "advertisement"], { allowRecovery: false });
   }
 
   function hasTelegramLaunchHint() {
@@ -295,8 +338,8 @@ function handleClick(event) {
     return void openListingForm("unique");
   }
 
-  if (target.closest("[data-open-account]")) {
-    return void openAdminAccountDraft();
+  if (target.closest("[data-open-training]")) {
+    return void openTrainingEditor();
   }
 
   if (target.closest("[data-open-cart]")) {
@@ -406,8 +449,12 @@ function handleClick(event) {
     const offerAction = target.closest("[data-offer-action]");
     if (offerAction) return void runOfferAction(offerAction);
     if (target.closest("[data-new-offer]")) return void createOffer();
-    const accountDelete = target.closest("[data-delete-account]");
-    if (accountDelete) return void deleteAccountListing(accountDelete.dataset.deleteAccount);
+    const trainingOpen = target.closest("[data-open-training-product]");
+    if (trainingOpen) return void openTrainingProduct(trainingOpen.dataset.openTrainingProduct);
+    const trainingEdit = target.closest("[data-edit-training]");
+    if (trainingEdit) return void openTrainingEditor(trainingEdit.dataset.editTraining);
+    const trainingDelete = target.closest("[data-delete-training]");
+    if (trainingDelete) return void deleteTrainingProduct(trainingDelete.dataset.deleteTraining);
     const adminTab = target.closest("[data-admin-tab]");
     if (adminTab) return void switchAdminTab(adminTab.dataset.adminTab);
     const userAction = target.closest("[data-admin-user-action]");
@@ -434,15 +481,15 @@ function handleClick(event) {
       view.hidden = !active;
       view.classList.toggle("is-active", active);
     });
-    const navView = ["add", "cart", "deal-chat"].includes(viewName) ? "market" : ["topup", "withdraw"].includes(viewName) ? "profile" : ["admin", "support"].includes(viewName) ? "more" : viewName;
+    const navView = ["add", "cart", "deal-chat"].includes(viewName) ? "market" : viewName === "training-detail" || viewName === "training-editor" ? "training" : ["topup", "withdraw"].includes(viewName) ? "profile" : ["admin", "support"].includes(viewName) ? "more" : viewName;
     elements.navButtons.forEach((button) => {
       const active = button.dataset.navTarget === navView;
       button.classList.toggle("is-active", active);
       active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
     });
-    elements.shell.classList.toggle("is-focused", ["add", "topup", "cart", "profile", "deal-chat", "withdraw", "support", "account-draft", "admin"].includes(viewName));
+    elements.shell.classList.toggle("is-focused", ["add", "topup", "cart", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "admin"].includes(viewName));
     window.scrollTo({ top: 0, behavior: "smooth" });
-    if (state.serverAvailable && ["market", "unique", "accounts", "profile", "cart"].includes(viewName)) {
+    if (state.serverAvailable && ["market", "unique", "training", "profile", "cart"].includes(viewName)) {
       try { await refreshMarketplace(); } catch (error) { notify(error.message); }
     }
   }
@@ -551,7 +598,7 @@ function handleClick(event) {
   }
 
   function updateFloatingChatVisibility() {
-  const visibleViews = ["market", "unique", "accounts", "profile"];
+  const visibleViews = ["market", "unique", "training", "profile"];
   const shouldShow = visibleViews.includes(state.currentView);
 
   elements.floatingChatButton.hidden = !shouldShow;
@@ -571,7 +618,7 @@ function handleClick(event) {
   switchProfileTab("chats");
   }
   function openSecondary(viewName) {
-    state.previousView = ["add", "topup", "cart", "deal-chat", "withdraw", "support", "account-draft", "admin"].includes(state.currentView) ? "market" : state.currentView;
+    state.previousView = ["add", "topup", "cart", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "admin"].includes(state.currentView) ? "market" : state.currentView;
     navigate(viewName);
   }
 
@@ -590,12 +637,6 @@ function handleClick(event) {
     elements.modelInput.disabled = true;
     elements.modelInput.placeholder = "Сначала выберите марку";
     openSecondary("add");
-  }
-
-  function openAdminAccountDraft() {
-    if (state.me?.user.role !== "admin") return notify("Требуется роль администратора");
-    document.getElementById("accountDraftForm").reset();
-    openSecondary("account-draft");
   }
 
   async function openSupport() {
@@ -623,7 +664,7 @@ function handleClick(event) {
 
   function renderAll() {
     renderListings();
-    renderAccounts();
+    renderTraining();
     renderCart();
     renderProfile();
     renderBalance();
@@ -756,24 +797,22 @@ function handleClick(event) {
     return card;
   }
 
-  function renderAccounts() {
-    elements.accountCards.replaceChildren(...state.accounts.map((account) => {
-      const card = document.createElement("article"); card.className = "account-card";
-      const media = document.createElement("div"); media.className = "account-card__media";
-      if (account.image_url) { const image = document.createElement("img"); image.src = absoluteMediaUrl(account.image_url); image.alt = account.title; media.append(image); }
-      else media.textContent = "AF";
-      const body = document.createElement("div"); body.className = "account-card__body";
-      const title = document.createElement("h3"); title.textContent = account.title;
-      const facts = document.createElement("p"); facts.textContent = `Уровень ${account.level} · ${account.cars_count} машин · ${account.game_currency}${account.extra_currency ? ` · ${account.extra_currency}` : ""}`;
-      const email = document.createElement("small"); email.textContent = `Email: ${{linked: "привязана", unlinked: "не привязана", unknown: "не указано"}[account.email_binding]}`;
-      const description = document.createElement("p"); description.textContent = account.description;
-      const assets = document.createElement("p"); assets.textContent = `${account.game_assets || "Игровые активы не указаны"} · ${account.auto_delivery ? "Автовыдача" : "Ручная передача"}`;
-      const footer = document.createElement("div"); footer.className = "account-card__footer";
-      const price = document.createElement("strong"); price.append(document.createTextNode(`${formatNumber(account.price_af_coins)} `), coin("af-coin--small")); footer.append(price);
-      if (state.me?.user.role === "admin") { const remove = document.createElement("button"); remove.dataset.deleteAccount = account.id; remove.textContent = "Удалить"; footer.append(remove); }
-      body.append(title, facts, email, assets, description, footer); card.append(media, body); return card;
+  function renderTraining() {
+    elements.trainingCards.replaceChildren(...state.training.map((product) => {
+      const card = document.createElement("article"); card.className = `training-card${product.pinned ? " is-pinned" : ""}${!product.published ? " is-draft" : ""}`;
+      const open = document.createElement("button"); open.type = "button"; open.className = "training-card__open"; open.dataset.openTrainingProduct = product.id;
+      const media = document.createElement("div"); media.className = "training-card__media"; const image = document.createElement("img"); image.src = absoluteMediaUrl(product.cover_url); image.alt = product.title; media.append(image);
+      const badge = document.createElement("span"); badge.className = "premium-mark"; badge.textContent = product.pinned ? "PREMIUM · PINNED" : "PREMIUM"; media.append(badge);
+      const body = document.createElement("div"); body.className = "training-card__body";
+      const type = document.createElement("span"); type.className = "training-type"; type.textContent = trainingTypeLabel(product.product_type);
+      const title = document.createElement("h3"); title.textContent = product.title;
+      const description = document.createElement("p"); description.textContent = product.short_description;
+      const footer = document.createElement("div"); footer.className = "training-card__footer"; const price = document.createElement("strong"); price.append(document.createTextNode(`${formatNumber(product.price_af_coins)} `), coin("af-coin--small")); const arrow = document.createElement("span"); arrow.textContent = "Подробнее ›"; footer.append(price, arrow);
+      body.append(type, title, description, footer); open.append(media, body); card.append(open);
+      if (state.me?.user.role === "admin") { const actions = document.createElement("div"); actions.className = "training-admin-actions"; const edit = document.createElement("button"); edit.dataset.editTraining = product.id; edit.textContent = "Изменить"; const remove = document.createElement("button"); remove.dataset.deleteTraining = product.id; remove.textContent = "Скрыть"; actions.append(edit, remove); card.append(actions); }
+      return card;
     }));
-    elements.accountsEmpty.hidden = state.accounts.length > 0;
+    elements.trainingEmpty.hidden = state.training.length > 0;
   }
 
   async function toggleCart(id) {
@@ -1425,7 +1464,8 @@ async function hideCurrentConversation() {
 
   function updateChatViewport() {
     const viewport = window.visualViewport;
-    const height = viewport?.height || telegram?.viewportStableHeight || window.innerHeight;
+    const heights = [viewport?.height, telegram?.viewportHeight, window.innerHeight].filter((value) => Number(value) > 0);
+    const height = Math.min(...heights);
     document.documentElement.style.setProperty("--chat-viewport-height", `${Math.round(height)}px`);
     document.documentElement.style.setProperty("--chat-viewport-top", `${Math.round(viewport?.offsetTop || 0)}px`);
     if (document.body.classList.contains("chat-open")) requestAnimationFrame(() => {
@@ -1526,19 +1566,50 @@ async function hideCurrentConversation() {
     } catch (error) { notify(error.message); }
   }
 
-  async function submitAccountListing(event) {
+  async function openTrainingProduct(id) {
+    try {
+      const cached = state.training.find((item) => String(item.id) === String(id));
+      const product = cached?.published === false ? cached : await api.request(`/training/${id}`);
+      state.selectedTraining = product;
+      document.getElementById("trainingDetailCover").src = absoluteMediaUrl(product.cover_url);
+      document.getElementById("trainingDetailTitle").textContent = product.title;
+      document.getElementById("trainingDetailDescription").textContent = product.full_description;
+      document.getElementById("trainingDetailType").textContent = trainingTypeLabel(product.product_type);
+      document.getElementById("trainingDetailAvailability").textContent = trainingAvailabilityLabel(product.availability);
+      document.getElementById("trainingDetailPrice").textContent = formatNumber(product.price_af_coins);
+      const video = document.getElementById("trainingDetailVideo"); video.hidden = !product.promo_video_url; if (product.promo_video_url) video.src = product.promo_video_url;
+      state.previousView = "training"; await navigate("training-detail");
+    } catch (error) { notify(error.message); }
+  }
+
+  function openTrainingEditor(id = null) {
+    if (state.me?.user.role !== "admin") return notify("Требуется роль администратора");
+    const form = document.getElementById("trainingForm"); form.reset();
+    const product = id ? state.training.find((item) => String(item.id) === String(id)) : null;
+    form.elements.product_id.value = product?.id || "";
+    document.getElementById("trainingEditorTitle").textContent = product ? "Изменить обучение" : "Создать обучение";
+    if (product) {
+      for (const field of ["title", "short_description", "full_description", "product_type", "availability", "price_af_coins", "promo_video_url"]) form.elements[field].value = product[field] ?? "";
+      form.elements.published.checked = product.published; form.elements.pinned.checked = product.pinned;
+    }
+    openSecondary("training-editor");
+  }
+
+  async function submitTrainingProduct(event) {
     event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const button = formElement.querySelector("button[type=submit]"); if (button.disabled) return; button.disabled = true;
     try {
-      let imageUrl = null; const photo = form.get("photo"); if (photo?.size) imageUrl = (await api.upload(photo)).url;
-      if (!imageUrl) throw new Error("Добавьте одну фотографию аккаунта");
-      await api.request("/admin/accounts", { method: "POST", body: JSON.stringify({ title: form.get("title"), level: Number(form.get("level")), cars_count: Number(form.get("cars_count")), game_currency: form.get("game_currency"), extra_currency: form.get("extra_currency") || null, game_assets: form.get("game_assets") || null, email_binding: form.get("email_binding"), auto_delivery: form.get("auto_delivery") === "on", description: form.get("description"), price_af_coins: Number(form.get("price_af_coins")), image_url: imageUrl }) });
-      formElement.reset(); await refreshMarketplace(); navigate("accounts"); notify("Аккаунт опубликован без хранения учётных данных");
+      const id = form.get("product_id"); const existing = id ? state.training.find((item) => String(item.id) === String(id)) : null;
+      let coverUrl = existing?.cover_url || null; const cover = form.get("cover"); if (cover?.size) coverUrl = (await api.upload(cover)).url;
+      if (!coverUrl) throw new Error("Добавьте одну основную обложку");
+      const payload = { title: form.get("title"), short_description: form.get("short_description"), full_description: form.get("full_description"), cover_url: coverUrl, promo_video_url: form.get("promo_video_url") || null, product_type: form.get("product_type"), availability: form.get("availability"), price_af_coins: Number(form.get("price_af_coins")), published: form.get("published") === "on", pinned: form.get("pinned") === "on" };
+      await api.request(id ? `/admin/training/${id}` : "/admin/training", { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) });
+      formElement.reset(); state.training = await api.request("/admin/training"); renderTraining(); await navigate("training"); notify("Обучение сохранено");
     } catch (error) { notify(error.message); } finally { button.disabled = false; }
   }
 
-  async function deleteAccountListing(id) {
-    if (!(await confirmAction("Удалить объявление аккаунта?"))) return;
-    try { await api.request(`/admin/accounts/${id}`, { method: "DELETE" }); await refreshMarketplace(); notify("Объявление аккаунта удалено"); }
+  async function deleteTrainingProduct(id) {
+    if (!(await confirmAction("Скрыть это обучение? Данные сохранятся в истории."))) return;
+    try { await api.request(`/admin/training/${id}`, { method: "DELETE" }); state.training = await api.request("/admin/training"); renderTraining(); notify("Обучение скрыто"); }
     catch (error) { notify(error.message); }
   }
 
@@ -1877,6 +1948,27 @@ async function hideCurrentConversation() {
     });
   }
 
+  function reportStartupStage(stage, metadata = {}) {
+    window.AutoFlowStartupStage = stage;
+    const userId = state.me?.user?.telegram_id || telegram?.initDataUnsafe?.user?.id || null;
+    const entry = {
+      stage,
+      telegram_user_id: userId,
+      platform: telegram?.platform || "browser",
+      user_agent: String(window.navigator?.userAgent || "unknown").slice(0, 180),
+      time: new Date().toISOString(),
+      ...metadata,
+    };
+    console.info("[AutoFlow Startup]", entry);
+    try { window.dispatchEvent(new CustomEvent("autoflow:startup-stage", { detail: entry })); }
+    catch (_error) { /* Diagnostics must never block startup. */ }
+  }
+
+  function dismissIntro() {
+    try { window.AutoFlowIntro?.dismiss?.(); }
+    catch (error) { reportClientError("intro_dismiss", error); }
+  }
+
   function showStartupLoading(message) {
     if (!elements.startupStatus) return;
     elements.startupStatus.hidden = false;
@@ -1893,6 +1985,7 @@ async function hideCurrentConversation() {
     elements.startupTitle.textContent = "AutoFlow Market";
     elements.startupMessage.textContent = message;
     elements.startupRetry.hidden = !canRetry;
+    dismissIntro();
   }
 
   function hideStartup() {
@@ -1919,6 +2012,8 @@ async function hideCurrentConversation() {
   function formatNumber(value) { return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(Number(value)); }
   function formatDate(value) { return new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)); }
   function formatMessageTime(value) { return value ? new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)) : ""; }
+  function trainingTypeLabel(value) { return value === "personal" ? "Персональное обучение" : "Автоматическое обучение"; }
+  function trainingAvailabilityLabel(value) { return ({ available: "Доступно", unavailable: "Недоступно", coming_soon: "Скоро" })[value] || value; }
   function uniqueValues(values) { return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru")); }
   function statusLabel(status) { return ({ active: "Доступно", reserved: "Деньги под защитой", sold: "Уже продано", paused: "Снято с публикации", deleted: "Удалено" })[status] || status; }
   function dealStatusLabel(status) { return ({ pending_payment: "Ожидает оплаты", paid: "Оплачено", seller_contacted: "Продавец на связи", transfer_in_progress: "Передача", buyer_confirmed: "Получение подтверждено", completed: "Завершена", disputed: "Спор", cancelled: "Отменена" })[status] || status; }

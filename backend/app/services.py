@@ -25,6 +25,7 @@ from .models import (
     StarPaymentIntent,
     SupportMessage,
     SupportTicket,
+    TrainingProduct,
     User,
     Wallet,
     WalletTransaction,
@@ -307,6 +308,64 @@ async def delete_account_listing(session: AsyncSession, admin: User, account_id:
             raise HTTPException(status_code=404, detail="Account listing not found")
         account.status = "deleted"
         session.add(AdminAction(admin_id=admin.id, action="delete_account_listing", target_type="account_listing", target_id=account.id))
+
+
+async def create_training_product(session: AsyncSession, admin: User, payload) -> TrainingProduct:
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Только администратор может создавать обучение")
+    async with session.begin():
+        product = TrainingProduct(
+            admin_id=admin.id,
+            title=payload.title.strip(),
+            short_description=payload.short_description.strip(),
+            full_description=payload.full_description.strip(),
+            cover_url=payload.cover_url.strip(),
+            promo_video_url=payload.promo_video_url.strip() if payload.promo_video_url else None,
+            product_type=payload.product_type,
+            price_af_coins=money(payload.price_af_coins),
+            availability=payload.availability,
+            published=payload.published,
+            pinned=payload.pinned,
+        )
+        session.add(product)
+        await session.flush()
+        session.add(AdminAction(admin_id=admin.id, action="create_training_product", target_type="training_product", target_id=product.id))
+    return product
+
+
+async def update_training_product(session: AsyncSession, admin: User, product_id: uuid.UUID, payload) -> TrainingProduct:
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Требуется роль администратора")
+    async with session.begin():
+        product = await session.scalar(select(TrainingProduct).where(TrainingProduct.id == product_id).with_for_update())
+        if not product or product.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Обучение не найдено")
+        if product.admin_id != admin.id:
+            raise HTTPException(status_code=403, detail="Можно изменять только собственные обучения")
+        changes = payload.model_dump(exclude_unset=True)
+        for field, value in changes.items():
+            if field == "price_af_coins" and value is not None:
+                value = money(value)
+            if isinstance(value, str):
+                value = value.strip()
+            setattr(product, field, value)
+        session.add(AdminAction(admin_id=admin.id, action="update_training_product", target_type="training_product", target_id=product.id, metadata_json={"fields": sorted(changes)}))
+    return product
+
+
+async def delete_training_product(session: AsyncSession, admin: User, product_id: uuid.UUID) -> None:
+    if admin.role != "admin":
+        raise HTTPException(status_code=403, detail="Требуется роль администратора")
+    async with session.begin():
+        product = await session.scalar(select(TrainingProduct).where(TrainingProduct.id == product_id).with_for_update())
+        if not product or product.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Обучение не найдено")
+        if product.admin_id != admin.id:
+            raise HTTPException(status_code=403, detail="Можно удалять только собственные обучения")
+        product.published = False
+        product.pinned = False
+        product.deleted_at = datetime.now(UTC)
+        session.add(AdminAction(admin_id=admin.id, action="delete_training_product", target_type="training_product", target_id=product.id))
 
 
 async def get_or_create_conversation(

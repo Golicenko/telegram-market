@@ -16,7 +16,7 @@ from .bot import (
 )
 from .config import Settings, get_settings
 from .database import get_session
-from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportMessage, SupportTicket, User, Wallet, WalletTransaction, WithdrawalRequest
+from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportMessage, SupportTicket, TrainingProduct, User, Wallet, WalletTransaction, WithdrawalRequest
 from .schemas import (
     AccountListingCreate,
     AccountListingOut,
@@ -48,6 +48,9 @@ from .schemas import (
     SupportStatusUpdate,
     SupportTicketCreate,
     SupportTicketOut,
+    TrainingProductCreate,
+    TrainingProductOut,
+    TrainingProductUpdate,
     UniqueListingCreate,
     UserOut,
     WalletOut,
@@ -66,11 +69,13 @@ from .services import (
     create_notification,
     create_price_offer,
     create_star_payment_intent,
+    create_training_product,
     create_withdrawal,
     decide_withdrawal,
     delete_account_listing,
     delete_listing,
     delete_special_listing,
+    delete_training_product,
     get_or_create_conversation,
     process_successful_payment,
     promote_listing,
@@ -82,6 +87,7 @@ from .services import (
     update_account_listing,
     update_listing,
     update_special_listing,
+    update_training_product,
     validate_star_pre_checkout,
 )
 
@@ -444,6 +450,53 @@ async def edit_account_listing(account_id: uuid.UUID, payload: AccountListingUpd
 @router.delete("/admin/accounts/{account_id}", status_code=204)
 async def remove_account_listing(account_id: uuid.UUID, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     await delete_account_listing(session, admin, account_id)
+
+
+@router.get("/training", response_model=list[TrainingProductOut])
+async def list_training_products(session: AsyncSession = Depends(get_session)):
+    return list((await session.scalars(
+        select(TrainingProduct).where(
+            TrainingProduct.published.is_(True),
+            TrainingProduct.deleted_at.is_(None),
+        ).order_by(TrainingProduct.pinned.desc(), TrainingProduct.created_at.desc())
+    )).all())
+
+
+@router.get("/training/{product_id}", response_model=TrainingProductOut)
+async def get_training_product(product_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
+    product = await session.scalar(select(TrainingProduct).where(
+        TrainingProduct.id == product_id,
+        TrainingProduct.published.is_(True),
+        TrainingProduct.deleted_at.is_(None),
+    ))
+    if not product:
+        raise HTTPException(status_code=404, detail="Обучение не найдено")
+    return product
+
+
+@router.get("/admin/training", response_model=list[TrainingProductOut])
+async def list_admin_training_products(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    return list((await session.scalars(
+        select(TrainingProduct).where(
+            TrainingProduct.admin_id == admin.id,
+            TrainingProduct.deleted_at.is_(None),
+        ).order_by(TrainingProduct.pinned.desc(), TrainingProduct.created_at.desc())
+    )).all())
+
+
+@router.post("/admin/training", response_model=TrainingProductOut, status_code=201)
+async def add_training_product(payload: TrainingProductCreate, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    return await create_training_product(session, admin, payload)
+
+
+@router.patch("/admin/training/{product_id}", response_model=TrainingProductOut)
+async def edit_training_product(product_id: uuid.UUID, payload: TrainingProductUpdate, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    return await update_training_product(session, admin, product_id, payload)
+
+
+@router.delete("/admin/training/{product_id}", status_code=204)
+async def remove_training_product(product_id: uuid.UUID, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    await delete_training_product(session, admin, product_id)
 
 
 @router.get("/cart", response_model=list[ListingOut])

@@ -13,6 +13,14 @@ test("chat uses visual viewport and Telegram viewport events", () => {
   assert.match(app, /viewportChanged/);
   assert.match(css, /--chat-viewport-height/);
   assert.match(html, /viewport-fit=cover/);
+  assert.match(app, /telegram\?\.viewportHeight/);
+  assert.doesNotMatch(app, /telegram\?\.viewportStableHeight/);
+});
+
+test("mobile conversation is edge anchored without the half-screen transform", () => {
+  assert.match(css, /\.chat-view\{top:var\(--chat-viewport-top,0px\);right:0;bottom:auto;left:0;inset-inline:0;width:100%;max-width:none;transform:none/);
+  assert.doesNotMatch(css, /\.chat-view\{inset:auto auto auto 50%/);
+  assert.match(css, /overflow-wrap:anywhere/);
 });
 
 test("composer preserves text on errors and prevents double submit", () => {

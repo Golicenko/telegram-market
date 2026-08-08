@@ -93,6 +93,29 @@ class AccountListing(Base, TimestampMixin):
     )
 
 
+class TrainingProduct(Base, TimestampMixin):
+    __tablename__ = "training_products"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    short_description: Mapped[str] = mapped_column(String(360), nullable=False)
+    full_description: Mapped[str] = mapped_column(Text, nullable=False)
+    cover_url: Mapped[str] = mapped_column(Text, nullable=False)
+    promo_video_url: Mapped[str | None] = mapped_column(Text)
+    product_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    price_af_coins: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    availability: Mapped[str] = mapped_column(String(24), nullable=False, default="available")
+    published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    __table_args__ = (
+        CheckConstraint("product_type IN ('personal','automatic')", name="ck_training_products_type"),
+        CheckConstraint("availability IN ('available','unavailable','coming_soon')", name="ck_training_products_availability"),
+        CheckConstraint("price_af_coins >= 0", name="ck_training_products_price"),
+        Index("ix_training_products_public_order", "published", "pinned", "created_at"),
+    )
+
+
 class Favorite(Base):
     __tablename__ = "favorites"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
