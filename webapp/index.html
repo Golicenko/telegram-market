@@ -76,7 +76,7 @@
             <div class="profile-identity"><strong id="profileName">Telegram User</strong><span id="profileUsername">—</span><small id="profileTelegramId">ID: —</small></div>
             <div class="profile-wallet"><div><span data-balance>0.00</span> <span class="af-coin" aria-label="AF Coins"></span></div><button type="button" data-open-topup>Пополнить</button></div>
           </div>
-          <div class="wallet-breakdown"><div><span>Доступно</span><strong><span data-balance>0.00</span> <i class="af-coin af-coin--small"></i></strong></div><button class="wallet-breakdown__button" type="button" data-open-frozen><span>Заморожено</span><strong><span id="frozenBalance">0.00</span> <i class="af-coin af-coin--small"></i></strong><small>Показать сделки ›</small></button><div><span>Заработано</span><strong><span id="totalEarned">0.00</span> <i class="af-coin af-coin--small"></i></strong></div></div>
+          <div class="wallet-breakdown"><div><span>Пополнено</span><strong><span id="purchasedBalance">0.00</span> <i class="af-coin af-coin--small"></i></strong><small>Можно тратить</small></div><button class="wallet-breakdown__button" type="button" data-open-frozen><span>Под защитой</span><strong><span id="frozenBalance">0.00</span> <i class="af-coin af-coin--small"></i></strong><small>Показать сделки ›</small></button><div><span>Заработано</span><strong><span id="earnedBalance">0.00</span> <i class="af-coin af-coin--small"></i></strong><small>Можно вывести</small></div></div>
           <div class="profile-actions"><button type="button" data-open-topup>Пополнить баланс</button><button type="button" data-open-withdraw>Вывести средства</button></div>
           <div class="profile-tabs" role="tablist"><button class="is-active" type="button" data-profile-tab="listings">Объявления</button><button type="button" data-profile-tab="history">История</button><button type="button" data-profile-tab="deals">Сделки</button><button type="button" data-profile-tab="chats">Диалоги</button></div>
           <div class="profile-panel" data-profile-panel="listings"><button class="profile-row" type="button" data-profile-section="active"><span>▣</span><strong>Активные объявления</strong><b id="activeCount">0</b></button><div class="profile-listings" id="profileActiveCars"></div><button class="profile-row" type="button" data-profile-section="sold"><span>▤</span><strong>Проданные товары</strong><b id="soldCount">0</b></button><div class="profile-listings" id="profileSoldCars" hidden></div><button class="profile-row" type="button" data-profile-section="purchases"><span>▧</span><strong>Покупки</strong><b id="purchaseCount">0</b></button><div class="profile-listings" id="profilePurchaseCars" hidden></div></div>
@@ -147,7 +147,7 @@
         id="topupAmount"
         name="amount"
         type="number"
-        min="50"
+        min="10"
         max="1000"
         value="100"
         required
@@ -156,7 +156,7 @@
     </div>
 
     <div class="amount-chips">
-      <button type="button" data-topup-amount="50">50</button>
+      <button type="button" data-topup-amount="10">10</button>
       <button type="button" data-topup-amount="200">200</button>
       <button type="button" data-topup-amount="500">500</button>
       <button type="button" data-topup-amount="1000">1000</button>
@@ -233,7 +233,7 @@
       <nav class="bottom-nav" id="bottomNav" aria-label="Основная навигация"><button class="nav-item" type="button" data-nav-target="unique"><span class="nav-icon">◇</span><span>Уникальные</span></button><button class="nav-item" type="button" data-nav-target="accounts"><span class="nav-icon">♟</span><span>Аккаунты</span></button><button class="nav-market is-active" type="button" data-nav-target="market" aria-current="page"><span>★</span><small>Market</small></button><button class="nav-item" type="button" data-nav-target="profile"><span class="nav-icon">♟</span><span>Профиль</span></button><button class="nav-item" type="button" data-nav-target="more"><span class="nav-icon nav-grid">▪▪<br />▪▪</span><span>Ещё</span></button></nav>
     </div>
 
-    <dialog class="modal" id="infoModal"><div class="modal-head"><div><span class="eyebrow">О приложении</span><h2>AUTOFLOW MARKET</h2></div><button type="button" data-close-dialog="infoModal" aria-label="Закрыть">×</button></div><p>AUTOFLOW MARKET — удобная площадка внутри Telegram для размещения и поиска автомобильных предложений. Сделки проходят через систему резервирования: средства не начисляются продавцу до подтверждения получения покупателем. Все объявления, операции и статусы сделки сохраняются в истории.</p><p>Внутри сервиса используется AF Coins. При завершённой сделке продавец получает 70% цены, комиссия платформы составляет 30%.</p><p class="security-note">Никому не передавайте пароль, коды подтверждения или доступ к Telegram. Перед подтверждением сделки убедитесь, что получили именно заявленный товар.</p><button class="publish-button" type="button" data-close-dialog="infoModal">Понятно</button></dialog>
+    <dialog class="modal" id="infoModal"><div class="modal-head"><div><span class="eyebrow">О приложении</span><h2>AUTOFLOW MARKET</h2></div><button type="button" data-close-dialog="infoModal" aria-label="Закрыть">×</button></div><p>AUTOFLOW MARKET — удобная площадка внутри Telegram для размещения и поиска автомобильных предложений. Вы оплачиваете, но продавец не получит деньги, пока вы не подтвердите, что всё получили. Все объявления, операции и статусы сделки сохраняются в истории.</p><p>AF Coins, купленные через Telegram Stars, можно тратить внутри сервиса, но нельзя выводить. Для вывода доступны только AF Coins, заработанные после продаж. При завершённой сделке продавец получает 70% цены, комиссия платформы составляет 30%.</p><p class="security-note">Никому не передавайте пароль, коды подтверждения или доступ к Telegram. Перед подтверждением сделки убедитесь, что получили именно заявленный товар.</p><button class="publish-button" type="button" data-close-dialog="infoModal">Понятно</button></dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
      <!-- Плавающая кнопка чата -->
 <button

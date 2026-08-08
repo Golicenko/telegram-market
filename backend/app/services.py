@@ -1,6 +1,6 @@
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from typing import Awaitable, Callable
 
 from fastapi import HTTPException, status
@@ -72,6 +72,48 @@ def wallet_transaction(
     )
 
 
+def wallet_snapshot(wallet: Wallet) -> tuple[Decimal, Decimal]:
+    return money(wallet.available_balance), money(wallet.frozen_balance)
+
+
+def hold_for_purchase(wallet: Wallet, amount: Decimal) -> tuple[Decimal, Decimal]:
+    """Move spendable funds into protected buckets, purchased funds first."""
+    amount = money(amount)
+    if wallet.available_balance < amount:
+        raise HTTPException(status_code=402, detail=f"Не хватает {money(amount - wallet.available_balance)} AF Coins")
+    purchased = min(money(wallet.purchased_balance), amount)
+    earned = money(amount - purchased)
+    wallet.purchased_balance = money(wallet.purchased_balance - purchased)
+    wallet.earned_balance = money(wallet.earned_balance - earned)
+    wallet.purchased_frozen_balance = money(wallet.purchased_frozen_balance + purchased)
+    wallet.earned_frozen_balance = money(wallet.earned_frozen_balance + earned)
+    return purchased, earned
+
+
+def release_purchase_hold(wallet: Wallet, purchased: Decimal, earned: Decimal) -> None:
+    purchased, earned = money(purchased), money(earned)
+    if wallet.purchased_frozen_balance < purchased or wallet.earned_frozen_balance < earned:
+        raise HTTPException(status_code=409, detail="Состояние защищённых средств не совпадает")
+    wallet.purchased_frozen_balance = money(wallet.purchased_frozen_balance - purchased)
+    wallet.earned_frozen_balance = money(wallet.earned_frozen_balance - earned)
+    wallet.purchased_balance = money(wallet.purchased_balance + purchased)
+    wallet.earned_balance = money(wallet.earned_balance + earned)
+
+
+def consume_purchase_hold(wallet: Wallet, purchased: Decimal, earned: Decimal) -> None:
+    purchased, earned = money(purchased), money(earned)
+    if wallet.purchased_frozen_balance < purchased or wallet.earned_frozen_balance < earned:
+        raise HTTPException(status_code=409, detail="Состояние защищённых средств не совпадает")
+    wallet.purchased_frozen_balance = money(wallet.purchased_frozen_balance - purchased)
+    wallet.earned_frozen_balance = money(wallet.earned_frozen_balance - earned)
+
+
+def debit_spendable(wallet: Wallet, amount: Decimal) -> tuple[Decimal, Decimal]:
+    purchased, earned = hold_for_purchase(wallet, amount)
+    consume_purchase_hold(wallet, purchased, earned)
+    return purchased, earned
+
+
 async def create_notification(session: AsyncSession, user_id: uuid.UUID, kind: str, title: str, body: str, payload: dict | None = None) -> Notification:
     notification = Notification(user_id=user_id, notification_type=kind, title=title, body=body, payload=payload or {})
     session.add(notification)
@@ -134,8 +176,8 @@ async def charge_listing_promotion(session: AsyncSession, actor: User, listing: 
     wallet = await session.scalar(select(Wallet).where(Wallet.user_id == actor.id).with_for_update())
     if not wallet or wallet.available_balance < cost:
         raise HTTPException(status_code=402, detail="Недостаточно AF Coins. Пополните баланс, чтобы закрепить объявление.")
-    before_available, before_frozen = wallet.available_balance, wallet.frozen_balance
-    wallet.available_balance = money(wallet.available_balance - cost)
+    before_available, before_frozen = wallet_snapshot(wallet)
+    debit_spendable(wallet, cost)
     wallet.version += 1
     session.add(
         wallet_transaction(
@@ -420,15 +462,15 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
         total = money(sum((effective_prices[item.id] for item in ordered), Decimal("0")))
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id).with_for_update())
         if not wallet or wallet.available_balance < total:
-            raise HTTPException(status_code=402, detail="Недостаточно средств")
-        available_before, frozen_before = wallet.available_balance, wallet.frozen_balance
-        wallet.available_balance = money(wallet.available_balance - total)
-        wallet.frozen_balance = money(wallet.frozen_balance + total)
+            missing = total if not wallet else money(total - wallet.available_balance)
+            raise HTTPException(status_code=402, detail=f"Не хватает {missing} AF Coins")
+        available_before, frozen_before = wallet_snapshot(wallet)
         wallet.version += 1
 
         deals: list[Deal] = []
         for listing in ordered:
             agreed_price = effective_prices[listing.id]
+            purchased_part, earned_part = hold_for_purchase(wallet, agreed_price)
             payout, commission = settlement_amounts(agreed_price)
             deal = Deal(
                 listing_id=listing.id,
@@ -437,6 +479,8 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
                 status="paid",
                 price_af_coins=agreed_price,
                 frozen_amount=agreed_price,
+                purchased_frozen_amount=purchased_part,
+                earned_frozen_amount=earned_part,
                 seller_payout=payout,
                 platform_commission=commission,
             )
@@ -454,7 +498,7 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
                 ConversationMessage(
                     conversation_id=conversation.id,
                     sender_id=buyer.id,
-                    body=f"Сделка создана. Зарезервировано {agreed_price} AF Coins.",
+                    body=f"Покупатель оплатил {agreed_price} AF Coins. Деньги под защитой до подтверждения получения.",
                     message_type="system",
                 )
             )
@@ -476,11 +520,11 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
         session.add(
             wallet_transaction(
                 wallet,
-                "purchase_reserved",
+                "protection_hold",
                 -total,
                 available_before,
                 frozen_before,
-                "Средства зарезервированы для покупки",
+                "Деньги переведены под защиту для покупки",
             )
         )
         await session.execute(delete(CartItem).where(CartItem.user_id == buyer.id))
@@ -521,14 +565,14 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
         listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
         buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
         seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.seller_id).with_for_update())
-        if not listing or not buyer_wallet or not seller_wallet or buyer_wallet.frozen_balance < deal.frozen_amount:
+        if not listing or not buyer_wallet or not seller_wallet:
             raise HTTPException(status_code=409, detail="Settlement state is inconsistent")
 
         buyer_avail_before, buyer_frozen_before = buyer_wallet.available_balance, buyer_wallet.frozen_balance
         seller_avail_before, seller_frozen_before = seller_wallet.available_balance, seller_wallet.frozen_balance
-        buyer_wallet.frozen_balance = money(buyer_wallet.frozen_balance - deal.frozen_amount)
+        consume_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount)
         buyer_wallet.version += 1
-        seller_wallet.available_balance = money(seller_wallet.available_balance + deal.seller_payout)
+        seller_wallet.earned_balance = money(seller_wallet.earned_balance + deal.seller_payout)
         seller_wallet.total_earned = money(seller_wallet.total_earned + deal.seller_payout)
         seller_wallet.version += 1
 
@@ -557,12 +601,11 @@ async def cancel_deal(session: AsyncSession, actor: User, deal_id: uuid.UUID) ->
 
         listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
         buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
-        if not listing or not buyer_wallet or buyer_wallet.frozen_balance < deal.frozen_amount:
+        if not listing or not buyer_wallet:
             raise HTTPException(status_code=409, detail="Cancellation state is inconsistent")
 
         available_before, frozen_before = buyer_wallet.available_balance, buyer_wallet.frozen_balance
-        buyer_wallet.available_balance = money(buyer_wallet.available_balance + deal.frozen_amount)
-        buyer_wallet.frozen_balance = money(buyer_wallet.frozen_balance - deal.frozen_amount)
+        release_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount)
         buyer_wallet.version += 1
         deal.status = "cancelled"
         deal.cancelled_at = datetime.now(UTC)
@@ -571,11 +614,11 @@ async def cancel_deal(session: AsyncSession, actor: User, deal_id: uuid.UUID) ->
         session.add(
             wallet_transaction(
                 buyer_wallet,
-                "purchase_reservation_released",
+                "refund",
                 deal.frozen_amount,
                 available_before,
                 frozen_before,
-                "Резерв возвращён после отмены сделки",
+                "Защищённые средства возвращены после отмены сделки",
                 deal_id=deal.id,
             )
         )
@@ -585,7 +628,7 @@ async def cancel_deal(session: AsyncSession, actor: User, deal_id: uuid.UUID) ->
             other_id,
             "deal_cancelled",
             "Сделка отменена",
-            "Зарезервированные средства возвращены покупателю",
+            "Защищённые средства возвращены покупателю",
             {"deal_id": str(deal.id)},
         )
     return deal
@@ -599,13 +642,12 @@ async def resolve_dispute(session: AsyncSession, admin: User, deal_id: uuid.UUID
         listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
         buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
         seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.seller_id).with_for_update())
-        if not listing or not buyer_wallet or not seller_wallet or buyer_wallet.frozen_balance < deal.frozen_amount:
+        if not listing or not buyer_wallet or not seller_wallet:
             raise HTTPException(status_code=409, detail="Settlement state is inconsistent")
         buyer_available_before, buyer_frozen_before = buyer_wallet.available_balance, buyer_wallet.frozen_balance
         now = datetime.now(UTC)
         if outcome == "refund":
-            buyer_wallet.available_balance = money(buyer_wallet.available_balance + deal.frozen_amount)
-            buyer_wallet.frozen_balance = money(buyer_wallet.frozen_balance - deal.frozen_amount)
+            release_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount)
             buyer_wallet.version += 1
             deal.status = "cancelled"
             deal.cancelled_at = now
@@ -616,9 +658,9 @@ async def resolve_dispute(session: AsyncSession, admin: User, deal_id: uuid.UUID
             seller_body = "Сделка отменена, средства возвращены покупателю"
         else:
             seller_available_before, seller_frozen_before = seller_wallet.available_balance, seller_wallet.frozen_balance
-            buyer_wallet.frozen_balance = money(buyer_wallet.frozen_balance - deal.frozen_amount)
+            consume_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount)
             buyer_wallet.version += 1
-            seller_wallet.available_balance = money(seller_wallet.available_balance + deal.seller_payout)
+            seller_wallet.earned_balance = money(seller_wallet.earned_balance + deal.seller_payout)
             seller_wallet.total_earned = money(seller_wallet.total_earned + deal.seller_payout)
             seller_wallet.version += 1
             deal.status = "completed"
@@ -644,11 +686,11 @@ async def create_withdrawal(session: AsyncSession, user: User, payload) -> Withd
         raise HTTPException(status_code=400, detail=f"Minimum withdrawal is {minimum} AF Coins")
     async with session.begin():
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id).with_for_update())
-        if not wallet or wallet.available_balance < amount:
-            raise HTTPException(status_code=402, detail="Недостаточно средств")
-        before_available, before_frozen = wallet.available_balance, wallet.frozen_balance
-        wallet.available_balance = money(wallet.available_balance - amount)
-        wallet.frozen_balance = money(wallet.frozen_balance + amount)
+        if not wallet or wallet.earned_balance < amount:
+            raise HTTPException(status_code=402, detail="Для вывода доступны только AF Coins, заработанные с продаж")
+        before_available, before_frozen = wallet_snapshot(wallet)
+        wallet.earned_balance = money(wallet.earned_balance - amount)
+        wallet.earned_frozen_balance = money(wallet.earned_frozen_balance + amount)
         wallet.version += 1
         withdrawal = WithdrawalRequest(user_id=user.id, amount=amount, payout_method=payload.payout_method, details=payload.details, status="pending")
         session.add(withdrawal)
@@ -682,16 +724,16 @@ async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: u
         request.reviewed_at = now
         transaction = None
         if action == "paid":
-            if wallet.frozen_balance < request.amount:
+            if wallet.earned_frozen_balance < request.amount:
                 raise HTTPException(status_code=409, detail="Frozen balance is insufficient")
-            wallet.frozen_balance = money(wallet.frozen_balance - request.amount)
+            wallet.earned_frozen_balance = money(wallet.earned_frozen_balance - request.amount)
             request.paid_at = now
             transaction = wallet_transaction(wallet, "withdrawal_paid", -request.amount, before_available, before_frozen, "Ручная выплата отмечена администратором", withdrawal_id=request.id)
         elif action == "reject":
-            if wallet.frozen_balance < request.amount:
+            if wallet.earned_frozen_balance < request.amount:
                 raise HTTPException(status_code=409, detail="Frozen balance is insufficient")
-            wallet.frozen_balance = money(wallet.frozen_balance - request.amount)
-            wallet.available_balance = money(wallet.available_balance + request.amount)
+            wallet.earned_frozen_balance = money(wallet.earned_frozen_balance - request.amount)
+            wallet.earned_balance = money(wallet.earned_balance + request.amount)
             request.rejection_reason = reason
             transaction = wallet_transaction(wallet, "withdrawal_rejected", request.amount, before_available, before_frozen, f"Заявка отклонена: {reason}", withdrawal_id=request.id)
         wallet.version += 1
@@ -712,11 +754,11 @@ async def cancel_withdrawal(session: AsyncSession, user: User, withdrawal_id: uu
         if request.status != "pending":
             raise HTTPException(status_code=409, detail="Only a pending withdrawal can be cancelled")
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id).with_for_update())
-        if not wallet or wallet.frozen_balance < request.amount:
+        if not wallet or wallet.earned_frozen_balance < request.amount:
             raise HTTPException(status_code=409, detail="Withdrawal state is inconsistent")
         before_available, before_frozen = wallet.available_balance, wallet.frozen_balance
-        wallet.available_balance = money(wallet.available_balance + request.amount)
-        wallet.frozen_balance = money(wallet.frozen_balance - request.amount)
+        wallet.earned_balance = money(wallet.earned_balance + request.amount)
+        wallet.earned_frozen_balance = money(wallet.earned_frozen_balance - request.amount)
         wallet.version += 1
         request.status = "cancelled"
         session.add(
@@ -742,7 +784,10 @@ async def adjust_balance(session: AsyncSession, admin: User, payload) -> Wallet:
         before_available, before_frozen = wallet.available_balance, wallet.frozen_balance
         if wallet.available_balance + amount < 0:
             raise HTTPException(status_code=409, detail="Adjustment would make balance negative")
-        wallet.available_balance = money(wallet.available_balance + amount)
+        if amount >= 0:
+            wallet.purchased_balance = money(wallet.purchased_balance + amount)
+        else:
+            debit_spendable(wallet, -amount)
         wallet.version += 1
         transaction = wallet_transaction(wallet, "admin_adjustment", amount, before_available, before_frozen, payload.reason)
         session.add(transaction)
@@ -757,8 +802,25 @@ async def create_star_payment_intent(
     user: User,
     amount: int,
     invoice_factory: Callable[[int, str], Awaitable[str]],
+    purpose: str = "topup",
 ) -> StarPaymentIntent:
     settings = get_settings()
+    context: dict = {}
+    if purpose == "cart_checkout":
+        cart_listing_ids = list((await session.scalars(select(CartItem.listing_id).where(CartItem.user_id == user.id))).all())
+        if not cart_listing_ids:
+            raise HTTPException(status_code=400, detail="Корзина пуста")
+        listings = list((await session.scalars(select(Listing).where(Listing.id.in_(cart_listing_ids), Listing.status == "active"))).all())
+        if len(listings) != len(cart_listing_ids):
+            raise HTTPException(status_code=409, detail="Один из товаров уже недоступен")
+        wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
+        total = money(sum((money(item.price_af_coins) for item in listings), Decimal("0")))
+        missing = money(total - (wallet.available_balance if wallet else Decimal("0")))
+        if missing <= 0:
+            raise HTTPException(status_code=409, detail="Средств уже достаточно, повторите покупку")
+        amount = max(settings.star_topup_min, int(missing.to_integral_value(rounding=ROUND_CEILING)))
+        context = {"listing_ids": [str(item) for item in cart_listing_ids], "required_af_coins": str(missing)}
+        await session.commit()
     if amount < settings.star_topup_min or amount > settings.star_topup_max:
         raise HTTPException(
             status_code=400,
@@ -773,6 +835,8 @@ async def create_star_payment_intent(
         invoice_payload=invoice_payload,
         invoice_link=invoice_link,
         xtr_amount=amount,
+        purpose=purpose,
+        context=context,
         status="pending",
         expires_at=datetime.now(UTC) + timedelta(minutes=30),
     )
@@ -833,7 +897,7 @@ async def process_successful_payment(session: AsyncSession, telegram_id: int, pa
 
         amount = money(xtr_amount)
         before_available, before_frozen = wallet.available_balance, wallet.frozen_balance
-        wallet.available_balance = money(wallet.available_balance + amount)
+        wallet.purchased_balance = money(wallet.purchased_balance + amount)
         wallet.version += 1
         intent.status = "paid"
         intent.paid_at = datetime.now(UTC)

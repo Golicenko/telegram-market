@@ -26,6 +26,7 @@
     unreadConversations: [],
     totalUnread: 0,
     messagePollingId: null,
+    pendingCheckoutTopup: false,
     serverAvailable: true,
   };
 
@@ -333,8 +334,8 @@ function handleClick(event) {
     const amount = Number(topupAmount.dataset.topupAmount);
     const input = document.getElementById("topupAmount");
 
-    if (amount < 50 || amount > 1000) {
-      return void notify("Сумма должна быть от 50 до 1000 Stars");
+    if (amount < 10 || amount > 1000) {
+      return void notify("Сумма должна быть от 10 до 1000 Stars");
     }
 
     input.value = String(amount);
@@ -840,15 +841,22 @@ function handleClick(event) {
     try {
       const deals = await api.request("/cart/checkout", { method: "POST" });
       await refreshMarketplace();
-      notify("Средства зарезервированы. Сделка создана");
+      notify("Покупатель оплатил. Деньги под защитой до подтверждения получения");
       if (deals[0]) {
         const conversation = state.profile?.conversations?.find((item) => item.deal?.id === deals[0].id) || (await api.request("/conversations")).find((item) => item.deal?.id === deals[0].id);
         if (conversation) await openConversation(conversation.id);
       }
     } catch (error) {
       if (error.status === 402) {
-        document.getElementById("cartTopupButton").hidden = false;
-        notify("Недостаточно средств");
+        state.pendingCheckoutTopup = true;
+        const missing = Number(String(error.message).match(/[\d.,]+/)?.[0]?.replace(",", ".") || 0);
+        const topupButton = document.getElementById("cartTopupButton");
+        topupButton.hidden = false;
+        topupButton.textContent = missing > 0
+          ? `Пополнить ${Math.ceil(missing)} Stars и продолжить покупку`
+          : "Пополнить баланс и продолжить покупку";
+        if (missing > 0) document.getElementById("topupAmount").value = String(Math.max(10, Math.ceil(missing)));
+        notify(missing > 0 ? `Не хватает ${formatNumber(missing)} AF Coins` : "Недостаточно средств");
       } else {
         notify(error.message);
         await refreshMarketplace().catch((refreshError) => reportClientError("refresh_after_checkout", refreshError));
@@ -1068,7 +1076,8 @@ function handleClick(event) {
     renderDeals(profile.active_deals);
     renderConversations(profile.conversations || []);
     document.getElementById("frozenBalance").textContent = Number(profile.wallet.frozen_balance).toFixed(2);
-    document.getElementById("totalEarned").textContent = Number(profile.wallet.total_earned).toFixed(2);
+    document.getElementById("purchasedBalance").textContent = Number(profile.wallet.purchased_balance).toFixed(2);
+    document.getElementById("earnedBalance").textContent = Number(profile.wallet.earned_balance).toFixed(2);
   }
 
   function renderMiniListings(container, listings, emptyText, ownerControls = false) {
@@ -1409,7 +1418,8 @@ function hideConversation(conversationId) {
     button.disabled = true;
     try {
       const amount = Number(document.getElementById("topupAmount").value);
-      const intent = await api.request("/wallet/star-payments/intent", { method: "POST", body: JSON.stringify({ amount }) });
+      const purpose = state.pendingCheckoutTopup ? "cart_checkout" : "topup";
+      const intent = await api.request("/wallet/star-payments/intent", { method: "POST", body: JSON.stringify({ amount, purpose }) });
       elements.paymentResult.className = "payment-result";
       elements.paymentResult.textContent = "Счёт открыт в Telegram";
       const invoiceStatus = await new Promise((resolve, reject) => {
@@ -1419,11 +1429,13 @@ function hideConversation(conversationId) {
       if (invoiceStatus === "cancelled") {
         elements.paymentResult.className = "payment-result is-cancelled";
         elements.paymentResult.textContent = "Оплата отменена. Баланс не изменён";
+        state.pendingCheckoutTopup = false;
         return;
       }
       if (invoiceStatus === "failed") {
         elements.paymentResult.className = "payment-result is-error";
         elements.paymentResult.textContent = "Telegram не завершил оплату. Баланс не изменён";
+        state.pendingCheckoutTopup = false;
         return;
       }
       const payment = await waitForStarPayment(intent.id);
@@ -1431,7 +1443,11 @@ function hideConversation(conversationId) {
       state.me.wallet = payment.wallet;
       await refreshMarketplace();
       elements.paymentResult.className = "payment-result is-success";
-      elements.paymentResult.textContent = "Оплата успешно завершена";
+      elements.paymentResult.textContent = purpose === "cart_checkout"
+        ? "Оплата подтверждена. Сервер завершает защищённую покупку"
+        : "Оплата успешно завершена";
+      if (purpose === "cart_checkout") await navigate("market");
+      state.pendingCheckoutTopup = false;
     } catch (error) {
       elements.paymentResult.className = "payment-result is-error";
       elements.paymentResult.textContent = error.message;
@@ -1849,7 +1865,7 @@ function hideConversation(conversationId) {
   function formatNumber(value) { return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(Number(value)); }
   function formatDate(value) { return new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)); }
   function uniqueValues(values) { return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru")); }
-  function statusLabel(status) { return ({ active: "Доступно", reserved: "Зарезервировано", sold: "Уже продано", paused: "Снято с публикации", deleted: "Удалено" })[status] || status; }
+  function statusLabel(status) { return ({ active: "Доступно", reserved: "Деньги под защитой", sold: "Уже продано", paused: "Снято с публикации", deleted: "Удалено" })[status] || status; }
   function dealStatusLabel(status) { return ({ pending_payment: "Ожидает оплаты", paid: "Оплачено", seller_contacted: "Продавец на связи", transfer_in_progress: "Передача", buyer_confirmed: "Получение подтверждено", completed: "Завершена", disputed: "Спор", cancelled: "Отменена" })[status] || status; }
   function withdrawalStatusLabel(status) { return ({ pending: "Ожидает проверки", approved: "Одобрена", paid: "Выплачена", rejected: "Отклонена", cancelled: "Отменена" })[status] || status; }
   function supportStatusLabel(status) { return ({ open: "Открыто", in_progress: "В работе", resolved: "Решено", closed: "Закрыто" })[status] || status; }
