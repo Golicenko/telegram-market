@@ -17,6 +17,7 @@
     adminTrainingStats: null,
     adminTrainingFilter: "all",
     adminTrainingPurchases: [],
+    adminTrainingOrders: [],
     adminTrainingMaterials: [],
     selectedAdminTrainingId: null,
     cart: [],
@@ -258,6 +259,7 @@
     reportStartupStage("shell_rendered");
     reportStartupStage("market_loading");
     void loadOptionalData();
+    void openTrainingOrderDeepLink();
   }
 
   async function authenticateCurrentUser() {
@@ -845,9 +847,9 @@ function handleClick(event) {
       const type = document.createElement("span"); type.className = "training-type"; type.textContent = trainingTypeLabel(product.product_type);
       const title = document.createElement("h3"); title.textContent = product.title;
       const description = document.createElement("p"); description.textContent = product.short_description;
-      const footer = document.createElement("div"); footer.className = "training-card__footer"; const price = document.createElement("strong"); price.append(document.createTextNode(`${formatNumber(product.price_af_coins)} `), coin("af-coin--small")); const arrow = document.createElement("span"); arrow.textContent = "Подробнее ›"; footer.append(price, arrow);
+      const footer = document.createElement("div"); footer.className = "training-card__footer"; const price = document.createElement("strong"); price.textContent = `${formatNumber(product.price_af_coins)} ⭐`; const arrow = document.createElement("span"); arrow.textContent = "Подробнее ›"; footer.append(price, arrow);
       body.append(type, title, description, footer); open.append(media, body); card.append(open);
-      if (state.me?.user.role === "admin") { const actions = document.createElement("div"); actions.className = "training-admin-actions"; const edit = document.createElement("button"); edit.dataset.editTraining = product.id; edit.textContent = "Изменить"; const remove = document.createElement("button"); remove.dataset.deleteTraining = product.id; remove.textContent = "Скрыть"; actions.append(edit, remove); card.append(actions); }
+      if (state.me?.user.role === "admin") { const actions = document.createElement("div"); actions.className = "training-admin-actions"; const edit = document.createElement("button"); edit.dataset.editTraining = product.id; edit.textContent = "Изменить"; const remove = document.createElement("button"); remove.dataset.deleteTraining = product.id; remove.textContent = "Удалить"; actions.append(edit, remove); card.append(actions); }
       return card;
     }));
     elements.trainingEmpty.hidden = state.training.length > 0;
@@ -1756,23 +1758,39 @@ async function hideCurrentConversation() {
     const product = state.selectedTraining;
     const button = document.getElementById("trainingBuyButton");
     if (!product || button.disabled) return;
-    if (!(await confirmAction(`Купить «${product.title}» за ${formatNumber(product.price_af_coins)} AF Coins?`))) return;
+    if (!(await confirmAction(`Купить «${product.title}» за ${formatNumber(product.price_af_coins)} Telegram Stars?`))) return;
+    if (!telegram?.initData || typeof telegram.openInvoice !== "function") return notify("Откройте AUTOFLOW MARKET внутри Telegram для оплаты");
     button.disabled = true;
     try {
-      const purchase = await api.request(`/training/${product.id}/purchase`, { method: "POST" });
-      state.trainingPurchases = [purchase, ...state.trainingPurchases.filter((item) => item.id !== purchase.id)];
-      await loadOptionalData(["profile"], { allowRecovery: false });
+      const intent = await api.request(`/training/${product.id}/purchase-intent`, { method: "POST" });
+      const invoiceStatus = await new Promise((resolve, reject) => {
+        try { telegram.openInvoice(intent.invoice_url, resolve); }
+        catch (error) { reject(error); }
+      });
+      if (invoiceStatus === "cancelled" || invoiceStatus === "failed") {
+        button.disabled = false;
+        return notify(invoiceStatus === "cancelled" ? "Оплата отменена" : "Telegram не завершил оплату");
+      }
+      const payment = await waitForTrainingPayment(intent.id);
+      if (payment.checkout_status !== "completed") throw new Error(payment.message || "Сервер ещё завершает оформление заказа");
+      await loadOptionalData(["trainingPurchases", "profile"], { allowRecovery: false });
       renderTrainingLibrary();
       button.textContent = "Уже куплено";
-      notify(purchase.product_type === "automatic" ? "Покупка сохранена. Материалы отправляются ботом" : "Покупка сохранена. Администратор получил уведомление");
+      notify(product.product_type === "automatic" ? "✅ Оплата получена. Материалы отправляются ботом" : "✅ Обучение оплачено. Администратор получил заказ и свяжется с вами в Telegram");
     } catch (error) {
       button.disabled = false;
-      if (Number(error.status) === 402) {
-        state.pendingCheckoutTopup = true;
-        notify("Недостаточно AF Coins. Пополните баланс");
-        openSecondary("topup");
-      } else notify(error.message);
+      notify(error.message);
     }
+  }
+
+  async function waitForTrainingPayment(intentId) {
+    let payment = null;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      payment = await api.request(`/wallet/star-payments/intents/${intentId}`);
+      if (payment.checkout_status === "completed" || payment.checkout_status === "failed") return payment;
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+    return payment;
   }
 
   async function redeliverTrainingMaterials(button) {
@@ -1814,7 +1832,7 @@ async function hideCurrentConversation() {
   }
 
   async function deleteTrainingProduct(id) {
-    if (!(await confirmAction("Скрыть это обучение? Данные сохранятся в истории."))) return;
+    if (!(await confirmAction("Удалить это обучение? Купленные заказы и финансовая история сохранятся."))) return;
     try { await api.request(`/admin/training/${id}`, { method: "DELETE" }); state.training = await api.request("/admin/training"); renderTraining(); notify("Обучение скрыто"); }
     catch (error) { notify(error.message); }
   }
@@ -2016,11 +2034,12 @@ async function hideCurrentConversation() {
   async function loadAdminTraining(filter = "all") {
     if (state.me?.user.role !== "admin") return;
     state.adminTrainingFilter = filter;
-    const [products, stats] = await Promise.all([
+    const [products, stats, orders] = await Promise.all([
       api.request(`/admin/training/management?filter=${encodeURIComponent(filter)}`),
       api.request("/admin/training/stats"),
+      api.request("/admin/training/purchases?product_type=personal"),
     ]);
-    state.adminTraining = products; state.adminTrainingStats = stats;
+    state.adminTraining = products; state.adminTrainingStats = stats; state.adminTrainingOrders = orders;
     document.querySelectorAll("[data-training-filter]").forEach((button) => button.classList.toggle("is-active", button.dataset.trainingFilter === filter));
     renderAdminTraining();
   }
@@ -2031,6 +2050,7 @@ async function hideCurrentConversation() {
       const values = [["Продажи", stats.total_sales], ["Выручка", `${formatNumber(stats.total_revenue_af_coins)} AF`], ["Персональные", stats.personal_sales], ["Автовыдача", stats.automatic_sales]];
       elements.adminTrainingStats.replaceChildren(...values.map(([label, value]) => { const node = document.createElement("div"); const strong = document.createElement("strong"); strong.textContent = value; const span = document.createElement("span"); span.textContent = label; node.append(strong, span); return node; }));
     }
+    renderAdminTrainingOrders();
     if (!state.adminTraining.length) { const empty = document.createElement("div"); empty.className = "history-empty"; empty.textContent = "В этой категории обучений нет"; elements.adminTrainingProducts.replaceChildren(empty); return; }
     elements.adminTrainingProducts.replaceChildren(...state.adminTraining.map((product) => {
       const card = document.createElement("article"); card.className = "training-admin-card";
@@ -2042,11 +2062,30 @@ async function hideCurrentConversation() {
       const actions = document.createElement("div"); actions.className = "admin-record__actions";
       const definitions = [
         ["edit", "Редактировать"], [product.published && !product.archived ? "hide" : "publish", product.published && !product.archived ? "Скрыть" : "Опубликовать"],
-        [product.pinned ? "unpin" : "pin", product.pinned ? "Снять закрепление" : "Закрепить"], ["buyers", "Покупатели"],
+        [product.pinned ? "unpin" : "pin", product.pinned ? "Снять закрепление" : "Закрепить"], ["buyers", "Покупатели"], ["delete", "Удалить"],
       ];
       if (product.product_type === "automatic") definitions.push(["materials", "Материалы"]);
       definitions.forEach(([action, label]) => { const button = document.createElement("button"); button.type = "button"; button.dataset.trainingAdminAction = action; button.dataset.productId = product.id; button.textContent = label; actions.append(button); });
       card.append(image, copy, actions); return card;
+    }));
+  }
+
+  function renderAdminTrainingOrders() {
+    const filters = document.getElementById("adminTrainingFilters");
+    if (!filters) return;
+    let section = document.getElementById("adminTrainingOrdersSection");
+    if (!section) {
+      section = document.createElement("section"); section.id = "adminTrainingOrdersSection"; section.className = "training-orders";
+      const heading = document.createElement("div"); heading.className = "training-orders-heading";
+      const title = document.createElement("h3"); title.textContent = "Заказы персонального обучения";
+      const note = document.createElement("span"); note.textContent = "Сохраняются в PostgreSQL";
+      const list = document.createElement("div"); list.id = "adminTrainingOrders";
+      heading.append(title, note); section.append(heading, list); filters.before(section);
+    }
+    const list = document.getElementById("adminTrainingOrders");
+    if (!state.adminTrainingOrders.length) { const empty = document.createElement("div"); empty.className = "history-empty"; empty.textContent = "Заказов пока нет"; list.replaceChildren(empty); return; }
+    list.replaceChildren(...state.adminTrainingOrders.map((purchase) => {
+      const card = createTrainingBuyerCard(purchase); card.dataset.trainingOrderId = purchase.id; return card;
     }));
   }
 
@@ -2055,6 +2094,7 @@ async function hideCurrentConversation() {
     if (action === "edit") return openTrainingEditor(productId);
     if (action === "buyers") return openTrainingBuyers(productId);
     if (action === "materials") return openTrainingMaterials(productId);
+    if (action === "delete") return deleteTrainingProduct(productId);
     button.disabled = true;
     try { await api.request(`/admin/training/${productId}/state/${action}`, { method: "POST" }); await loadAdminTraining(state.adminTrainingFilter); notify("Изменения сохранены"); }
     catch (error) { notify(error.message); }
@@ -2076,9 +2116,11 @@ async function hideCurrentConversation() {
     const card = document.createElement("article"); card.className = "training-buyer-card";
     const avatar = document.createElement("span"); avatar.className = "conversation-avatar"; avatar.textContent = (purchase.buyer.first_name || purchase.buyer.username || "A").slice(0, 1).toUpperCase();
     if (purchase.buyer.photo_url) { const image = document.createElement("img"); image.src = purchase.buyer.photo_url; image.alt = ""; avatar.replaceChildren(image); }
-    const copy = document.createElement("div"); const name = document.createElement("strong"); name.textContent = [purchase.buyer.first_name, purchase.buyer.last_name].filter(Boolean).join(" ");
-    const username = document.createElement("small"); username.textContent = `${purchase.buyer.username ? `@${purchase.buyer.username} · ` : ""}Telegram ID ${purchase.buyer.telegram_id}`;
-    const meta = document.createElement("span"); meta.textContent = `${formatDate(purchase.created_at)} · ${formatNumber(purchase.price_af_coins)} AF · ${trainingPurchaseStatusLabel(purchase.status)}`; copy.append(name, username, meta); card.append(avatar, copy);
+    const copy = document.createElement("div"); const name = document.createElement("strong"); name.textContent = purchase.buyer_display_name || [purchase.buyer.first_name, purchase.buyer.last_name].filter(Boolean).join(" ");
+    const course = document.createElement("small"); course.textContent = purchase.title_snapshot;
+    const usernameValue = purchase.buyer_username || purchase.buyer.username;
+    const username = document.createElement("small"); username.textContent = `${usernameValue ? `@${usernameValue} · ` : "Username не указан · "}Telegram ID ${purchase.buyer_telegram_id || purchase.buyer.telegram_id}`;
+    const meta = document.createElement("span"); meta.textContent = `${formatDate(purchase.created_at)} · ${formatNumber(purchase.price_af_coins)} ⭐ · ${trainingPurchaseStatusLabel(purchase.status)}`; copy.append(name, course, username, meta); card.append(avatar, copy);
     if (purchase.product_type === "personal" && purchase.status !== "completed") { const action = document.createElement("button"); action.type = "button"; action.dataset.trainingPurchaseAction = purchase.status === "awaiting_start" ? "in_progress" : "completed"; action.dataset.purchaseId = purchase.id; action.textContent = purchase.status === "awaiting_start" ? "Начать обучение" : "Обучение завершено"; card.append(action); }
     return card;
   }
@@ -2088,6 +2130,7 @@ async function hideCurrentConversation() {
     try {
       const purchase = await api.request(`/admin/training/purchases/${button.dataset.purchaseId}/status`, { method: "PATCH", body: JSON.stringify({ status: button.dataset.trainingPurchaseAction }) });
       state.adminTrainingPurchases = state.adminTrainingPurchases.map((item) => item.id === purchase.id ? purchase : item);
+      state.adminTrainingOrders = state.adminTrainingOrders.map((item) => item.id === purchase.id ? purchase : item);
       elements.adminTrainingBuyers.replaceChildren(...state.adminTrainingPurchases.map(createTrainingBuyerCard));
       await loadAdminTraining(state.adminTrainingFilter); notify("Статус обучения обновлён");
     } catch (error) { button.disabled = false; notify(error.message); }
@@ -2146,6 +2189,15 @@ async function hideCurrentConversation() {
   }
 
   function closeAdminTrainingDetail() { elements.adminTrainingDetail.hidden = true; state.selectedAdminTrainingId = null; }
+
+  async function openTrainingOrderDeepLink() {
+    const purchaseId = new URLSearchParams(window.location.search).get("training_order");
+    if (!purchaseId || state.me?.user.role !== "admin") return;
+    await openAdminPanel(); switchAdminTab("training");
+    [...document.querySelectorAll("[data-training-order-id]")]
+      .find((card) => card.dataset.trainingOrderId === purchaseId)
+      ?.scrollIntoView({ block: "center" });
+  }
 
   function switchAdminTab(tab) {
     document.querySelectorAll("[data-admin-tab]").forEach((button) => button.classList.toggle("is-active", button.dataset.adminTab === tab));

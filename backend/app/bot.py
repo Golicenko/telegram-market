@@ -1,5 +1,6 @@
 import httpx
 from fastapi import HTTPException
+from urllib.parse import quote, urlencode
 
 from .config import get_settings
 
@@ -150,6 +151,64 @@ async def create_star_invoice_link(amount: int, invoice_payload: str) -> str:
         },
     )
     return str(data["result"])
+
+
+async def create_training_invoice_link(amount: int, invoice_payload: str, title: str) -> str:
+    data = await call_bot_api(
+        "createInvoiceLink",
+        {
+            "title": title[:32],
+            "description": "Оплата обучения в AUTOFLOW MARKET",
+            "payload": invoice_payload,
+            "currency": "XTR",
+            "prices": [{"label": "Обучение", "amount": amount}],
+        },
+    )
+    return str(data["result"])
+
+
+def personal_training_order_payload(
+    telegram_id: int,
+    *,
+    purchase_id: str,
+    title: str,
+    buyer_name: str,
+    buyer_username: str | None,
+    buyer_telegram_id: int,
+    price_xtr: int,
+    public_url: str,
+) -> dict:
+    username = (buyer_username or "").lstrip("@").strip()
+    username_line = f"@{username}" if username else "не указан"
+    text = (
+        "🎓 Новый заказ на персональное обучение\n\n"
+        f"Обучение: {title}\n"
+        f"Покупатель: {buyer_name}\n"
+        f"Username: {username_line}\n"
+        f"Telegram ID: {buyer_telegram_id}\n"
+        f"Стоимость: {price_xtr} ⭐\n"
+        "Статус: Ожидает обучения"
+    )
+    button_rows = []
+    if username:
+        button_rows.append([{"text": "💬 Написать покупателю", "url": f"https://t.me/{quote(username, safe='')}"}])
+    order_url = f"{public_url.rstrip('/')}/?{urlencode({'training_order': purchase_id})}"
+    button_rows.append([{"text": "📋 Открыть заказ", "web_app": {"url": order_url}}])
+    return {"chat_id": telegram_id, "text": text, "reply_markup": {"inline_keyboard": button_rows}}
+
+
+async def send_personal_training_order_notification(telegram_id: int, **order) -> bool:
+    public_url = get_settings().externally_reachable_url
+    if not public_url:
+        return False
+    try:
+        await call_bot_api(
+            "sendMessage",
+            personal_training_order_payload(telegram_id, public_url=public_url, **order),
+        )
+        return True
+    except HTTPException:
+        return False
 
 
 async def answer_pre_checkout_query(query_id: str, ok: bool, error_message: str | None = None) -> bool:

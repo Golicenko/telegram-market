@@ -5,6 +5,7 @@ from typing import Awaitable, Callable
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, delete, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
@@ -467,7 +468,12 @@ def credit_training_seller(wallet: Wallet, amount: Decimal) -> None:
 
 
 async def purchase_training_product(
-    session: AsyncSession, buyer: User, product_id: uuid.UUID
+    session: AsyncSession,
+    buyer: User,
+    product_id: uuid.UUID,
+    *,
+    telegram_payment_charge_id: str | None = None,
+    expected_price: Decimal | None = None,
 ) -> tuple[TrainingPurchase, bool]:
     now = datetime.now(UTC)
     async with session.begin():
@@ -476,6 +482,8 @@ async def purchase_training_product(
             raise HTTPException(status_code=404, detail="Обучение недоступно")
         if product.availability != "available":
             raise HTTPException(status_code=409, detail="Обучение сейчас недоступно для покупки")
+        if expected_price is not None and money(product.price_af_coins) != money(expected_price):
+            raise HTTPException(status_code=409, detail="Цена обучения изменилась во время оплаты")
         if product.admin_id == buyer.id:
             raise HTTPException(status_code=409, detail="Нельзя купить собственное обучение")
         existing = await session.scalar(select(TrainingPurchase).where(
@@ -515,6 +523,10 @@ async def purchase_training_product(
             product_id=product.id,
             buyer_id=buyer.id,
             seller_id=product.admin_id,
+            buyer_telegram_id=buyer.telegram_id,
+            buyer_display_name=" ".join(filter(None, [buyer.first_name, buyer.last_name])).strip() or "Telegram User",
+            buyer_username=buyer.username,
+            telegram_payment_charge_id=telegram_payment_charge_id,
             product_type=product.product_type,
             title_snapshot=product.title,
             cover_url_snapshot=product.cover_url,
@@ -561,6 +573,144 @@ async def purchase_training_product(
         await create_notification(session, buyer.id, "training_purchase", "Обучение куплено", product.title, {"purchase_id": str(purchase.id)})
         await create_notification(session, product.admin_id, "training_sale", "Новая покупка обучения", product.title, {"purchase_id": str(purchase.id)})
     return purchase, True
+
+
+async def create_training_payment_intent(
+    session: AsyncSession,
+    buyer: User,
+    product_id: uuid.UUID,
+    invoice_factory: Callable[[int, str, str], Awaitable[str]],
+) -> StarPaymentIntent:
+    now = datetime.now(UTC)
+    async with session.begin():
+        product = await session.scalar(select(TrainingProduct).where(TrainingProduct.id == product_id).with_for_update())
+        if not product or product.deleted_at is not None or not product.published:
+            raise HTTPException(status_code=404, detail="Обучение недоступно")
+        if product.availability != "available":
+            raise HTTPException(status_code=409, detail="Обучение сейчас недоступно для покупки")
+        if product.admin_id == buyer.id:
+            raise HTTPException(status_code=409, detail="Нельзя купить собственное обучение")
+        if await session.scalar(select(TrainingPurchase.id).where(
+            TrainingPurchase.product_id == product.id,
+            TrainingPurchase.buyer_id == buyer.id,
+        )):
+            raise HTTPException(status_code=409, detail="Вы уже приобрели это обучение")
+        if product.product_type == "automatic" and not await session.scalar(
+            select(TrainingMaterial.id).where(
+                TrainingMaterial.product_id == product.id,
+                TrainingMaterial.is_active.is_(True),
+            ).limit(1)
+        ):
+            raise HTTPException(status_code=409, detail="Материалы курса ещё не подготовлены")
+        existing = await session.scalar(
+            select(StarPaymentIntent).where(
+                StarPaymentIntent.user_id == buyer.id,
+                StarPaymentIntent.training_product_id == product.id,
+                StarPaymentIntent.purpose == "training_checkout",
+                StarPaymentIntent.status == "pending",
+            ).with_for_update()
+        )
+        if existing and existing.expires_at > now:
+            if existing.invoice_link:
+                return existing
+            raise HTTPException(status_code=409, detail="Счёт уже создаётся. Повторите через несколько секунд")
+        if existing:
+            existing.status = "expired"
+        amount = int(money(product.price_af_coins).to_integral_value(rounding=ROUND_CEILING))
+        if amount < 1:
+            raise HTTPException(status_code=409, detail="Цена обучения должна быть не меньше 1 Telegram Star")
+        intent_id = uuid.uuid4()
+        intent = StarPaymentIntent(
+            id=intent_id,
+            user_id=buyer.id,
+            invoice_payload=f"autoflow_training:{intent_id}",
+            xtr_amount=amount,
+            purpose="training_checkout",
+            context={
+                "title": product.title,
+                "product_type": product.product_type,
+                "price_af_coins": str(money(product.price_af_coins)),
+            },
+            training_product_id=product.id,
+            seller_id=product.admin_id,
+            checkout_status="pending",
+            status="pending",
+            expires_at=now + timedelta(minutes=30),
+        )
+        session.add(intent)
+
+    try:
+        invoice_link = await invoice_factory(intent.xtr_amount, intent.invoice_payload, product.title)
+    except Exception:
+        async with session.begin():
+            locked = await session.scalar(select(StarPaymentIntent).where(StarPaymentIntent.id == intent.id).with_for_update())
+            if locked and locked.status == "pending":
+                locked.status = "cancelled"
+                locked.checkout_status = "failed"
+        raise
+    async with session.begin():
+        locked = await session.scalar(select(StarPaymentIntent).where(StarPaymentIntent.id == intent.id).with_for_update())
+        if not locked or locked.status != "pending":
+            raise HTTPException(status_code=409, detail="Счёт больше недоступен")
+        locked.invoice_link = invoice_link
+    return locked
+
+
+async def complete_training_payment_intent(
+    session: AsyncSession,
+    buyer: User,
+    intent_id: uuid.UUID,
+    telegram_payment_charge_id: str,
+) -> tuple[StarPaymentIntent, TrainingPurchase | None, bool]:
+    intent = await session.scalar(select(StarPaymentIntent).where(StarPaymentIntent.id == intent_id).with_for_update())
+    if not intent or intent.user_id != buyer.id or intent.purpose != "training_checkout":
+        await session.rollback()
+        raise HTTPException(status_code=404, detail="Счёт обучения не найден")
+    if intent.status != "paid":
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Telegram ещё не подтвердил оплату")
+    if intent.checkout_status == "completed" and intent.training_purchase_id:
+        purchase = await session.get(TrainingPurchase, intent.training_purchase_id)
+        await session.commit()
+        return intent, purchase, False
+    product_id = intent.training_product_id
+    if not product_id:
+        intent.checkout_status = "failed"
+        await session.commit()
+        raise HTTPException(status_code=409, detail="Счёт не связан с обучением")
+    expected_price_value = (intent.context or {}).get("price_af_coins")
+    await session.commit()
+    try:
+        purchase, created = await purchase_training_product(
+            session,
+            buyer,
+            product_id,
+            telegram_payment_charge_id=telegram_payment_charge_id,
+            expected_price=Decimal(str(expected_price_value)) if expected_price_value is not None else None,
+        )
+    except IntegrityError:
+        await session.rollback()
+        purchase = await session.scalar(select(TrainingPurchase).where(
+            or_(
+                TrainingPurchase.telegram_payment_charge_id == telegram_payment_charge_id,
+                and_(TrainingPurchase.product_id == product_id, TrainingPurchase.buyer_id == buyer.id),
+            )
+        ))
+        if not purchase:
+            raise
+        created = False
+        await session.commit()
+    except HTTPException:
+        async with session.begin():
+            locked = await session.scalar(select(StarPaymentIntent).where(StarPaymentIntent.id == intent_id).with_for_update())
+            if locked:
+                locked.checkout_status = "failed"
+        raise
+    async with session.begin():
+        locked = await session.scalar(select(StarPaymentIntent).where(StarPaymentIntent.id == intent_id).with_for_update())
+        locked.training_purchase_id = purchase.id
+        locked.checkout_status = "completed"
+    return locked, purchase, created
 
 
 async def update_training_purchase_status(
@@ -1508,7 +1658,7 @@ async def process_successful_payment(session: AsyncSession, telegram_id: int, pa
     invoice_payload = str(payment.get("invoice_payload") or "")
     charge_id = str(payment.get("telegram_payment_charge_id") or "")
     xtr_amount = int(payment.get("total_amount") or 0)
-    if not invoice_payload.startswith("autoflow_topup:") or not charge_id or xtr_amount <= 0:
+    if not invoice_payload.startswith(("autoflow_topup:", "autoflow_training:")) or not charge_id or xtr_amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid successful_payment payload")
 
     async with session.begin():

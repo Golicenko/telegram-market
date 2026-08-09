@@ -142,6 +142,10 @@ class TrainingPurchase(Base, TimestampMixin):
     product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("training_products.id", ondelete="RESTRICT"), nullable=False, index=True)
     buyer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     seller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    buyer_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    buyer_display_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    buyer_username: Mapped[str | None] = mapped_column(String(64))
+    telegram_payment_charge_id: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
     product_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     title_snapshot: Mapped[str] = mapped_column(String(180), nullable=False)
     cover_url_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
@@ -407,6 +411,8 @@ class StarPaymentIntent(Base):
     listing_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"), index=True)
     seller_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
     deal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("deals.id", ondelete="SET NULL"), index=True)
+    training_product_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("training_products.id", ondelete="RESTRICT"), index=True)
+    training_purchase_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("training_purchases.id", ondelete="SET NULL"), index=True)
     listing_price_af_coins: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
     available_balance_at_creation: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
     missing_af_coins: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
@@ -416,8 +422,8 @@ class StarPaymentIntent(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
-        CheckConstraint("(purpose = 'listing_checkout' AND xtr_amount >= 1) OR (purpose <> 'listing_checkout' AND xtr_amount BETWEEN 10 AND 1000)", name="ck_star_payment_intent_amount"),
-        CheckConstraint("purpose IN ('topup','cart_checkout','listing_checkout')", name="ck_star_payment_intent_purpose"),
+        CheckConstraint("(purpose IN ('listing_checkout','training_checkout') AND xtr_amount >= 1) OR (purpose NOT IN ('listing_checkout','training_checkout') AND xtr_amount BETWEEN 10 AND 1000)", name="ck_star_payment_intent_amount"),
+        CheckConstraint("purpose IN ('topup','cart_checkout','listing_checkout','training_checkout')", name="ck_star_payment_intent_purpose"),
         CheckConstraint("status IN ('pending','paid','cancelled','expired')", name="ck_star_payment_intent_status"),
         CheckConstraint("checkout_status IN ('not_requested','pending','completed','listing_unavailable','failed')", name="ck_star_payment_intent_checkout_status"),
         CheckConstraint("missing_af_coins IS NULL OR missing_af_coins > 0", name="ck_star_payment_intent_missing"),
@@ -427,6 +433,13 @@ class StarPaymentIntent(Base):
             "listing_id",
             unique=True,
             postgresql_where=text("purpose = 'listing_checkout' AND status = 'pending'"),
+        ),
+        Index(
+            "uq_star_payment_intents_pending_training",
+            "user_id",
+            "training_product_id",
+            unique=True,
+            postgresql_where=text("purpose = 'training_checkout' AND status = 'pending'"),
         ),
     )
 

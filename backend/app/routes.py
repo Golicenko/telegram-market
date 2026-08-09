@@ -12,6 +12,8 @@ from .bot import (
     answer_bot_callback,
     answer_pre_checkout_query,
     create_star_invoice_link,
+    create_training_invoice_link,
+    send_personal_training_order_notification,
     send_bot_notification,
     send_bot_menu,
     send_bot_material,
@@ -85,6 +87,7 @@ from .services import (
     create_star_payment_intent,
     create_training_product,
     create_training_material,
+    create_training_payment_intent,
     create_listing_payment_intent,
     create_withdrawal,
     decide_withdrawal,
@@ -99,6 +102,7 @@ from .services import (
     process_successful_payment,
     purchase_listing,
     complete_listing_payment_intent,
+    complete_training_payment_intent,
     promote_listing,
     resolve_dispute,
     respond_price_offer,
@@ -239,6 +243,21 @@ async def training_purchase_out(session: AsyncSession, purchase: TrainingPurchas
     )
 
 
+async def training_purchase_admin_out(
+    session: AsyncSession,
+    purchase: TrainingPurchase,
+    buyer: User | None = None,
+) -> TrainingPurchaseAdminOut:
+    buyer = buyer or await session.get(User, purchase.buyer_id)
+    if not buyer:
+        raise HTTPException(status_code=404, detail="Покупатель не найден")
+    public = await training_purchase_out(session, purchase)
+    return TrainingPurchaseAdminOut.model_validate(purchase).model_copy(update={
+        "buyer": TrainingBuyerOut.model_validate(buyer),
+        "materials": public.materials,
+    })
+
+
 async def deliver_training_materials(purchase_id: uuid.UUID) -> None:
     async with SessionLocal() as session:
         purchase = await session.get(TrainingPurchase, purchase_id)
@@ -255,7 +274,11 @@ async def deliver_training_materials(purchase_id: uuid.UUID) -> None:
     success = bool(telegram_id and materials)
     if success:
         for material in materials:
-            sent = await send_bot_material(telegram_id, material.material_type, material.delivery_reference, material.title)
+            sent = False
+            for _attempt in range(2):
+                sent = await send_bot_material(telegram_id, material.material_type, material.delivery_reference, material.title)
+                if sent:
+                    break
             if not sent:
                 success = False
                 break
@@ -564,26 +587,29 @@ async def get_training_product(product_id: uuid.UUID, session: AsyncSession = De
     return product
 
 
-@router.post("/training/{product_id}/purchase", response_model=TrainingPurchaseOut)
-async def buy_training_product(
+@router.post("/training/{product_id}/purchase-intent", response_model=StarPaymentIntentOut, status_code=201)
+async def create_training_purchase_intent(
     product_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    purchase, created = await purchase_training_product(session, user, product_id)
-    if created:
-        if purchase.product_type == "automatic":
-            await begin_training_delivery(session, user.id, purchase.id, cooldown_seconds=0)
-            background_tasks.add_task(deliver_training_materials, purchase.id)
-        seller = await session.get(User, purchase.seller_id)
-        if seller and seller.bot_started:
-            background_tasks.add_task(
-                send_bot_notification,
-                seller.telegram_id,
-                f"Новое обучение куплено: {purchase.title_snapshot}. Откройте AUTOFLOW MARKET.",
-            )
-    return await training_purchase_out(session, purchase)
+    intent = await create_training_payment_intent(session, user, product_id, create_training_invoice_link)
+    return StarPaymentIntentOut(
+        id=intent.id,
+        invoice_url=intent.invoice_link,
+        amount=intent.xtr_amount,
+        status=intent.status,
+        purpose=intent.purpose,
+        training_product_id=intent.training_product_id,
+        training_purchase_id=intent.training_purchase_id,
+        checkout_status=intent.checkout_status,
+    )
+
+
+@router.post("/training/{product_id}/purchase", status_code=409)
+async def legacy_training_purchase(product_id: uuid.UUID, user: User = Depends(get_current_user)):
+    del product_id, user
+    raise HTTPException(status_code=409, detail="Создайте защищённый Telegram Stars invoice через purchase-intent")
 
 
 @router.post("/training/purchases/{purchase_id}/redeliver", response_model=TrainingPurchaseOut)
@@ -756,6 +782,25 @@ async def remove_training_material(
     await delete_training_material(session, admin, material_id)
 
 
+@router.get("/admin/training/purchases", response_model=list[TrainingPurchaseAdminOut])
+async def all_training_orders(
+    product_type: str | None = Query(default=None, pattern="^(personal|automatic)$"),
+    purchase_status: str | None = Query(default=None, pattern="^(awaiting_start|in_progress|completed)$"),
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    statement = select(TrainingPurchase).where(TrainingPurchase.seller_id == admin.id)
+    if product_type:
+        statement = statement.where(TrainingPurchase.product_type == product_type)
+    if purchase_status:
+        statement = statement.where(TrainingPurchase.status == purchase_status)
+    purchases = list((await session.scalars(statement.order_by(TrainingPurchase.created_at.desc()))).all())
+    buyer_ids = {purchase.buyer_id for purchase in purchases}
+    buyers = list((await session.scalars(select(User).where(User.id.in_(buyer_ids)))).all()) if buyer_ids else []
+    by_id = {buyer.id: buyer for buyer in buyers}
+    return [await training_purchase_admin_out(session, purchase, by_id.get(purchase.buyer_id)) for purchase in purchases]
+
+
 @router.get("/admin/training/{product_id}/purchases", response_model=list[TrainingPurchaseAdminOut])
 async def training_product_buyers(
     product_id: uuid.UUID,
@@ -776,11 +821,7 @@ async def training_product_buyers(
         buyer = users_by_id.get(purchase.buyer_id)
         if not buyer:
             continue
-        public = await training_purchase_out(session, purchase)
-        results.append(TrainingPurchaseAdminOut.model_validate(purchase).model_copy(update={
-            "buyer": TrainingBuyerOut.model_validate(buyer),
-            "materials": public.materials,
-        }))
+        results.append(await training_purchase_admin_out(session, purchase, buyer))
     return results
 
 
@@ -795,15 +836,11 @@ async def change_training_purchase_status(
     purchase = await update_training_purchase_status(session, admin, purchase_id, payload.status)
     buyer = await session.get(User, purchase.buyer_id)
     if buyer and buyer.bot_started:
-        text = "Ваше персональное обучение началось" if payload.status == "in_progress" else "Ваше персональное обучение завершено"
+        text = "🎓 Ваше обучение началось." if payload.status == "in_progress" else "✅ Персональное обучение завершено."
         background_tasks.add_task(send_bot_notification, buyer.telegram_id, text)
     if not buyer:
         raise HTTPException(status_code=404, detail="Покупатель не найден")
-    public = await training_purchase_out(session, purchase)
-    return TrainingPurchaseAdminOut.model_validate(purchase).model_copy(update={
-        "buyer": TrainingBuyerOut.model_validate(buyer),
-        "materials": public.materials,
-    })
+    return await training_purchase_admin_out(session, purchase, buyer)
 
 
 @router.delete("/admin/training/{product_id}", status_code=204)
@@ -1272,6 +1309,9 @@ async def star_payment_status(
         "failed": "Покупка не завершена. Пополненные AF Coins сохранены на вашем балансе.",
         "pending": "Оплата подтверждена. Сервер завершает покупку.",
     }
+    message = messages.get(intent.checkout_status)
+    if intent.purpose == "training_checkout" and intent.checkout_status == "completed":
+        message = "Обучение оплачено. Заказ сохранён в вашей библиотеке."
     return StarPaymentStatusOut(
         id=intent.id,
         status=intent.status,
@@ -1280,8 +1320,10 @@ async def star_payment_status(
         purpose=intent.purpose,
         listing_id=intent.listing_id,
         deal_id=intent.deal_id,
+        training_product_id=intent.training_product_id,
+        training_purchase_id=intent.training_purchase_id,
         checkout_status=intent.checkout_status,
-        message=messages.get(intent.checkout_status),
+        message=message,
     )
 
 
@@ -1888,9 +1930,51 @@ async def telegram_webhook(
         )
         payment_user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
         await session.commit()
-        if credited:
+        if credited and (not payment_intent or payment_intent.purpose != "training_checkout"):
             background_tasks.add_task(send_bot_notification, int(sender["id"]), f"Баланс AUTOFLOW MARKET пополнен на {payment['total_amount']} AF Coins")
-        if payment_intent and payment_user and payment_intent.purpose == "listing_checkout":
+        if payment_intent and payment_user and payment_intent.purpose == "training_checkout":
+            try:
+                completed_intent, purchase, created = await complete_training_payment_intent(
+                    session,
+                    payment_user,
+                    payment_intent.id,
+                    str(payment.get("telegram_payment_charge_id") or ""),
+                )
+            except HTTPException:
+                background_tasks.add_task(
+                    send_bot_notification,
+                    int(sender["id"]),
+                    "Оплата получена, но заказ не удалось оформить автоматически. AF Coins сохранены на вашем балансе.",
+                )
+            else:
+                if purchase and created:
+                    if purchase.product_type == "automatic":
+                        await begin_training_delivery(session, payment_user.id, purchase.id, cooldown_seconds=0)
+                        background_tasks.add_task(
+                            send_bot_notification,
+                            int(sender["id"]),
+                            "✅ Оплата получена.\nВаши материалы отправляются ниже.",
+                        )
+                        background_tasks.add_task(deliver_training_materials, purchase.id)
+                    else:
+                        background_tasks.add_task(
+                            send_bot_notification,
+                            int(sender["id"]),
+                            "✅ Оплата получена.\nВаш заказ на персональное обучение принят. Администратор свяжется с вами в Telegram.",
+                        )
+                        seller = await session.get(User, purchase.seller_id)
+                        if seller and seller.bot_started:
+                            background_tasks.add_task(
+                                send_personal_training_order_notification,
+                                seller.telegram_id,
+                                purchase_id=str(purchase.id),
+                                title=purchase.title_snapshot,
+                                buyer_name=purchase.buyer_display_name,
+                                buyer_username=purchase.buyer_username,
+                                buyer_telegram_id=purchase.buyer_telegram_id,
+                                price_xtr=completed_intent.xtr_amount,
+                            )
+        elif payment_intent and payment_user and payment_intent.purpose == "listing_checkout":
             completed_intent, deal, seller_telegram_id = await complete_listing_payment_intent(
                 session, payment_user, payment_intent.id
             )
