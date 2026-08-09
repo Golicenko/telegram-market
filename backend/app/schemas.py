@@ -246,6 +246,9 @@ class TrainingPurchaseOut(ORMModel):
     title_snapshot: str
     cover_url_snapshot: str
     price_af_coins: Decimal
+    buyer_telegram_id: int
+    buyer_display_name: str
+    buyer_username: str | None
     status: str
     delivery_status: str
     delivery_attempts: int
@@ -381,6 +384,8 @@ class StarPaymentIntentOut(BaseModel):
     status: str
     purpose: str = "topup"
     listing_id: uuid.UUID | None = None
+    training_product_id: uuid.UUID | None = None
+    training_purchase_id: uuid.UUID | None = None
     missing_af_coins: Decimal | None = None
     checkout_status: str = "not_requested"
 
@@ -393,6 +398,8 @@ class StarPaymentStatusOut(BaseModel):
     purpose: str = "topup"
     listing_id: uuid.UUID | None = None
     deal_id: uuid.UUID | None = None
+    training_product_id: uuid.UUID | None = None
+    training_purchase_id: uuid.UUID | None = None
     checkout_status: str = "not_requested"
     message: str | None = None
 

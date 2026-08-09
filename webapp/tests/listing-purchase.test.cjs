@@ -36,6 +36,6 @@ test("mobile confirmation is a real accessible dialog", () => {
   assert.match(html, /<dialog class="modal purchase-modal" id="purchaseModal">/);
   assert.match(html, /id="purchaseModalAction"/);
   assert.match(html, /data-close-purchase/);
-  assert.match(css, /\.card-actions button\{min-height:44px/);
+  assert.match(css, /\.card-actions button\{[^}]*min-height:44px/);
   assert.match(css, /\.purchase-modal \.publish-button,\.purchase-modal \.ghost-button\{width:100%;min-height:46px/);
 });

@@ -28,8 +28,20 @@ test("training purchase and library use authenticated backend workflows", () => 
   assert.match(html, /data-profile-tab="training"/);
   assert.match(html, /id="adminTrainingProducts"/);
   assert.match(html, /id="trainingMaterialForm"/);
-  assert.match(app, /\/training\/\$\{product\.id\}\/purchase/);
+  assert.match(app, /\/training\/\$\{product\.id\}\/purchase-intent/);
+  assert.match(app, /telegram\.openInvoice/);
+  assert.match(app, /waitForTrainingPayment/);
   assert.match(app, /\/training\/purchases\/\$\{button\.dataset\.trainingRedeliver\}\/redeliver/);
   assert.match(app, /\/admin\/training\/management\?filter=/);
+  assert.match(app, /\/admin\/training\/purchases\?product_type=personal/);
+  assert.match(app, /training_order/);
+  assert.doesNotMatch(app, /\/training\/\$\{product\.id\}\/purchase`/);
   assert.doesNotMatch(app, /Покупка обучения будет подключена на следующем этапе/);
+});
+
+test("personal training orders are managed without creating an internal conversation", () => {
+  assert.match(app, /Администратор получил заказ и свяжется с вами в Telegram/);
+  assert.match(app, /dataset\.trainingPurchaseAction = purchase\.status === "awaiting_start" \? "in_progress" : "completed"/);
+  const purchaseFlow = app.slice(app.indexOf("async function buyTrainingProduct"), app.indexOf("async function redeliverTraining"));
+  assert.doesNotMatch(purchaseFlow, /conversation|chat/i);
 });
