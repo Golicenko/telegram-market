@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     seller_payout_percent: int = Field(default=70, ge=1, le=100)
     star_topup_min: int = Field(default=10, ge=1)
     star_topup_max: int = Field(default=1000, ge=1)
-    upload_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
+    upload_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
     debug: bool = False
     dev_telegram_id: int | None = None
     dev_telegram_name: str = "Local User"

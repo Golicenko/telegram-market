@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func, text as sql_text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, LargeBinary, Numeric, String, Text, UniqueConstraint, func, text as sql_text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -39,8 +39,8 @@ class Listing(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", index=True)
     brand: Mapped[str] = mapped_column(String(96), nullable=False, index=True)
     model: Mapped[str] = mapped_column(String(96), nullable=False, index=True)
-    power_hp: Mapped[int] = mapped_column(Integer, nullable=False)
-    max_speed_kph: Mapped[int] = mapped_column(Integer, nullable=False)
+    power_hp: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    max_speed_kph: Mapped[int] = mapped_column(BigInteger, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     price_af_coins: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     delivery_time_estimate: Mapped[str] = mapped_column(String(24), nullable=False, default="up_to_1h")
@@ -72,6 +72,20 @@ class ListingImage(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     __table_args__ = (UniqueConstraint("listing_id", "position", name="uq_listing_image_position"),)
+
+
+class UploadedImage(Base):
+    """A normalized image kept in PostgreSQL so Railway restarts cannot lose it."""
+
+    __tablename__ = "uploaded_images"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    content_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    original_filename: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (CheckConstraint("size_bytes > 0", name="ck_uploaded_images_size_positive"),)
 
 
 class AccountListing(Base, TimestampMixin):

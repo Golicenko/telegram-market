@@ -2,9 +2,12 @@ import hmac
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Response, UploadFile, status
+from PIL import Image, ImageOps, UnidentifiedImageError
+from pillow_heif import register_heif_opener
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +26,7 @@ from .bot import (
 )
 from .config import Settings, get_settings
 from .database import SessionLocal, get_session
-from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportMessage, SupportTicket, TrainingMaterial, TrainingProduct, TrainingPurchase, User, Wallet, WalletTransaction, WithdrawalRequest
+from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportMessage, SupportTicket, TrainingMaterial, TrainingProduct, TrainingPurchase, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
 from .schemas import (
     AccountListingCreate,
     AccountListingOut,
@@ -124,6 +127,8 @@ from .services import (
 
 
 router = APIRouter(prefix="/api")
+register_heif_opener()
+Image.MAX_IMAGE_PIXELS = 100_000_000
 UPLOAD_DIR = Path(get_settings().upload_dir) if get_settings().upload_dir else Path(__file__).resolve().parents[1] / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -298,19 +303,33 @@ async def deliver_training_materials(purchase_id: uuid.UUID) -> None:
         await finish_training_delivery(session, purchase_id, success)
 
 
-def validate_image_content(content: bytes, content_type: str | None) -> str:
-    signatures = {
-        "image/jpeg": (b"\xff\xd8\xff", ".jpg"),
-        "image/png": (b"\x89PNG\r\n\x1a\n", ".png"),
-        "image/webp": (b"RIFF", ".webp"),
-    }
-    signature = signatures.get(content_type or "")
-    if not signature:
-        raise HTTPException(status_code=415, detail="Разрешены только JPG, PNG и WEBP")
-    prefix, extension = signature
-    if not content.startswith(prefix) or (content_type == "image/webp" and content[8:12] != b"WEBP"):
-        raise HTTPException(status_code=415, detail="Содержимое файла не соответствует изображению")
-    return extension
+def normalize_image_content(content: bytes) -> tuple[bytes, str, str]:
+    """Validate a real image and normalize mobile formats to a browser-safe JPEG."""
+
+    try:
+        with Image.open(BytesIO(content)) as source:
+            source_format = (source.format or "").upper()
+            if source_format not in {"JPEG", "PNG", "WEBP", "HEIF", "HEIC"}:
+                raise HTTPException(status_code=415, detail="Разрешены фотографии JPG, PNG, WEBP, HEIC и HEIF")
+            source.load()
+            image = ImageOps.exif_transpose(source)
+            image.thumbnail((2560, 2560), Image.Resampling.LANCZOS)
+            if "A" in image.getbands():
+                background = Image.new("RGB", image.size, "white")
+                background.paste(image, mask=image.getchannel("A"))
+                image = background
+            elif image.mode != "RGB":
+                image = image.convert("RGB")
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=88, optimize=True, progressive=True)
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise HTTPException(status_code=415, detail="Файл не удалось распознать как фотографию") from exc
+    normalized = output.getvalue()
+    if not normalized:
+        raise HTTPException(status_code=415, detail="Не удалось подготовить фотографию")
+    return normalized, "image/jpeg", ".jpg"
 
 
 @router.get("/health")
@@ -328,15 +347,35 @@ async def me(user: User = Depends(get_current_user), session: AsyncSession = Dep
 async def upload_image(
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
 ):
     max_bytes = get_settings().upload_max_bytes
     content = await file.read(max_bytes + 1)
     if len(content) > max_bytes:
-        raise HTTPException(status_code=413, detail="Image exceeds 5 MB")
-    extension = validate_image_content(content, file.content_type)
-    filename = f"{user.id}-{uuid.uuid4().hex}{extension}"
-    (UPLOAD_DIR / filename).write_bytes(content)
-    return {"url": f"/uploads/{filename}"}
+        raise HTTPException(status_code=413, detail=f"Фотография превышает допустимый размер {max_bytes // (1024 * 1024)} МБ")
+    normalized, content_type, _extension = normalize_image_content(content)
+    image = UploadedImage(
+        owner_id=user.id,
+        content_type=content_type,
+        data=normalized,
+        size_bytes=len(normalized),
+        original_filename=(Path(file.filename or "photo").name[:255] or None),
+    )
+    session.add(image)
+    await session.commit()
+    return {"url": f"/api/media/{image.id}"}
+
+
+@router.get("/media/{image_id}", response_class=Response)
+async def uploaded_image(image_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
+    image = await session.get(UploadedImage, image_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="Фотография не найдена")
+    return Response(
+        content=image.data,
+        media_type=image.content_type,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @router.post("/admin/advertisement/upload", status_code=201)
@@ -348,9 +387,9 @@ async def upload_advertisement_image(
     content = await file.read(max_bytes + 1)
     if len(content) > max_bytes:
         raise HTTPException(status_code=413, detail="Рекламное изображение не должно превышать 2 МБ")
-    extension = validate_image_content(content, file.content_type)
+    normalized, _content_type, extension = normalize_image_content(content)
     filename = f"advertisement-{admin.id}-{uuid.uuid4().hex}{extension}"
-    (UPLOAD_DIR / filename).write_bytes(content)
+    (UPLOAD_DIR / filename).write_bytes(normalized)
     return {"url": f"/uploads/{filename}"}
 
 
