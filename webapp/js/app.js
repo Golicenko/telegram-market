@@ -23,6 +23,7 @@
     cart: [],
     advertisement: null,
     supportTickets: [],
+    adminSupportFilter: "active",
     profile: null,
     catalog: { brands: [] },
     photoFiles: [],
@@ -264,6 +265,7 @@
     reportStartupStage("market_loading");
     void loadOptionalData();
     void openTrainingOrderDeepLink();
+    void openSupportCaseDeepLink();
   }
 
   async function authenticateCurrentUser() {
@@ -507,12 +509,14 @@ function handleClick(event) {
     if (userAction) return void adminUserAction(userAction);
     const listingAction = target.closest("[data-admin-listing-action]");
     if (listingAction) return void adminListingAction(listingAction);
-    const resolveAction = target.closest("[data-resolve-deal]");
-    if (resolveAction) return void resolveAdminDeal(resolveAction);
     const supportReply = target.closest("[data-support-reply]");
     if (supportReply) return void replySupportTicket(supportReply.dataset.supportReply, supportReply.dataset.adminReply === "true");
     const supportStatus = target.closest("[data-support-status]");
     if (supportStatus) return void setSupportTicketStatus(supportStatus.dataset.ticketId, supportStatus.dataset.supportStatus);
+    const supportFilter = target.closest("[data-support-filter]");
+    if (supportFilter) return void loadAdminSupport(supportFilter.dataset.supportFilter);
+    const supportResolution = target.closest("[data-support-resolution]");
+    if (supportResolution) return void resolveSupportCase(supportResolution);
   }
 
   async function navigate(viewName) {
@@ -684,6 +688,9 @@ function handleClick(event) {
   }
 
   async function openSupport() {
+    elements.supportForm.elements.deal_id.value = "";
+    elements.supportForm.elements.topic.closest("label").hidden = false;
+    document.getElementById("supportDealContext").hidden = true;
     openSecondary("support");
     if (!state.serverAvailable) return;
     try {
@@ -1628,7 +1635,7 @@ async function hideCurrentConversation() {
 
   elements.dealControls.append(warning, timer, confirm);
 }
-    const dispute = document.createElement("button"); dispute.className = "deal-dispute"; dispute.dataset.dealAction = "dispute"; dispute.textContent = "Возникла проблема"; elements.dealControls.append(dispute);
+    const support = document.createElement("button"); support.className = "deal-support"; support.dataset.dealAction = "support"; support.textContent = "🛟 Написать в поддержку"; elements.dealControls.prepend(support);
     if (["paid", "seller_contacted"].includes(deal.status)) {
       const cancel = document.createElement("button"); cancel.className = "deal-secondary"; cancel.dataset.dealAction = "cancel"; cancel.textContent = "Отменить сделку"; elements.dealControls.append(cancel);
     }
@@ -1637,9 +1644,23 @@ async function hideCurrentConversation() {
   async function runDealAction(action) {
     const id = state.currentConversation?.deal?.id;
     if (!id) return;
+    if (action === "support") return openDealSupport(id);
     const endpoint = action === "seller-contacted" ? "seller-contacted" : action === "transfer" ? "transfer" : action === "confirm" ? "confirm" : action === "cancel" ? "cancel" : "dispute";
     try { await api.request(`/deals/${id}/${endpoint}`, { method: "POST" }); await openConversation(state.currentConversation.id); await refreshMarketplace(); }
     catch (error) { notify(error.message); }
+  }
+
+  function openDealSupport(dealId) {
+    const form = elements.supportForm;
+    form.reset();
+    form.elements.deal_id.value = dealId;
+    form.elements.topic.value = "deal";
+    form.elements.topic.closest("label").hidden = true;
+    const context = document.getElementById("supportDealContext");
+    context.hidden = false;
+    context.textContent = `Обращение по сделке #${dealId.slice(0, 8)}. Деньги останутся под защитой до решения.`;
+    openSecondary("support");
+    window.setTimeout(() => form.elements.message.focus({ preventScroll: true }), 50);
   }
 
   async function sendChatMessage(event) {
@@ -1678,8 +1699,9 @@ async function hideCurrentConversation() {
 
   function updateChatViewport() {
     const viewport = window.visualViewport;
-    const heights = [viewport?.height, telegram?.viewportHeight, window.innerHeight].filter((value) => Number(value) > 0);
-    const height = Math.min(...heights);
+    const visualHeight = Number(viewport?.height);
+    const telegramHeight = Number(telegram?.viewportHeight);
+    const height = visualHeight > 0 ? visualHeight : telegramHeight > 0 ? telegramHeight : window.innerHeight;
     document.documentElement.style.setProperty("--chat-viewport-height", `${Math.round(height)}px`);
     document.documentElement.style.setProperty("--chat-viewport-top", `${Math.round(viewport?.offsetTop || 0)}px`);
     if (document.body.classList.contains("chat-open")) requestAnimationFrame(() => {
@@ -1822,7 +1844,7 @@ async function hideCurrentConversation() {
       await loadOptionalData(["trainingPurchases", "profile"], { allowRecovery: false });
       renderTrainingLibrary();
       button.textContent = "Уже куплено";
-      notify(product.product_type === "automatic" ? "✅ Оплата получена. Материалы отправляются ботом" : "✅ Обучение оплачено. Администратор получил заказ и свяжется с вами в Telegram");
+      notify(product.product_type === "automatic" ? "✅ Оплата получена. Материалы отправляются ботом" : "✅ Оплата прошла успешно. Ваш заказ на персональное обучение принят. Статус: Ожидает обучения");
     } catch (error) {
       button.disabled = false;
       notify(error.message);
@@ -1872,8 +1894,19 @@ async function hideCurrentConversation() {
       let coverUrl = existing?.cover_url || null; const cover = form.get("cover"); if (cover?.size) coverUrl = (await api.upload(cover)).url;
       if (!coverUrl) throw new Error("Добавьте одну основную обложку");
       const payload = { title: form.get("title"), short_description: form.get("short_description"), full_description: form.get("full_description"), cover_url: coverUrl, promo_video_url: form.get("promo_video_url") || null, product_type: form.get("product_type"), availability: form.get("availability"), price_af_coins: Number(form.get("price_af_coins")), published: form.get("published") === "on", pinned: form.get("pinned") === "on" };
-      await api.request(id ? `/admin/training/${id}` : "/admin/training", { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) });
-      formElement.reset(); state.training = await api.request("/admin/training"); renderTraining(); await loadAdminTraining(state.adminTrainingFilter); await navigate("admin"); switchAdminTab("training"); notify("Обучение сохранено");
+      const saved = await api.request(id ? `/admin/training/${id}` : "/admin/training", { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) });
+      const upsert = (items) => [saved, ...items.filter((item) => item.id !== saved.id)];
+      state.training = saved.published ? upsert(state.training) : state.training.filter((item) => item.id !== saved.id);
+      const previousAdmin = state.adminTraining.find((item) => item.id === saved.id);
+      const savedAdmin = { purchase_count: 0, revenue_af_coins: 0, archived: false, ...previousAdmin, ...saved };
+      state.adminTraining = [savedAdmin, ...state.adminTraining.filter((item) => item.id !== saved.id)];
+      formElement.reset(); renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training"); notify("Сохранено");
+      try {
+        await loadAdminTraining(state.adminTrainingFilter);
+      } catch (refreshError) {
+        reportClientError("training_refresh_after_save", refreshError);
+        notify("Сохранено. Список обновится при следующем открытии.");
+      }
     } catch (error) { notify(error.message); } finally { button.disabled = false; }
   }
 
@@ -1891,14 +1924,21 @@ async function hideCurrentConversation() {
     if (button.disabled) return;
     button.disabled = true;
     try {
-      const screenshot = data.get("screenshot");
-      let screenshotUrl = null;
-      if (screenshot?.size) screenshotUrl = (await api.upload(screenshot)).url;
-      await api.request("/support/tickets", {
-        method: "POST",
-        body: JSON.stringify({ topic: data.get("topic"), message: data.get("message"), screenshot_url: screenshotUrl }),
-      });
+      const dealId = String(data.get("deal_id") || "").trim();
+      if (dealId) {
+        await api.request(`/deals/${dealId}/support`, { method: "POST", body: JSON.stringify({ message: data.get("message"), client_request_id: crypto.randomUUID() }) });
+      } else {
+        const screenshot = data.get("screenshot");
+        let screenshotUrl = null;
+        if (screenshot?.size) screenshotUrl = (await api.upload(screenshot)).url;
+        await api.request("/support/tickets", {
+          method: "POST",
+          body: JSON.stringify({ topic: data.get("topic"), message: data.get("message"), screenshot_url: screenshotUrl }),
+        });
+      }
       formElement.reset();
+      formElement.elements.topic.closest("label").hidden = false;
+      document.getElementById("supportDealContext").hidden = true;
       state.supportTickets = await api.request("/support/tickets");
       renderSupportTickets();
       notify("Обращение отправлено");
@@ -1917,14 +1957,20 @@ async function hideCurrentConversation() {
   function createSupportTicketCard(ticket, adminMode) {
     const card = document.createElement("article"); card.className = "support-ticket";
     const head = document.createElement("div"); head.className = "support-ticket__head";
-    const title = document.createElement("strong"); title.textContent = ticket.topic;
+    const title = document.createElement("strong"); title.textContent = ticket.case_type === "deal" ? `${ticket.listing_title || "Сделка"} · #${ticket.deal_id.slice(0, 8)}` : ticket.topic;
     const status = document.createElement("small"); status.textContent = supportStatusLabel(ticket.status);
     head.append(title, status); card.append(head);
+    if (adminMode && ticket.conversation_messages?.length) {
+      const history = document.createElement("details"); history.className = "support-conversation-history";
+      const summary = document.createElement("summary"); summary.textContent = `История buyer/seller · ${ticket.conversation_messages.length}`; history.append(summary);
+      ticket.conversation_messages.forEach((item) => { const row = document.createElement("div"); const role = item.sender_id === ticket.buyer_id ? "Покупатель" : item.sender_id === ticket.seller_id ? "Продавец" : "Участник"; row.textContent = `${role}: ${item.body}`; history.append(row); });
+      card.append(history);
+    }
     ticket.messages.forEach((item) => {
       const message = document.createElement("div");
-      const isAdminMessage = adminMode ? item.sender_id === state.me?.user.id : item.sender_id !== state.me?.user.id;
+      const isAdminMessage = adminMode ? item.sender_id === state.me?.user.id : ![ticket.buyer_id, ticket.seller_id, ticket.author_id].includes(item.sender_id);
       message.className = `support-message${isAdminMessage ? " is-admin" : ""}`;
-      message.textContent = item.body;
+      message.textContent = `${isAdminMessage ? "🛡 AutoFlow Support\n" : ""}${item.body}`;
       card.append(message);
     });
     const actions = document.createElement("div"); actions.className = "support-ticket__actions";
@@ -1932,7 +1978,11 @@ async function hideCurrentConversation() {
       const reply = document.createElement("button"); reply.type = "button"; reply.dataset.supportReply = ticket.id; reply.dataset.adminReply = String(adminMode); reply.textContent = "Ответить"; actions.append(reply);
     }
     if (adminMode) {
-      ["resolved", "closed"].forEach((nextStatus) => { const button = document.createElement("button"); button.type = "button"; button.dataset.supportStatus = nextStatus; button.dataset.ticketId = ticket.id; button.textContent = nextStatus === "resolved" ? "Решено" : "Закрыть"; actions.append(button); });
+      if (ticket.case_type === "deal" && !["resolved", "closed"].includes(ticket.status)) {
+        [["complete", "Передать средства продавцу"], ["refund", "Вернуть средства покупателю"]].forEach(([outcome, label]) => { const button = document.createElement("button"); button.type = "button"; button.dataset.supportResolution = outcome; button.dataset.ticketId = ticket.id; button.textContent = label; actions.append(button); });
+      } else {
+        ["resolved", "closed"].forEach((nextStatus) => { const button = document.createElement("button"); button.type = "button"; button.dataset.supportStatus = nextStatus; button.dataset.ticketId = ticket.id; button.textContent = nextStatus === "resolved" ? "Решено" : "Закрыть"; actions.append(button); });
+      }
     }
     card.append(actions);
     return card;
@@ -1943,7 +1993,7 @@ async function hideCurrentConversation() {
     if (!message?.trim()) return;
     const path = adminMode ? `/admin/support/tickets/${ticketId}/messages` : `/support/tickets/${ticketId}/messages`;
     try {
-      await api.request(path, { method: "POST", body: JSON.stringify({ message: message.trim() }) });
+      await api.request(path, { method: "POST", body: JSON.stringify({ message: message.trim(), client_request_id: crypto.randomUUID() }) });
       if (adminMode) await loadAdminSupport();
       else { state.supportTickets = await api.request("/support/tickets"); renderSupportTickets(); }
     } catch (error) { notify(error.message); }
@@ -1956,10 +2006,34 @@ async function hideCurrentConversation() {
     } catch (error) { notify(error.message); }
   }
 
-  async function loadAdminSupport() {
-    const tickets = await api.request("/admin/support/tickets");
+  async function loadAdminSupport(filter = state.adminSupportFilter) {
+    state.adminSupportFilter = filter;
+    let filters = document.getElementById("adminSupportFilters");
+    if (!filters) {
+      filters = document.createElement("div"); filters.id = "adminSupportFilters"; filters.className = "support-admin-filters";
+      [["active", "Новые"], ["in_progress", "В работе"], ["resolved", "Решённые"]].forEach(([value, label]) => { const button = document.createElement("button"); button.type = "button"; button.dataset.supportFilter = value; button.textContent = label; filters.append(button); });
+      elements.adminSupportTickets.before(filters);
+    }
+    filters.querySelectorAll("button").forEach((button) => button.classList.toggle("is-active", button.dataset.supportFilter === filter));
+    const query = filter === "active" ? "?status=open" : `?status=${encodeURIComponent(filter)}`;
+    const tickets = await api.request(`/admin/support/tickets${query}`);
     if (!tickets.length) { elements.adminSupportTickets.textContent = "Обращений пока нет"; return; }
     elements.adminSupportTickets.replaceChildren(...tickets.map((ticket) => createSupportTicketCard(ticket, true)));
+  }
+
+  async function resolveSupportCase(button) {
+    const outcome = button.dataset.supportResolution;
+    const question = outcome === "complete" ? "Передать защищённые средства продавцу и завершить сделку?" : "Вернуть защищённые средства покупателю и отменить сделку?";
+    if (!(await confirmAction(question))) return;
+    const reason = window.prompt("Укажите обязательную причину решения");
+    if (!reason?.trim()) return;
+    button.disabled = true;
+    try {
+      await api.request(`/admin/support/tickets/${button.dataset.ticketId}/resolve`, { method: "POST", body: JSON.stringify({ outcome, reason: reason.trim() }) });
+      await Promise.all([loadAdminSupport(), loadAdminDeals()]);
+      notify("Решение выполнено и записано в историю");
+    } catch (error) { notify(error.message); }
+    finally { button.disabled = false; }
   }
 
   async function loadAdvertisementAdmin() {
@@ -2066,15 +2140,9 @@ async function hideCurrentConversation() {
       const card = document.createElement("div"); card.className = "admin-record";
       const title = document.createElement("strong"); title.textContent = `Сделка ${deal.id.slice(0, 8)} · ${dealStatusLabel(deal.status)}`;
       const meta = document.createElement("small"); meta.textContent = `${formatNumber(deal.price_af_coins)} AF Coins · ${formatDate(deal.created_at)}`; card.append(title, meta);
-      if (deal.status === "disputed") { const actions = document.createElement("div"); actions.className = "admin-record__actions"; ["complete", "refund"].forEach((outcome) => { const button = document.createElement("button"); button.dataset.resolveDeal = outcome; button.dataset.dealId = deal.id; button.textContent = outcome === "complete" ? "Завершить продавцу" : "Вернуть покупателю"; actions.append(button); }); card.append(actions); }
+      if (deal.status === "disputed") { const note = document.createElement("small"); note.textContent = "Финансовое решение доступно в связанном обращении поддержки"; card.append(note); }
       return card;
     }));
-  }
-
-  async function resolveAdminDeal(button) {
-    const reason = window.prompt("Обязательная причина решения спора"); if (!reason) return;
-    try { await api.request(`/admin/deals/${button.dataset.dealId}/resolve`, { method: "POST", body: JSON.stringify({ outcome: button.dataset.resolveDeal, reason }) }); await loadAdminDeals(); notify("Спор разрешён и записан в историю"); }
-    catch (error) { notify(error.message); }
   }
 
   async function loadAdminTraining(filter = "all") {
@@ -2243,6 +2311,16 @@ async function hideCurrentConversation() {
     [...document.querySelectorAll("[data-training-order-id]")]
       .find((card) => card.dataset.trainingOrderId === purchaseId)
       ?.scrollIntoView({ block: "center" });
+  }
+
+  async function openSupportCaseDeepLink() {
+    const ticketId = new URLSearchParams(window.location.search).get("support_case");
+    if (!ticketId || state.me?.user.role !== "admin") return;
+    await openAdminPanel(); switchAdminTab("support");
+    try {
+      const ticket = await api.request(`/admin/support/tickets/${ticketId}`);
+      elements.adminSupportTickets.replaceChildren(createSupportTicketCard(ticket, true));
+    } catch (error) { notify(error.message); }
   }
 
   function switchAdminTab(tab) {

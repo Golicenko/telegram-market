@@ -18,6 +18,7 @@ from .bot import (
     answer_pre_checkout_query,
     create_star_invoice_link,
     create_training_invoice_link,
+    send_deal_support_case_notification,
     send_personal_training_order_notification,
     send_bot_notification,
     send_bot_menu,
@@ -26,7 +27,7 @@ from .bot import (
 )
 from .config import Settings, get_settings
 from .database import SessionLocal, get_session
-from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportMessage, SupportTicket, TrainingMaterial, TrainingProduct, TrainingPurchase, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
+from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportCaseEvent, SupportMessage, SupportTicket, TrainingMaterial, TrainingProduct, TrainingPurchase, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
 from .schemas import (
     AccountListingCreate,
     AccountListingOut,
@@ -54,6 +55,9 @@ from .schemas import (
     StarPaymentIntentOut,
     StarPaymentStatusOut,
     SupportReplyCreate,
+    DealSupportCaseCreate,
+    SupportCaseEventOut,
+    SupportCaseResolution,
     SupportMessageOut,
     SupportStatusUpdate,
     SupportTicketCreate,
@@ -87,6 +91,7 @@ from .services import (
     create_account_listing,
     create_listing,
     create_notification,
+    create_deal_support_case,
     create_price_offer,
     create_star_payment_intent,
     create_training_product,
@@ -241,8 +246,37 @@ async def support_ticket_out(session: AsyncSession, ticket: SupportTicket) -> Su
             )
         ).all()
     )
+    events = list((await session.scalars(
+        select(SupportCaseEvent)
+        .where(SupportCaseEvent.ticket_id == ticket.id)
+        .order_by(SupportCaseEvent.created_at)
+    )).all())
+    listing = await session.get(Listing, ticket.listing_id) if ticket.listing_id else None
+    buyer = await session.get(User, ticket.buyer_id) if ticket.buyer_id else None
+    seller = await session.get(User, ticket.seller_id) if ticket.seller_id else None
+    author = await session.get(User, ticket.author_id)
+    conversation_messages: list[ConversationMessage] = []
+    if ticket.deal_id:
+        deal = await session.get(Deal, ticket.deal_id)
+        conversation_id = deal.conversation_id if deal else None
+        if not conversation_id:
+            conversation_id = await session.scalar(select(Conversation.id).where(Conversation.deal_id == ticket.deal_id))
+        if conversation_id:
+            conversation_messages = list((await session.scalars(
+                select(ConversationMessage)
+                .where(ConversationMessage.conversation_id == conversation_id)
+                .order_by(ConversationMessage.created_at)
+            )).all())
     return SupportTicketOut.model_validate(ticket).model_copy(
-        update={"messages": [SupportMessageOut.model_validate(message) for message in messages]}
+        update={
+            "messages": [SupportMessageOut.model_validate(message) for message in messages],
+            "conversation_messages": [ConversationMessageOut.model_validate(message) for message in conversation_messages],
+            "events": [SupportCaseEventOut.model_validate(event) for event in events],
+            "listing_title": f"{listing.brand} {listing.model}".strip() if listing else None,
+            "buyer": UserOut.model_validate(buyer) if buyer else None,
+            "seller": UserOut.model_validate(seller) if seller else None,
+            "author": UserOut.model_validate(author) if author else None,
+        }
     )
 
 
@@ -298,7 +332,6 @@ async def deliver_training_materials(purchase_id: uuid.UUID) -> None:
                     break
             if not sent:
                 success = False
-                break
     async with SessionLocal() as session:
         await finish_training_delivery(session, purchase_id, success)
 
@@ -1302,9 +1335,39 @@ async def confirm_received(deal_id: uuid.UUID, background_tasks: BackgroundTasks
 
 @router.post("/deals/{deal_id}/dispute", response_model=DealOut)
 async def dispute(deal_id: uuid.UUID, background_tasks: BackgroundTasks, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
-    deal = await set_deal_status(session, user, deal_id, "disputed")
-    await queue_counterparty_notification(session, background_tasks, deal, user, "По сделке открыта проблема. Откройте AUTOFLOW MARKET")
-    return deal
+    del deal_id, background_tasks, user, session
+    raise HTTPException(status_code=410, detail="Используйте обращение в поддержку по сделке")
+
+
+@router.post("/deals/{deal_id}/support", response_model=SupportTicketOut, status_code=201)
+async def create_deal_support(
+    deal_id: uuid.UUID,
+    payload: DealSupportCaseCreate,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    ticket, listing, buyer, seller, administrators = await create_deal_support_case(
+        session, user, deal_id, payload.message, payload.client_request_id
+    )
+
+    def label(person: User) -> str:
+        return f"@{person.username}" if person.username else f"{person.first_name} (ID {person.telegram_id})"
+
+    for administrator in administrators:
+        if administrator.bot_started:
+            background_tasks.add_task(
+                send_deal_support_case_notification,
+                administrator.telegram_id,
+                ticket_id=str(ticket.id),
+                deal_id=str(deal_id),
+                listing_title=f"{listing.brand} {listing.model}".strip(),
+                buyer_label=label(buyer),
+                seller_label=label(seller),
+                author_label=label(user),
+                reason=payload.message.strip(),
+            )
+    return await support_ticket_out(session, ticket)
 
 
 @router.post("/deals/{deal_id}/cancel", response_model=DealOut)
@@ -1645,7 +1708,11 @@ async def support_tickets(
         (
             await session.scalars(
                 select(SupportTicket)
-                .where(SupportTicket.user_id == user.id)
+                .where(or_(
+                    SupportTicket.author_id == user.id,
+                    SupportTicket.buyer_id == user.id,
+                    SupportTicket.seller_id == user.id,
+                ))
                 .order_by(SupportTicket.updated_at.desc())
             )
         ).all()
@@ -1663,9 +1730,12 @@ async def create_support_ticket(
     async with session.begin():
         ticket = SupportTicket(
             user_id=user.id,
+            author_id=user.id,
+            case_type="general",
             topic=payload.topic.strip(),
             status="open",
             screenshot_url=payload.screenshot_url,
+            unread_by_admin=True,
         )
         session.add(ticket)
         await session.flush()
@@ -1699,35 +1769,108 @@ async def create_support_ticket(
 async def reply_to_support_ticket(
     ticket_id: uuid.UUID,
     payload: SupportReplyCreate,
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     ticket = await session.get(SupportTicket, ticket_id)
-    if not ticket or ticket.user_id != user.id:
+    if not ticket or user.id not in {ticket.author_id, ticket.buyer_id, ticket.seller_id}:
         raise HTTPException(status_code=404, detail="Обращение не найдено")
     if ticket.status == "closed":
         raise HTTPException(status_code=409, detail="Закрытое обращение нельзя дополнить")
-    message = SupportMessage(ticket_id=ticket.id, sender_id=user.id, body=payload.message.strip())
+    if payload.client_request_id:
+        existing = await session.scalar(select(SupportMessage).where(
+            SupportMessage.ticket_id == ticket.id,
+            SupportMessage.sender_id == user.id,
+            SupportMessage.client_request_id == payload.client_request_id,
+        ))
+        if existing:
+            return existing
+    message = SupportMessage(
+        ticket_id=ticket.id,
+        sender_id=user.id,
+        client_request_id=payload.client_request_id,
+        body=payload.message.strip(),
+    )
     ticket.status = "open"
+    ticket.unread_by_admin = True
     session.add(message)
+    session.add(SupportCaseEvent(
+        ticket_id=ticket.id,
+        actor_id=user.id,
+        event_type="participant_message",
+        details={},
+    ))
+    administrators = list((await session.scalars(select(User).where(User.role == "admin"))).all())
+    for administrator in administrators:
+        await create_notification(
+            session,
+            administrator.id,
+            "support_message",
+            "Новое сообщение в обращении",
+            payload.message.strip()[:240],
+            {"ticket_id": str(ticket.id)},
+        )
     await session.commit()
     await session.refresh(message)
+    for administrator in administrators:
+        if administrator.bot_started:
+            background_tasks.add_task(send_bot_notification, administrator.telegram_id, "Новое сообщение в поддержке AUTOFLOW MARKET")
     return message
 
 
 @router.get("/admin/support/tickets", response_model=list[SupportTicketOut])
 async def admin_support_tickets(
+    status_filter: str | None = Query(default=None, alias="status", pattern="^(open|in_progress|resolved|closed)$"),
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
     tickets = list(
         (
             await session.scalars(
-                select(SupportTicket).order_by(SupportTicket.updated_at.desc())
+                select(SupportTicket)
+                .where(SupportTicket.status == status_filter if status_filter else True)
+                .order_by(SupportTicket.unread_by_admin.desc(), SupportTicket.updated_at.desc())
+                .offset(offset)
+                .limit(limit)
             )
         ).all()
     )
     return [await support_ticket_out(session, ticket) for ticket in tickets]
+
+
+@router.get("/admin/support/tickets/{ticket_id}", response_model=SupportTicketOut)
+async def admin_support_ticket(
+    ticket_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    ticket = await session.scalar(select(SupportTicket).where(SupportTicket.id == ticket_id).with_for_update())
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Обращение не найдено")
+    ticket.unread_by_admin = False
+    previous_status = ticket.status
+    if ticket.status == "open":
+        ticket.status = "in_progress"
+    session.add(SupportCaseEvent(
+        ticket_id=ticket.id,
+        actor_id=admin.id,
+        event_type="admin_opened",
+        from_status=previous_status,
+        to_status=ticket.status,
+        details={},
+    ))
+    session.add(AdminAction(
+        admin_id=admin.id,
+        action="open_support_case",
+        target_type="support_ticket",
+        target_id=ticket.id,
+    ))
+    await session.commit()
+    await session.refresh(ticket)
+    return await support_ticket_out(session, ticket)
 
 
 @router.post("/admin/support/tickets/{ticket_id}/messages", response_model=SupportMessageOut, status_code=201)
@@ -1741,26 +1884,48 @@ async def admin_reply_to_support_ticket(
     ticket = await session.get(SupportTicket, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Обращение не найдено")
-    owner = await session.get(User, ticket.user_id)
-    message = SupportMessage(ticket_id=ticket.id, sender_id=admin.id, body=payload.message.strip())
-    ticket.status = "in_progress"
-    session.add(message)
-    await create_notification(
-        session,
-        ticket.user_id,
-        "support_reply",
-        "Ответ поддержки",
-        payload.message.strip()[:240],
-        {"ticket_id": str(ticket.id)},
+    if payload.client_request_id:
+        existing = await session.scalar(select(SupportMessage).where(
+            SupportMessage.ticket_id == ticket.id,
+            SupportMessage.sender_id == admin.id,
+            SupportMessage.client_request_id == payload.client_request_id,
+        ))
+        if existing:
+            return existing
+    message = SupportMessage(
+        ticket_id=ticket.id,
+        sender_id=admin.id,
+        client_request_id=payload.client_request_id,
+        body=payload.message.strip(),
     )
+    ticket.status = "in_progress"
+    ticket.unread_by_admin = False
+    session.add(message)
+    session.add(SupportCaseEvent(
+        ticket_id=ticket.id,
+        actor_id=admin.id,
+        event_type="admin_message",
+        to_status="in_progress",
+        details={},
+    ))
+    recipient_ids = {ticket.author_id}
+    if ticket.case_type == "deal":
+        recipient_ids.update({ticket.buyer_id, ticket.seller_id})
+    recipient_ids.discard(None)
+    for recipient_id in recipient_ids:
+        await create_notification(
+            session,
+            recipient_id,
+            "support_reply",
+            "🛡 AutoFlow Support",
+            payload.message.strip()[:240],
+            {"ticket_id": str(ticket.id)},
+        )
     await session.commit()
     await session.refresh(message)
-    if owner and owner.bot_started:
-        background_tasks.add_task(
-            send_bot_notification,
-            owner.telegram_id,
-            "Поддержка AUTOFLOW MARKET ответила на ваше обращение",
-        )
+    recipients = list((await session.scalars(select(User).where(User.id.in_(recipient_ids), User.bot_started.is_(True)))).all()) if recipient_ids else []
+    for recipient in recipients:
+        background_tasks.add_task(send_bot_notification, recipient.telegram_id, "🛡 AutoFlow Support ответила по вашему обращению")
     return message
 
 
@@ -1774,7 +1939,23 @@ async def update_support_ticket_status(
     ticket = await session.get(SupportTicket, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Обращение не найдено")
+    if ticket.case_type == "deal" and payload.status in {"resolved", "closed"}:
+        deal = await session.get(Deal, ticket.deal_id)
+        if deal and deal.status == "disputed":
+            raise HTTPException(status_code=409, detail="Сначала выберите финансовое решение по сделке")
+    previous_status = ticket.status
     ticket.status = payload.status
+    ticket.unread_by_admin = False
+    if payload.status in {"resolved", "closed"}:
+        ticket.resolved_at = datetime.now(UTC)
+    session.add(SupportCaseEvent(
+        ticket_id=ticket.id,
+        actor_id=admin.id,
+        event_type="status_changed",
+        from_status=previous_status,
+        to_status=payload.status,
+        details={},
+    ))
     session.add(
         AdminAction(
             admin_id=admin.id,
@@ -1786,6 +1967,38 @@ async def update_support_ticket_status(
     await session.commit()
     await session.refresh(ticket)
     return await support_ticket_out(session, ticket)
+
+
+@router.post("/admin/support/tickets/{ticket_id}/resolve", response_model=SupportTicketOut)
+async def resolve_support_ticket_financially(
+    ticket_id: uuid.UUID,
+    payload: SupportCaseResolution,
+    background_tasks: BackgroundTasks,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    ticket = await session.get(SupportTicket, ticket_id)
+    if not ticket or ticket.case_type != "deal" or not ticket.deal_id:
+        raise HTTPException(status_code=404, detail="Обращение по сделке не найдено")
+    deal = await resolve_dispute(
+        session,
+        admin,
+        ticket.deal_id,
+        payload.outcome,
+        payload.reason,
+        support_ticket_id=ticket.id,
+    )
+    participants = list((await session.scalars(
+        select(User).where(User.id.in_([deal.buyer_id, deal.seller_id]), User.bot_started.is_(True))
+    )).all())
+    for participant in participants:
+        background_tasks.add_task(
+            send_bot_notification,
+            participant.telegram_id,
+            "🛡 Поддержка AUTOFLOW MARKET приняла решение по сделке. Откройте приложение для подробностей.",
+        )
+    refreshed = await session.get(SupportTicket, ticket.id)
+    return await support_ticket_out(session, refreshed)
 
 
 @router.get("/profile", response_model=ProfileOut)
@@ -1905,7 +2118,9 @@ async def telegram_webhook(
             if broadcast_id is not None:
                 background_tasks.add_task(run_admin_broadcast, broadcast_id)
             return {"ok": True, "accepted": broadcast_id is not None}
-    if message.get("text") == "/start" and sender.get("id"):
+    start_text = str(message.get("text") or "").strip()
+    if start_text.split(maxsplit=1)[0].split("@", 1)[0] == "/start" and sender.get("id"):
+        start_payload = start_text.split(maxsplit=1)[1].strip() if len(start_text.split(maxsplit=1)) == 2 else None
         user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
         if not user:
             telegram_id = int(sender["id"])
@@ -1923,7 +2138,7 @@ async def telegram_webhook(
         else:
             user.bot_started = True
         await session.commit()
-        background_tasks.add_task(send_bot_menu, int(sender["id"]))
+        background_tasks.add_task(send_bot_menu, int(sender["id"]), start_payload=start_payload)
     payment = message.get("successful_payment")
     if payment and sender.get("id"):
         credited = await process_successful_payment(session, int(sender["id"]), payment)

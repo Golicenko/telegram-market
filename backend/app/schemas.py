@@ -425,8 +425,19 @@ class SupportTicketCreate(BaseModel):
     screenshot_url: str | None = None
 
 
+class DealSupportCaseCreate(BaseModel):
+    message: str = Field(min_length=2, max_length=4000)
+    client_request_id: uuid.UUID
+
+
+class SupportCaseResolution(BaseModel):
+    outcome: str = Field(pattern="^(complete|refund)$")
+    reason: str = Field(min_length=5, max_length=2000)
+
+
 class SupportReplyCreate(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+    client_request_id: uuid.UUID | None = None
 
 
 class SupportStatusUpdate(BaseModel):
@@ -436,19 +447,44 @@ class SupportStatusUpdate(BaseModel):
 class SupportMessageOut(ORMModel):
     id: uuid.UUID
     sender_id: uuid.UUID
+    client_request_id: uuid.UUID | None
     body: str
+    created_at: datetime
+
+
+class SupportCaseEventOut(ORMModel):
+    id: uuid.UUID
+    actor_id: uuid.UUID
+    event_type: str
+    from_status: str | None
+    to_status: str | None
+    details: dict
     created_at: datetime
 
 
 class SupportTicketOut(ORMModel):
     id: uuid.UUID
     user_id: uuid.UUID
+    author_id: uuid.UUID
+    case_type: str
+    deal_id: uuid.UUID | None
+    listing_id: uuid.UUID | None
+    buyer_id: uuid.UUID | None
+    seller_id: uuid.UUID | None
     topic: str
     status: str
     screenshot_url: str | None
+    resolved_at: datetime | None
+    unread_by_admin: bool
     created_at: datetime
     updated_at: datetime
     messages: list[SupportMessageOut] = Field(default_factory=list)
+    conversation_messages: list[ConversationMessageOut] = Field(default_factory=list)
+    events: list[SupportCaseEventOut] = Field(default_factory=list)
+    listing_title: str | None = None
+    buyer: UserOut | None = None
+    seller: UserOut | None = None
+    author: UserOut | None = None
 
 
 class AdvertisementUpsert(BaseModel):

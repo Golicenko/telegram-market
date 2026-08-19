@@ -469,6 +469,15 @@ body.chat-open{height:var(--chat-viewport-height,100dvh);overflow:hidden}.chat-o
 .message{min-width:0;word-break:break-word}
 @media(max-width:360px){.chat-view{padding-inline:max(7px,env(safe-area-inset-left)) max(7px,env(safe-area-inset-right))}.chat-header{grid-template-columns:30px 36px minmax(0,1fr) auto;gap:5px}.chat-avatar{width:36px;height:36px}.chat-hide{max-width:58px;padding-inline:5px;white-space:normal;line-height:1.15}.chat-listing{grid-template-columns:38px minmax(0,1fr) auto;padding-inline:6px}.chat-listing img{width:38px;height:36px}.message{max-width:88%}}
 
+/* Mobile Telegram WebView: keep a conversation edge-to-edge with the composer above the keyboard. */
+body.chat-open .app-shell{width:100vw;max-width:none;margin:0;padding:0;border:0}
+.deal-controls button:not(.deal-confirm):not(.deal-support):not(.deal-secondary){display:none}
+.deal-support,.deal-secondary{display:block}
+.deal-support{order:-1;min-height:34px;border:1px solid rgba(118,151,183,.25);border-radius:9px;color:#aebdca;background:#0b1520;font-size:9px}
+.support-deal-context{padding:10px;border:1px solid rgba(255,166,27,.35);border-radius:10px;color:#e8c987;background:rgba(255,149,0,.07);font-size:10px;line-height:1.45}
+.support-admin-filters{display:flex;gap:6px;overflow-x:auto;margin:0 0 10px;padding-bottom:3px}.support-admin-filters button{flex:none;min-height:32px;padding:0 10px;border:1px solid var(--line);border-radius:9px;color:var(--muted);background:var(--panel)}.support-admin-filters button.is-active{border-color:var(--line-bright);color:#231605;background:linear-gradient(135deg,#ffc128,#ff8500)}
+@media(max-width:619px){.chat-view{top:var(--chat-viewport-top,0px);right:0;bottom:auto;left:0;width:100vw;max-width:100vw;height:var(--chat-viewport-height,100dvh);transform:none;border:0}}
+
 /* Premium training products use the administrator-provided silver emblem. */
 .gg-nav-icon{width:27px;height:27px;margin:auto;border:1px solid rgba(216,180,83,.38);border-radius:9px;object-fit:cover;object-position:center;box-shadow:0 0 10px rgba(204,170,84,.13)}
 .training-identity{width:78px;height:78px;margin-bottom:3px;border:1px solid rgba(216,180,83,.4);border-radius:22px;object-fit:cover;object-position:center;box-shadow:0 0 24px rgba(200,154,48,.12)}
