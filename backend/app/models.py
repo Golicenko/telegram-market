@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func, text as sql_text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -221,7 +221,7 @@ class Deal(Base, TimestampMixin):
             "uq_deals_open_listing",
             "listing_id",
             unique=True,
-            postgresql_where=text("status NOT IN ('completed','cancelled')"),
+            postgresql_where=sql_text("status NOT IN ('completed','cancelled')"),
         ),
     )
 
@@ -240,8 +240,8 @@ class Conversation(Base, TimestampMixin):
     __table_args__ = (
         Index(
             "uq_conversations_participant_pair",
-            text("LEAST(buyer_id, seller_id)"),
-            text("GREATEST(buyer_id, seller_id)"),
+            sql_text("LEAST(buyer_id, seller_id)"),
+            sql_text("GREATEST(buyer_id, seller_id)"),
             unique=True,
         ),
         CheckConstraint("buyer_id <> seller_id", name="ck_conversation_distinct_participants"),
@@ -284,7 +284,7 @@ class ConversationMessage(Base):
         Boolean,
         nullable=False,
         default=False,
-        server_default=text("false"),
+        server_default=sql_text("false"),
         index=True,
     )
 
@@ -438,14 +438,14 @@ class StarPaymentIntent(Base):
             "user_id",
             "listing_id",
             unique=True,
-            postgresql_where=text("purpose = 'listing_checkout' AND status = 'pending'"),
+            postgresql_where=sql_text("purpose = 'listing_checkout' AND status = 'pending'"),
         ),
         Index(
             "uq_star_payment_intents_pending_training",
             "user_id",
             "training_product_id",
             unique=True,
-            postgresql_where=text("purpose = 'training_checkout' AND status = 'pending'"),
+            postgresql_where=sql_text("purpose = 'training_checkout' AND status = 'pending'"),
         ),
     )
 
@@ -486,6 +486,35 @@ class AdminAction(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class AdminBroadcast(Base):
+    __tablename__ = "admin_broadcasts"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    telegram_update_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    admin_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    content_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    photo_file_id: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+    sent_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    __table_args__ = (
+        UniqueConstraint("telegram_update_id", name="uq_admin_broadcast_telegram_update"),
+        CheckConstraint("content_type IN ('text','photo')", name="ck_admin_broadcast_content_type"),
+        CheckConstraint("status IN ('pending','running','completed','failed')", name="ck_admin_broadcast_status"),
+        CheckConstraint("sent_count >= 0 AND failed_count >= 0", name="ck_admin_broadcast_counts"),
+        Index(
+            "uq_admin_broadcast_active_admin",
+            "admin_telegram_id",
+            unique=True,
+            postgresql_where=sql_text("status IN ('pending','running')"),
+        ),
+    )
 
 
 class SupportTicket(Base, TimestampMixin):
