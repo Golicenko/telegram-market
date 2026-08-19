@@ -37,8 +37,8 @@ class Listing(Base, TimestampMixin):
     seller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     listing_type: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", index=True)
-    brand: Mapped[str] = mapped_column(String(96), nullable=False, index=True)
-    model: Mapped[str] = mapped_column(String(96), nullable=False, index=True)
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
     power_hp: Mapped[int] = mapped_column(BigInteger, nullable=False)
     max_speed_kph: Mapped[int] = mapped_column(BigInteger, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -53,7 +53,7 @@ class Listing(Base, TimestampMixin):
     __table_args__ = (
         CheckConstraint("listing_type IN ('regular','unique')", name="ck_listings_type"),
         CheckConstraint("status IN ('active','paused','reserved','sold','deleted')", name="ck_listings_status"),
-        CheckConstraint("price_af_coins >= 100", name="ck_listings_min_price"),
+        CheckConstraint("price_af_coins >= 1", name="ck_listings_min_price"),
         CheckConstraint("power_hp > 0 AND max_speed_kph > 0", name="ck_listings_positive_stats"),
         CheckConstraint(
             "delivery_time_estimate IN ('up_to_15m','up_to_30m','up_to_1h','up_to_3h','up_to_6h','up_to_12h','up_to_24h')",
@@ -259,7 +259,7 @@ class Conversation(Base, TimestampMixin):
             unique=True,
         ),
         CheckConstraint("buyer_id <> seller_id", name="ck_conversation_distinct_participants"),
-        CheckConstraint("accepted_price_af_coins IS NULL OR accepted_price_af_coins >= 100", name="ck_conversation_accepted_price"),
+        CheckConstraint("accepted_price_af_coins IS NULL OR accepted_price_af_coins >= 1", name="ck_conversation_accepted_price"),
     )
 
 
@@ -332,7 +332,7 @@ class PriceOffer(Base, TimestampMixin):
     parent_offer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("price_offers.id", ondelete="SET NULL"))
     responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
-        CheckConstraint("amount_af_coins >= 100", name="ck_price_offers_min_price"),
+        CheckConstraint("amount_af_coins >= 1", name="ck_price_offers_min_price"),
         CheckConstraint("status IN ('pending','accepted','rejected','countered')", name="ck_price_offers_status"),
     )
 

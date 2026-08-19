@@ -36,12 +36,12 @@ class MeOut(BaseModel):
 
 
 class ListingCreate(BaseModel):
-    brand: str = Field(min_length=1, max_length=96)
-    model: str | None = Field(default=None, min_length=1, max_length=96)
+    brand: str = Field(min_length=1)
+    model: str | None = Field(default=None, min_length=1)
     power_hp: int = Field(gt=0)
     max_speed_kph: int = Field(gt=0)
-    description: str = Field(min_length=1, max_length=3000)
-    price_af_coins: Decimal = Field(ge=100, decimal_places=2)
+    description: str = Field(min_length=1)
+    price_af_coins: Decimal = Field(ge=1, decimal_places=2)
     delivery_time_estimate: str = Field(
         default="up_to_1h",
         pattern="^(up_to_15m|up_to_30m|up_to_1h|up_to_3h|up_to_6h|up_to_12h|up_to_24h)$",
@@ -64,12 +64,12 @@ class UniqueListingCreate(ListingCreate):
 
 
 class ListingUpdate(BaseModel):
-    brand: str | None = Field(default=None, min_length=1, max_length=96)
-    model: str | None = Field(default=None, min_length=1, max_length=96)
+    brand: str | None = Field(default=None, min_length=1)
+    model: str | None = Field(default=None, min_length=1)
     power_hp: int | None = Field(default=None, gt=0)
     max_speed_kph: int | None = Field(default=None, gt=0)
-    description: str | None = Field(default=None, min_length=1, max_length=3000)
-    price_af_coins: Decimal | None = Field(default=None, ge=100, decimal_places=2)
+    description: str | None = Field(default=None, min_length=1)
+    price_af_coins: Decimal | None = Field(default=None, ge=1, decimal_places=2)
     delivery_time_estimate: str | None = Field(
         default=None,
         pattern="^(up_to_15m|up_to_30m|up_to_1h|up_to_3h|up_to_6h|up_to_12h|up_to_24h)$",
@@ -321,7 +321,7 @@ class ConversationMessageOut(ORMModel):
 
 
 class PriceOfferCreate(BaseModel):
-    amount_af_coins: Decimal = Field(gt=0, decimal_places=2)
+    amount_af_coins: Decimal = Field(ge=1, decimal_places=2)
 
 
 class CounterOfferCreate(PriceOfferCreate):
