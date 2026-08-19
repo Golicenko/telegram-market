@@ -43,6 +43,7 @@ class Listing(Base, TimestampMixin):
     max_speed_kph: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     price_af_coins: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    delivery_time_estimate: Mapped[str] = mapped_column(String(24), nullable=False, default="up_to_1h")
     views_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     pinned_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
@@ -54,6 +55,10 @@ class Listing(Base, TimestampMixin):
         CheckConstraint("status IN ('active','paused','reserved','sold','deleted')", name="ck_listings_status"),
         CheckConstraint("price_af_coins >= 100", name="ck_listings_min_price"),
         CheckConstraint("power_hp > 0 AND max_speed_kph > 0", name="ck_listings_positive_stats"),
+        CheckConstraint(
+            "delivery_time_estimate IN ('up_to_15m','up_to_30m','up_to_1h','up_to_3h','up_to_6h','up_to_12h','up_to_24h')",
+            name="ck_listings_delivery_time",
+        ),
         CheckConstraint("views_count >= 0", name="ck_listings_views_nonnegative"),
         Index("ix_listings_type_status_created", "listing_type", "status", "created_at"),
     )
@@ -196,6 +201,7 @@ class Deal(Base, TimestampMixin):
     __tablename__ = "deals"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"), nullable=False)
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("conversations.id", ondelete="SET NULL"), index=True)
     buyer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     seller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_payment", index=True)

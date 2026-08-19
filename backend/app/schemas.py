@@ -37,17 +37,26 @@ class MeOut(BaseModel):
 
 class ListingCreate(BaseModel):
     brand: str = Field(min_length=1, max_length=96)
-    model: str = Field(min_length=1, max_length=96)
+    model: str | None = Field(default=None, min_length=1, max_length=96)
     power_hp: int = Field(gt=0, le=5000)
     max_speed_kph: int = Field(gt=0, le=2000)
     description: str = Field(min_length=1, max_length=3000)
-    price_af_coins: Decimal = Field(gt=0, decimal_places=2)
+    price_af_coins: Decimal = Field(ge=100, decimal_places=2)
+    delivery_time_estimate: str = Field(
+        default="up_to_1h",
+        pattern="^(up_to_15m|up_to_30m|up_to_1h|up_to_3h|up_to_6h|up_to_12h|up_to_24h)$",
+    )
     image_urls: list[str] = Field(min_length=1, max_length=1)
 
-    @field_validator("brand", "model")
+    @field_validator("brand")
     @classmethod
     def strip_text(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("model")
+    @classmethod
+    def strip_legacy_model(cls, value: str | None) -> str | None:
+        return value.strip() if value else None
 
 
 class UniqueListingCreate(ListingCreate):
@@ -60,7 +69,11 @@ class ListingUpdate(BaseModel):
     power_hp: int | None = Field(default=None, gt=0, le=5000)
     max_speed_kph: int | None = Field(default=None, gt=0, le=2000)
     description: str | None = Field(default=None, min_length=1, max_length=3000)
-    price_af_coins: Decimal | None = Field(default=None, gt=0, decimal_places=2)
+    price_af_coins: Decimal | None = Field(default=None, ge=100, decimal_places=2)
+    delivery_time_estimate: str | None = Field(
+        default=None,
+        pattern="^(up_to_15m|up_to_30m|up_to_1h|up_to_3h|up_to_6h|up_to_12h|up_to_24h)$",
+    )
     image_urls: list[str] | None = Field(default=None, min_length=1, max_length=1)
 
 
@@ -75,6 +88,7 @@ class ListingOut(ORMModel):
     max_speed_kph: int
     description: str
     price_af_coins: Decimal
+    delivery_time_estimate: str
     views_count: int
     pinned: bool
     pinned_until: datetime | None
@@ -86,6 +100,7 @@ class ListingOut(ORMModel):
 class DealOut(ORMModel):
     id: uuid.UUID
     listing_id: uuid.UUID
+    conversation_id: uuid.UUID | None
     buyer_id: uuid.UUID
     seller_id: uuid.UUID
     status: str
