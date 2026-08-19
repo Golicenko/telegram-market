@@ -48,21 +48,24 @@ def test_telegram_init_data_signature_and_tampering():
 
 def test_listing_accepts_multiple_images_and_unbounded_positive_stats():
     values = {
-        "brand": "Произвольное название автомобиля",
+        "brand": "Произвольное название автомобиля " + ("X" * 5000),
         "model": None,
         "power_hp": 1_000_000_000_000,
         "max_speed_kph": 1_000_000_000_000,
-        "description": "Описание",
+        "description": "Описание " + ("Y" * 10000),
         "price_af_coins": 100,
     }
     assert len(ListingCreate(**values, image_urls=["/uploads/one.jpg"]).image_urls) == 1
     assert len(ListingCreate(**values, image_urls=["one", "two", "three"]).image_urls) == 3
+    assert ListingCreate(**{**values, "price_af_coins": 1}, image_urls=["one"]).price_af_coins == 1
     with pytest.raises(ValidationError):
         ListingCreate(**values, image_urls=[])
     with pytest.raises(ValidationError):
         ListingCreate(**values, image_urls=[str(index) for index in range(11)])
     with pytest.raises(ValidationError):
         ListingCreate(**{**values, "power_hp": 0}, image_urls=["one"])
+    with pytest.raises(ValidationError):
+        ListingCreate(**{**values, "price_af_coins": 0}, image_urls=["one"])
 
 
 def test_server_commission_is_single_70_30_formula():

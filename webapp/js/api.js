@@ -12,12 +12,48 @@
 
   class ApiError extends Error {
     constructor(status, detail, metadata = {}) {
-      super(typeof detail === "string" ? detail : "Ошибка запроса");
+      super(readableErrorDetail(detail));
       this.name = "ApiError";
       this.status = status;
       this.detail = detail;
       Object.assign(this, metadata);
     }
+  }
+
+  function readableErrorDetail(detail) {
+    if (typeof detail === "string" && detail.trim()) return detail;
+    if (Array.isArray(detail)) {
+      const fieldNames = {
+        brand: "Автомобиль",
+        model: "Модель",
+        power_hp: "Мощность",
+        max_speed_kph: "Максимальная скорость",
+        description: "Описание",
+        price_af_coins: "Цена",
+        image_urls: "Фотографии",
+        delivery_time_estimate: "Срок передачи",
+        file: "Фотография",
+      };
+      const messages = detail.map((item) => {
+        const rawField = Array.isArray(item?.loc) ? item.loc.filter((part) => !["body", "query", "path"].includes(String(part))).at(-1) : null;
+        const field = fieldNames[rawField] || rawField || "Данные";
+        const type = String(item?.type || "");
+        let message = item?.msg || "некорректное значение";
+        if (type === "missing") message = "поле обязательно";
+        else if (type === "greater_than") message = `значение должно быть больше ${item?.ctx?.gt ?? 0}`;
+        else if (type === "greater_than_equal") message = `значение должно быть не меньше ${item?.ctx?.ge ?? 0}`;
+        else if (type === "int_parsing") message = "введите целое число";
+        else if (type === "decimal_parsing" || type === "float_parsing") message = "введите корректное число";
+        else if (type === "too_short") message = "поле не должно быть пустым";
+        return `${field}: ${message}`;
+      }).filter(Boolean);
+      if (messages.length) return messages.join("; ");
+    }
+    if (detail && typeof detail === "object") {
+      if (typeof detail.message === "string") return detail.message;
+      if (typeof detail.detail === "string") return detail.detail;
+    }
+    return "Сервер отклонил запрос. Проверьте заполненные поля.";
   }
 
   function authHeaders() {

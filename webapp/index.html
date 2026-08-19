@@ -6,10 +6,10 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <link rel="stylesheet" href="css/style.css?v=20260819-listing-mobile" />
+    <link rel="stylesheet" href="css/style.css?v=20260819-listing-validation" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=20260819-listing-mobile" defer></script>
-    <script src="js/app.js?v=20260819-listing-mobile" defer></script>
+    <script src="js/api.js?v=20260819-listing-validation" defer></script>
+    <script src="js/app.js?v=20260819-listing-validation" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -96,8 +96,8 @@
             <label class="form-row"><span>Мощность (л.с.)</span><input name="power_hp" required type="number" min="1" inputmode="numeric" placeholder="Введите мощность" /></label>
             <label class="form-row"><span>Макс. скорость</span><input name="max_speed_kph" required type="number" min="1" inputmode="numeric" placeholder="км/ч" /></label>
             <label class="form-row"><span>Обычно передаю за</span><select name="delivery_time_estimate" required><option value="up_to_15m">до 15 минут</option><option value="up_to_30m">до 30 минут</option><option value="up_to_1h" selected>до 1 часа</option><option value="up_to_3h">до 3 часов</option><option value="up_to_6h">до 6 часов</option><option value="up_to_12h">до 12 часов</option><option value="up_to_24h">до 24 часов</option></select></label>
-            <label class="form-row form-row--textarea"><span>Описание</span><textarea name="description" required minlength="1" maxlength="3000" rows="4" placeholder="Опишите автомобиль"></textarea></label>
-            <fieldset class="price-field"><legend>Цена в AF Coins</legend><div class="price-presets"><button type="button" data-price="100">100</button><button type="button" data-price="150">150</button><button type="button" data-price="200">200</button><button type="button" data-price="300">300</button><button type="button" data-price="400">400</button><button type="button" data-price="500">500</button></div><label><span class="af-coin"></span><input id="priceInput" name="price_af_coins" type="number" min="0" required inputmode="numeric" placeholder="Введите цену" /></label></fieldset>
+            <label class="form-row form-row--textarea"><span>Описание</span><textarea name="description" required minlength="1" rows="4" placeholder="Опишите автомобиль"></textarea></label>
+            <fieldset class="price-field"><legend>Цена в AF Coins</legend><div class="price-presets"><button type="button" data-price="100">100</button><button type="button" data-price="150">150</button><button type="button" data-price="200">200</button><button type="button" data-price="300">300</button><button type="button" data-price="400">400</button><button type="button" data-price="500">500</button></div><label><span class="af-coin"></span><input id="priceInput" name="price_af_coins" type="number" min="1" required inputmode="numeric" placeholder="Минимум 1" /></label></fieldset>
             <label class="switch-row" id="promoteRow"><span id="promoteLabel">📌 Закрепить объявление — 15 AF Coins</span><input name="promote_for_24h" type="checkbox" /><i aria-hidden="true"></i></label>
             <p class="commission-note" id="promotionNote">Закреплённое объявление будет отображаться выше остальных в течение 24 часов. Стоимость услуги — 15 AF Coins.</p>
             <p class="commission-note" id="publicationNote">Публикация, редактирование и удаление объявлений всегда бесплатны.</p>

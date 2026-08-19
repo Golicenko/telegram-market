@@ -1068,6 +1068,21 @@ function handleClick(event) {
     const originalButtonText = button.textContent;
     button.disabled = true;
     try {
+      const payload = {
+        brand: String(formData.get("brand")).trim(),
+        power_hp: Number(formData.get("power_hp")),
+        max_speed_kph: Number(formData.get("max_speed_kph")),
+        delivery_time_estimate: String(formData.get("delivery_time_estimate")),
+        description: String(formData.get("description") || "").trim(),
+        price_af_coins: Number(formData.get("price_af_coins")),
+      };
+      if (!payload.brand) throw new Error("Введите название автомобиля");
+      if (!Number.isInteger(payload.power_hp) || payload.power_hp <= 0) throw new Error("Мощность должна быть положительным целым числом");
+      if (!Number.isInteger(payload.max_speed_kph) || payload.max_speed_kph <= 0) throw new Error("Максимальная скорость должна быть положительным целым числом");
+      if (!payload.description) throw new Error("Добавьте описание автомобиля");
+      if (!Number.isFinite(payload.price_af_coins) || payload.price_af_coins < 1) throw new Error("Цена должна быть не меньше 1 AF Coin");
+      if (!state.editingListingId && state.photoFiles.length < 1) throw new Error("Добавьте хотя бы одну фотографию автомобиля");
+      if (state.photoFiles.length > 10) throw new Error("Можно добавить не более 10 фотографий");
       const imageUrls = [];
       for (const [index, file] of state.photoFiles.entries()) {
         button.textContent = `Загрузка фото ${index + 1} из ${state.photoFiles.length}…`;
@@ -1078,16 +1093,6 @@ function handleClick(event) {
           throw new Error(`Не удалось загрузить фотографию ${index + 1}: ${error.message}`);
         }
       }
-      const payload = {
-        brand: String(formData.get("brand")).trim(),
-        power_hp: Number(formData.get("power_hp")),
-        max_speed_kph: Number(formData.get("max_speed_kph")),
-        delivery_time_estimate: String(formData.get("delivery_time_estimate")),
-        description: String(formData.get("description") || "").trim(),
-        price_af_coins: Number(formData.get("price_af_coins")),
-      };
-      if (!state.editingListingId && imageUrls.length < 1) throw new Error("Добавьте хотя бы одну фотографию автомобиля");
-      if (imageUrls.length > 10) throw new Error("Можно добавить не более 10 фотографий");
       if (!state.editingListingId || imageUrls.length) payload.image_urls = imageUrls;
       const promotionSelected = formData.get("promote_for_24h") === "on";
       const shouldPromote = promotionSelected && (state.listingMode === "unique" || await confirmAction("Закрепить объявление за 15 AF Coins?"));
@@ -1691,7 +1696,7 @@ async function hideCurrentConversation() {
   }
 
   async function createOffer() {
-    const value = window.prompt("Предложите цену в AF Coins (минимум 100)", String(state.currentConversation?.listing.price_af_coins || 100));
+    const value = window.prompt("Предложите цену в AF Coins (минимум 1)", String(state.currentConversation?.listing.price_af_coins || 1));
     if (!value) return;
     try { await api.request(`/conversations/${state.currentConversation.id}/offers`, { method: "POST", body: JSON.stringify({ amount_af_coins: Number(value) }) }); await openConversation(state.currentConversation.id); }
     catch (error) { notify(error.message); }
@@ -1700,7 +1705,7 @@ async function hideCurrentConversation() {
   async function runOfferAction(button) {
     try {
       if (button.dataset.offerAction === "counter") {
-        const value = window.prompt("Встречная цена в AF Coins", "100"); if (!value) return;
+        const value = window.prompt("Встречная цена в AF Coins (минимум 1)", "1"); if (!value) return;
         await api.request(`/conversations/${state.currentConversation.id}/offers/counter`, { method: "POST", body: JSON.stringify({ amount_af_coins: Number(value), parent_offer_id: button.dataset.offerId }) });
       } else await api.request(`/offers/${button.dataset.offerId}/${button.dataset.offerAction}`, { method: "POST" });
       await openConversation(state.currentConversation.id);
