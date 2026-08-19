@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.bot import HOW_IT_WORKS_TEXT, START_MENU_TEXT, bot_menu_payload
-from app.models import Deal, Listing, StarPayment, StarPaymentIntent, User, Wallet, WalletTransaction
+from app.models import Conversation, Deal, Listing, StarPayment, StarPaymentIntent, User, Wallet, WalletTransaction
 from app.services import (
     complete_listing_payment_intent,
     create_listing_payment_intent,
@@ -96,6 +96,9 @@ async def test_buyer_with_enough_af_coins_creates_one_protected_deal():
     assert wallet.available_balance == Decimal("0.00")
     assert wallet.frozen_balance == Decimal("100.00")
     assert seller_telegram_id == seller.telegram_id
+    conversation = next(item for item in session.added if isinstance(item, Conversation))
+    assert deal.conversation_id == conversation.id
+    assert {conversation.buyer_id, conversation.seller_id} == {buyer.id, seller.id}
     holds = [item for item in session.added if isinstance(item, WalletTransaction)]
     assert len(holds) == 1
     assert holds[0].external_reference == f"deal:{deal.id}:protection_hold"

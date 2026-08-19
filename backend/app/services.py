@@ -146,11 +146,12 @@ async def create_listing(
             listing_type=listing_type,
             status="active",
             brand=payload.brand,
-            model=payload.model,
+            model=payload.model or "",
             power_hp=payload.power_hp,
             max_speed_kph=payload.max_speed_kph,
             description=payload.description.strip(),
             price_af_coins=money(payload.price_af_coins),
+            delivery_time_estimate=payload.delivery_time_estimate,
             pinned=admin_pinned,
             pinned_until=now + timedelta(hours=settings.listing_promotion_hours) if admin_pinned else None,
         )
@@ -220,6 +221,8 @@ async def update_listing(session: AsyncSession, actor: User, listing_id: uuid.UU
         for field, value in changes.items():
             if field == "price_af_coins":
                 value = money(value)
+            if field == "model" and value is None:
+                value = ""
             setattr(listing, field, value)
         if payload.image_urls is not None:
             await session.execute(delete(ListingImage).where(ListingImage.listing_id == listing.id))
@@ -832,6 +835,79 @@ async def get_or_create_conversation(
     return conversation, seller, listing
 
 
+async def _ensure_deal_conversation_locked(
+    session: AsyncSession,
+    deal: Deal,
+    listing: Listing,
+    *,
+    unhide_both: bool,
+    add_context_if_created: bool = True,
+) -> Conversation:
+    conversation = None
+    if deal.conversation_id:
+        conversation = await session.get(Conversation, deal.conversation_id)
+    if not conversation:
+        conversation = await session.scalar(
+            select(Conversation).where(
+                or_(
+                    and_(Conversation.buyer_id == deal.buyer_id, Conversation.seller_id == deal.seller_id),
+                    and_(Conversation.buyer_id == deal.seller_id, Conversation.seller_id == deal.buyer_id),
+                )
+            ).with_for_update()
+        )
+    created = conversation is None
+    if created:
+        conversation = Conversation(
+            listing_id=listing.id,
+            buyer_id=deal.buyer_id,
+            seller_id=deal.seller_id,
+        )
+        session.add(conversation)
+        await session.flush()
+    conversation.listing_id = listing.id
+    conversation.deal_id = deal.id  # legacy current-deal pointer retained for older clients
+    deal.conversation_id = conversation.id
+    if unhide_both:
+        conversation.buyer_hidden_at = None
+        conversation.seller_hidden_at = None
+    if created and add_context_if_created:
+        conversation.last_message_at = datetime.now(UTC)
+        session.add(
+            ConversationMessage(
+                conversation_id=conversation.id,
+                sender_id=deal.buyer_id,
+                body=f"Покупатель оплатил {deal.price_af_coins} AF Coins. Деньги под защитой до подтверждения получения.",
+                message_type="system",
+            )
+        )
+    return conversation
+
+
+async def get_or_create_deal_conversation(
+    session: AsyncSession,
+    actor: User,
+    deal_id: uuid.UUID,
+) -> Conversation:
+    async with session.begin():
+        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+        if not deal or actor.id not in {deal.buyer_id, deal.seller_id}:
+            raise HTTPException(status_code=404, detail="Deal not found")
+        listing = await session.get(Listing, deal.listing_id)
+        if not listing:
+            raise HTTPException(status_code=409, detail="Listing for deal not found")
+        conversation = await _ensure_deal_conversation_locked(
+            session,
+            deal,
+            listing,
+            unhide_both=False,
+        )
+        if actor.id == conversation.buyer_id:
+            conversation.buyer_hidden_at = None
+        else:
+            conversation.seller_hidden_at = None
+    return conversation
+
+
 async def send_conversation_message(
     session: AsyncSession, sender: User, conversation_id: uuid.UUID, body: str, client_message_id: uuid.UUID
 ) -> tuple[ConversationMessage, User, bool]:
@@ -1020,6 +1096,7 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
                 conversation.listing_id = listing.id
                 conversation.accepted_price_af_coins = None
             conversation.deal_id = deal.id
+            deal.conversation_id = conversation.id
             conversation.buyer_hidden_at = None
             conversation.seller_hidden_at = None
             conversation.last_message_at = datetime.now(UTC)
@@ -1129,6 +1206,7 @@ async def _purchase_locked_listing(
         conversation.listing_id = listing.id
         conversation.accepted_price_af_coins = None
     conversation.deal_id = deal.id
+    deal.conversation_id = conversation.id
     conversation.buyer_hidden_at = None
     conversation.seller_hidden_at = None
     conversation.last_message_at = datetime.now(UTC)
@@ -1177,6 +1255,7 @@ async def purchase_listing(session: AsyncSession, buyer: User, listing_id: uuid.
         if listing.status == "reserved" and listing.reserved_by_deal_id:
             existing = await session.scalar(select(Deal).where(Deal.id == listing.reserved_by_deal_id).with_for_update())
             if existing and existing.buyer_id == buyer.id and existing.status not in {"completed", "cancelled"}:
+                await _ensure_deal_conversation_locked(session, existing, listing, unhide_both=True)
                 seller = await session.get(User, existing.seller_id)
                 return existing, seller.telegram_id if seller and seller.bot_started else None, False
         deal, seller_telegram_id = await _purchase_locked_listing(session, buyer, listing)
@@ -1226,7 +1305,7 @@ async def create_listing_payment_intent(
             invoice_payload=f"autoflow_topup:{intent_id}",
             xtr_amount=xtr_amount,
             purpose="listing_checkout",
-            context={"listing_title": f"{listing.brand} {listing.model}"},
+            context={"listing_title": " ".join(filter(None, [listing.brand, listing.model]))},
             listing_id=listing.id,
             seller_id=listing.seller_id,
             listing_price_af_coins=price,

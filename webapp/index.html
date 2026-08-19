@@ -38,9 +38,9 @@
 
           <div class="market-tools">
             <div class="filters" aria-label="Фильтры Market">
-              <label class="filter-select"><span aria-hidden="true">◆</span><select id="brandFilter" aria-label="Марка"><option value="">Марка</option></select></label>
-              <label class="filter-select"><span aria-hidden="true">◇</span><select id="modelFilter" aria-label="Модель"><option value="">Модель</option></select></label>
-              <label class="filter-select"><span class="af-coin af-coin--tiny" aria-hidden="true"></span><select id="priceFilter" aria-label="Ценовая категория"><option value="">Ценовая категория</option><option value="100">До 100 AF</option><option value="300">До 300 AF</option><option value="500">До 500 AF</option><option value="above">Более 500 AF</option></select></label>
+              <label class="filter-select"><span aria-hidden="true">◆</span><select id="brandFilter" aria-label="Автомобиль"><option value="">Автомобиль</option></select></label>
+              <label class="filter-price"><span>От</span><input id="priceMinFilter" aria-label="Цена от" type="number" min="0" step="0.01" inputmode="decimal" placeholder="От" /></label>
+              <label class="filter-price"><span>До</span><input id="priceMaxFilter" aria-label="Цена до" type="number" min="0" step="0.01" inputmode="decimal" placeholder="До" /></label>
               <button class="filter-toggle" id="extraFiltersButton" type="button" aria-label="Дополнительные фильтры" aria-expanded="false">▾</button>
             </div>
             <button class="catalog-add" type="button" data-open-add aria-label="Добавить обычную машину">＋</button>
@@ -92,10 +92,10 @@
           <form class="car-form" id="carForm">
             <input id="listingType" type="hidden" value="regular" />
             <label class="photo-upload" for="carPhotos"><input id="carPhotos" name="photos" type="file" accept="image/jpeg,image/png,image/webp" /><span class="camera-icon" aria-hidden="true">▣</span><span><strong>Загрузить фото</strong><small>Одна фотография, до 5 МБ</small></span></label><div class="photo-preview" id="photoPreview"></div>
-            <label class="form-row"><span>Марка</span><input id="brandInput" name="brand" required autocomplete="off" list="brandSuggestions" placeholder="Начните вводить марку" /><datalist id="brandSuggestions"></datalist></label>
-            <label class="form-row"><span>Модель</span><input id="modelInput" name="model" required autocomplete="off" list="modelSuggestions" placeholder="Сначала выберите марку" disabled /><datalist id="modelSuggestions"></datalist></label>
+            <label class="form-row"><span>Автомобиль</span><input id="brandInput" name="brand" required autocomplete="off" list="brandSuggestions" placeholder="Начните вводить автомобиль" /><datalist id="brandSuggestions"></datalist></label>
             <label class="form-row"><span>Мощность (л.с.)</span><input name="power_hp" required type="number" min="1" inputmode="numeric" placeholder="Введите мощность" /></label>
             <label class="form-row"><span>Макс. скорость</span><input name="max_speed_kph" required type="number" min="1" inputmode="numeric" placeholder="км/ч" /></label>
+            <label class="form-row"><span>Обычно передаю за</span><select name="delivery_time_estimate" required><option value="up_to_15m">до 15 минут</option><option value="up_to_30m">до 30 минут</option><option value="up_to_1h" selected>до 1 часа</option><option value="up_to_3h">до 3 часов</option><option value="up_to_6h">до 6 часов</option><option value="up_to_12h">до 12 часов</option><option value="up_to_24h">до 24 часов</option></select></label>
             <label class="form-row form-row--textarea"><span>Описание</span><textarea name="description" required minlength="1" maxlength="3000" rows="4" placeholder="Опишите автомобиль"></textarea></label>
             <fieldset class="price-field"><legend>Цена в AF Coins</legend><div class="price-presets"><button type="button" data-price="100">100</button><button type="button" data-price="150">150</button><button type="button" data-price="200">200</button><button type="button" data-price="300">300</button><button type="button" data-price="400">400</button><button type="button" data-price="500">500</button></div><label><span class="af-coin"></span><input id="priceInput" name="price_af_coins" type="number" min="0" required inputmode="numeric" placeholder="Введите цену" /></label></fieldset>
             <label class="switch-row" id="promoteRow"><span id="promoteLabel">📌 Закрепить объявление — 15 AF Coins</span><input name="promote_for_24h" type="checkbox" /><i aria-hidden="true"></i></label>

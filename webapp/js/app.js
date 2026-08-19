@@ -58,8 +58,8 @@
     adminTrainingBuyers: document.getElementById("adminTrainingBuyers"),
     adminTrainingMaterials: document.getElementById("adminTrainingMaterials"),
     brandFilter: document.getElementById("brandFilter"),
-    modelFilter: document.getElementById("modelFilter"),
-    priceFilter: document.getElementById("priceFilter"),
+    priceMinFilter: document.getElementById("priceMinFilter"),
+    priceMaxFilter: document.getElementById("priceMaxFilter"),
     powerFilter: document.getElementById("powerFilter"),
     speedFilter: document.getElementById("speedFilter"),
     extraFilters: document.getElementById("extraFilters"),
@@ -68,7 +68,6 @@
     carPhotos: document.getElementById("carPhotos"),
     photoPreview: document.getElementById("photoPreview"),
     brandInput: document.getElementById("brandInput"),
-    modelInput: document.getElementById("modelInput"),
     priceInput: document.getElementById("priceInput"),
     cartList: document.getElementById("cartList"),
     cartEmpty: document.getElementById("cartEmptyState"),
@@ -175,9 +174,9 @@
     bind(elements.extraFiltersButton, "click", toggleExtraFilters, "extraFiltersButton");
     bind(document.getElementById("resetFiltersButton"), "click", resetFilters, "resetFiltersButton");
     bind(document.getElementById("applyFiltersButton"), "click", renderListings, "applyFiltersButton");
-    [elements.brandFilter, elements.modelFilter, elements.priceFilter].forEach((control) => bind(control, "change", renderListings, "filter"));
+    bind(elements.brandFilter, "change", renderListings, "brandFilter");
+    [elements.priceMinFilter, elements.priceMaxFilter].forEach((control) => bind(control, "input", renderListings, "priceFilter"));
     bind(elements.brandInput, "input", updateBrandSuggestions, "brandInput");
-    bind(elements.modelInput, "input", updateModelSuggestions, "modelInput");
     bind(elements.carPhotos, "change", previewPhotos, "carPhotos");
     bind(elements.carForm, "submit", submitListing, "carForm");
     bind(document.getElementById("checkoutButton"), "click", checkout, "checkoutButton");
@@ -459,6 +458,8 @@ function handleClick(event) {
     if (conversationButton) {
       return void openConversation(conversationButton.dataset.openConversation);
     }
+    const dealChatButton = target.closest("[data-open-deal-chat]");
+    if (dealChatButton) return void openDealConversation(dealChatButton.dataset.openDealChat);
 
     const hideConversationButton = target.closest("[data-hide-conversation]");
     if (hideConversationButton) {
@@ -674,8 +675,6 @@ function handleClick(event) {
     document.getElementById("publicationNote").textContent = mode === "unique" ? "Уникальная машина публикуется администратором бесплатно." : "Публикация, редактирование и удаление объявлений всегда бесплатны.";
     document.getElementById("promoteLabel").textContent = mode === "unique" ? "📌 Закрепить объявление бесплатно" : "📌 Закрепить объявление — 15 AF Coins";
     document.getElementById("promotionNote").hidden = mode === "unique";
-    elements.modelInput.disabled = true;
-    elements.modelInput.placeholder = "Сначала выберите марку";
     openSecondary("add");
   }
 
@@ -727,17 +726,23 @@ function handleClick(event) {
 
   function getFilteredRegular() {
     const brand = elements.brandFilter.value;
-    const model = elements.modelFilter.value;
-    const price = elements.priceFilter.value;
+    const hasMinPrice = elements.priceMinFilter.value !== "";
+    const hasMaxPrice = elements.priceMaxFilter.value !== "";
+    const minPrice = hasMinPrice ? Number(elements.priceMinFilter.value) : null;
+    const maxPrice = hasMaxPrice ? Number(elements.priceMaxFilter.value) : null;
+    const pricesInvalid = (minPrice !== null && minPrice < 0) || (maxPrice !== null && maxPrice < 0)
+      || (minPrice !== null && maxPrice !== null && minPrice > maxPrice);
+    elements.priceMinFilter.setAttribute("aria-invalid", String(pricesInvalid));
+    elements.priceMaxFilter.setAttribute("aria-invalid", String(pricesInvalid));
     const minPower = Number(elements.powerFilter.value || 0);
     const minSpeed = Number(elements.speedFilter.value || 0);
+    if (pricesInvalid) return [];
     return state.regular.filter((listing) => {
       if (brand && listing.brand !== brand) return false;
-      if (model && listing.model !== model) return false;
       if (minPower && Number(listing.power_hp) < minPower) return false;
       if (minSpeed && Number(listing.max_speed_kph) < minSpeed) return false;
-      if (price === "above" && Number(listing.price_af_coins) <= 500) return false;
-      if (price && price !== "above" && Number(listing.price_af_coins) > Number(price)) return false;
+      if (minPrice !== null && Number(listing.price_af_coins) < minPrice) return false;
+      if (maxPrice !== null && Number(listing.price_af_coins) > maxPrice) return false;
       return true;
     });
   }
@@ -770,7 +775,7 @@ function handleClick(event) {
     if (listing.images?.[0]) {
       const image = document.createElement("img");
       image.src = absoluteMediaUrl(listing.images[0]);
-      image.alt = `${listing.brand} ${listing.model}`;
+      image.alt = listingTitle(listing);
       image.loading = "lazy";
       media.append(image);
     } else {
@@ -782,7 +787,7 @@ function handleClick(event) {
     const body = document.createElement("div");
     body.className = "car-card__body";
     const title = document.createElement("h3");
-    title.textContent = `${listing.brand} ${listing.model}`;
+    title.textContent = listingTitle(listing);
     const price = document.createElement("div");
     price.className = "car-price";
     const effectivePrice = listing.effective_price_af_coins ?? listing.price_af_coins;
@@ -792,7 +797,7 @@ function handleClick(event) {
     }
     const stats = document.createElement("div");
     stats.className = "car-stats";
-    [`${listing.power_hp} л.с.`, `${listing.max_speed_kph} км/ч`, `Просмотров: ${listing.views_count || 0}`, statusLabel(listing.status)].forEach((value) => {
+    [`${listing.power_hp} л.с.`, `${listing.max_speed_kph} км/ч`, `Передача: ${deliveryTimeLabel(listing.delivery_time_estimate)}`, `Просмотров: ${listing.views_count || 0}`, statusLabel(listing.status)].forEach((value) => {
       const chip = document.createElement("span");
       chip.textContent = value;
       stats.append(chip);
@@ -872,7 +877,7 @@ function handleClick(event) {
     if (state.me?.user.id === listing.seller_id) return notify("Нельзя купить собственное объявление");
     const price = Number(listing.effective_price_af_coins ?? listing.price_af_coins);
     state.purchaseFlow = { listing, stage: "confirm", busy: false, intentId: null };
-    elements.purchaseModalTitle.textContent = `Купить ${listing.brand} ${listing.model}?`;
+    elements.purchaseModalTitle.textContent = `Купить ${listingTitle(listing)}?`;
     elements.purchaseModalText.textContent = "Вы оплачиваете, но продавец не получит деньги, пока вы не подтвердите, что всё получили.";
     elements.purchaseModalAmount.replaceChildren(document.createTextNode(`${formatNumber(price)} `), coin("af-coin--small"));
     elements.purchaseModalNote.textContent = "Деньги будут находиться под защитой AutoFlow Market.";
@@ -961,9 +966,7 @@ function handleClick(event) {
     await refreshMarketplace();
     showPurchaseSuccess("Покупка оформлена", "Деньги находятся под защитой до подтверждения получения.");
     if (!deal?.id) return;
-    const conversations = await api.request("/conversations");
-    const conversation = conversations.find((item) => item.deal?.id === deal.id);
-    if (conversation) await openConversation(conversation.id);
+    await openDealConversation(deal.id);
   }
 
   function showPurchaseSuccess(title, message) {
@@ -1003,13 +1006,13 @@ function handleClick(event) {
     if (listing.images?.[0]) {
       const image = document.createElement("img");
       image.src = absoluteMediaUrl(listing.images[0]);
-      image.alt = `${listing.brand} ${listing.model}`;
+      image.alt = listingTitle(listing);
       visual.append(image);
     }
     const copy = document.createElement("div");
     copy.className = "compact-cart-item__copy";
     const title = document.createElement("strong");
-    title.textContent = `${listing.brand} ${listing.model}`;
+    title.textContent = listingTitle(listing);
     const price = document.createElement("span");
     price.append(document.createTextNode(`${formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins)} `), coin("af-coin--small"));
     const status = document.createElement("small");
@@ -1030,8 +1033,7 @@ function handleClick(event) {
       await refreshMarketplace();
       notify("Покупатель оплатил. Деньги под защитой до подтверждения получения");
       if (deals[0]) {
-        const conversation = state.profile?.conversations?.find((item) => item.deal?.id === deals[0].id) || (await api.request("/conversations")).find((item) => item.deal?.id === deals[0].id);
-        if (conversation) await openConversation(conversation.id);
+        await openDealConversation(deals[0].id);
       }
     } catch (error) {
       if (error.status === 402) {
@@ -1067,9 +1069,9 @@ function handleClick(event) {
       }
       const payload = {
         brand: String(formData.get("brand")).trim(),
-        model: String(formData.get("model")).trim(),
         power_hp: Number(formData.get("power_hp")),
         max_speed_kph: Number(formData.get("max_speed_kph")),
+        delivery_time_estimate: String(formData.get("delivery_time_estimate")),
         description: String(formData.get("description") || "").trim(),
         price_af_coins: Number(formData.get("price_af_coins")),
       };
@@ -1114,12 +1116,12 @@ function handleClick(event) {
       head.className = "modal-head";
       const heading = document.createElement("div");
       const eyebrow = document.createElement("span"); eyebrow.className = "eyebrow"; eyebrow.textContent = listing.listing_type === "unique" ? "Уникальная машина" : "Объявление";
-      const title = document.createElement("h2"); title.textContent = `${listing.brand} ${listing.model}`;
+      const title = document.createElement("h2"); title.textContent = listingTitle(listing);
       heading.append(eyebrow, title);
       const close = document.createElement("button"); close.type = "button"; close.textContent = "×"; close.addEventListener("click", () => dialog.close());
       head.append(heading, close);
       const description = document.createElement("p"); description.textContent = listing.description;
-      const stats = document.createElement("p"); stats.textContent = `${listing.power_hp} л.с. · ${listing.max_speed_kph} км/ч · ${listing.views_count} просмотров`;
+      const stats = document.createElement("p"); stats.textContent = `${listing.power_hp} л.с. · ${listing.max_speed_kph} км/ч · передача ${deliveryTimeLabel(listing.delivery_time_estimate)} · ${listing.views_count} просмотров`;
       const price = document.createElement("p"); price.append(document.createTextNode(`${formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins)} `), coin("af-coin--small"));
       dialog.append(head, description, stats, price);
       if (listing.seller_id !== state.me?.user.id) {
@@ -1140,8 +1142,9 @@ function handleClick(event) {
     state.editingListingId = id;
     state.photoFiles = [];
     elements.carForm.reset(); elements.photoPreview.replaceChildren();
-    elements.brandInput.value = listing.brand; elements.modelInput.value = listing.model; elements.modelInput.disabled = false;
+    elements.brandInput.value = listing.brand;
     elements.carForm.elements.power_hp.value = listing.power_hp; elements.carForm.elements.max_speed_kph.value = listing.max_speed_kph; elements.carForm.elements.description.value = listing.description; elements.priceInput.value = listing.price_af_coins;
+    elements.carForm.elements.delivery_time_estimate.value = listing.delivery_time_estimate || "up_to_1h";
     document.getElementById("listingType").value = listing.listing_type;
     document.getElementById("addTitle").textContent = "Редактировать объявление";
     const freeAdminPromotion = state.me.user.role === "admin" && listing.listing_type === "unique";
@@ -1208,18 +1211,6 @@ function handleClick(event) {
     const query = elements.brandInput.value.trim().toLowerCase();
     const matches = state.catalog.brands.filter((brand) => brand.name.toLowerCase().startsWith(query));
     fillDatalist("brandSuggestions", matches.map((brand) => brand.name));
-    const exact = state.catalog.brands.find((brand) => brand.name.toLowerCase() === query);
-    elements.modelInput.disabled = !exact;
-    elements.modelInput.value = exact ? elements.modelInput.value : "";
-    elements.modelInput.placeholder = exact ? "Начните вводить модель" : "Сначала выберите марку";
-    updateModelSuggestions();
-  }
-
-  function updateModelSuggestions() {
-    const brand = state.catalog.brands.find((item) => item.name.toLowerCase() === elements.brandInput.value.trim().toLowerCase());
-    if (!brand) return fillDatalist("modelSuggestions", []);
-    const query = elements.modelInput.value.trim().toLowerCase();
-    fillDatalist("modelSuggestions", brand.models.filter((model) => model.toLowerCase().startsWith(query)));
   }
 
   function fillDatalist(id, values) {
@@ -1228,8 +1219,7 @@ function handleClick(event) {
   }
 
   function updateFilterOptions() {
-    setSelectOptions(elements.brandFilter, "Марка", uniqueValues(state.regular.map((item) => item.brand)));
-    setSelectOptions(elements.modelFilter, "Модель", uniqueValues(state.regular.map((item) => item.model)));
+    setSelectOptions(elements.brandFilter, "Автомобиль", uniqueValues(state.regular.map((item) => item.brand)));
   }
 
   function setSelectOptions(select, placeholder, values) {
@@ -1245,7 +1235,7 @@ function handleClick(event) {
   }
 
   function resetFilters() {
-    [elements.brandFilter, elements.modelFilter, elements.priceFilter, elements.powerFilter, elements.speedFilter].forEach((control) => { control.value = ""; });
+    [elements.brandFilter, elements.priceMinFilter, elements.priceMaxFilter, elements.powerFilter, elements.speedFilter].forEach((control) => { control.value = ""; });
     renderListings();
   }
 
@@ -1306,10 +1296,10 @@ function handleClick(event) {
       const row = document.createElement("div");
       row.className = "profile-mini-card";
       const image = document.createElement(listing.images?.[0] ? "img" : "div");
-      if (listing.images?.[0]) { image.src = absoluteMediaUrl(listing.images[0]); image.alt = `${listing.brand} ${listing.model}`; }
+      if (listing.images?.[0]) { image.src = absoluteMediaUrl(listing.images[0]); image.alt = listingTitle(listing); }
       else image.className = "profile-mini-placeholder";
       const copy = document.createElement("div");
-      const title = document.createElement("strong"); title.textContent = `${listing.brand} ${listing.model}`;
+      const title = document.createElement("strong"); title.textContent = listingTitle(listing);
       const meta = document.createElement("small"); meta.textContent = statusLabel(listing.status);
       copy.append(title, meta);
       const price = document.createElement("b"); price.append(document.createTextNode(`${formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins)} `), coin("af-coin--small"));
@@ -1363,11 +1353,13 @@ function handleClick(event) {
   function renderDeals(deals) {
     document.getElementById("dealsEmpty").hidden = deals.length > 0;
     elements.activeDeals.replaceChildren(...deals.map((deal) => {
-      const conversation = state.profile?.conversations?.find((item) => item.deal?.id === deal.id);
-      const button = document.createElement("button"); button.className = "deal-row"; if (conversation) button.dataset.openConversation = conversation.id;
+      const row = document.createElement("article"); row.className = "deal-row";
       const copy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = `Сделка ${deal.id.slice(0, 8)}`;
       const date = document.createElement("small"); date.textContent = formatDate(deal.created_at); copy.append(title, date);
-      const status = document.createElement("b"); status.textContent = dealStatusLabel(deal.status); button.append(copy, status); return button;
+      const meta = document.createElement("div"); meta.className = "deal-row__meta";
+      const status = document.createElement("b"); status.textContent = dealStatusLabel(deal.status);
+      const chat = document.createElement("button"); chat.type = "button"; chat.dataset.openDealChat = deal.id; chat.textContent = "💬 Открыть чат";
+      meta.append(status, chat); row.append(copy, meta); return row;
     }));
   }
 
@@ -1484,6 +1476,13 @@ async function hideCurrentConversation() {
     } catch (error) { notify(error.message); }
   }
 
+  async function openDealConversation(dealId) {
+    try {
+      const conversation = await api.request(`/deals/${dealId}/conversation`, { method: "POST" });
+      await openConversation(conversation.id, conversation);
+    } catch (error) { notify(error.message); }
+  }
+
   function renderConversation() {
     const details = state.currentConversation; if (!details) return;
     const other = details.counterparty;
@@ -1495,9 +1494,12 @@ async function hideCurrentConversation() {
     avatarImage.hidden = !other.photo_url; avatarFallback.hidden = Boolean(other.photo_url); if (other.photo_url) avatarImage.src = other.photo_url;
     document.getElementById("chatHideButton").hidden = !details.id;
     elements.chatListing.replaceChildren();
-    if (details.listing.images?.[0]) { const image = document.createElement("img"); image.src = details.listing.images[0]; image.alt = ""; elements.chatListing.append(image); }
-    const listingCopy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = `${details.listing.brand} ${details.listing.model}`;
-    const price = document.createElement("small"); price.textContent = `${formatNumber(details.accepted_price_af_coins ?? details.listing.price_af_coins)} AF Coins`; listingCopy.append(title, price);
+    if (details.listing.images?.[0]) { const image = document.createElement("img"); image.src = absoluteMediaUrl(details.listing.images[0]); image.alt = listingTitle(details.listing); elements.chatListing.append(image); }
+    const listingCopy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = listingTitle(details.listing);
+    const priceValue = details.deal?.price_af_coins ?? details.accepted_price_af_coins ?? details.listing.price_af_coins;
+    const price = document.createElement("small"); price.textContent = `${formatNumber(priceValue)} AF Coins`;
+    const context = document.createElement("small"); context.textContent = `${details.deal ? dealStatusLabel(details.deal.status) : "Объявление"} · передача ${deliveryTimeLabel(details.listing.delivery_time_estimate)}`;
+    listingCopy.append(title, price, context);
     const listingAction = document.createElement("span"); listingAction.textContent = "Открыть ›"; elements.chatListing.append(listingCopy, listingAction);
     const renderedMessages = []; let previousDay = "";
     state.messages.forEach((message) => {
@@ -1999,7 +2001,7 @@ async function hideCurrentConversation() {
     const listings = await api.request("/admin/listings");
     elements.adminListings.replaceChildren(...listings.map((listing) => {
       const card = document.createElement("div"); card.className = "admin-record";
-      const title = document.createElement("strong"); title.textContent = `${listing.brand} ${listing.model} · ${listing.listing_type}`;
+      const title = document.createElement("strong"); title.textContent = `${listingTitle(listing)} · ${listing.listing_type}`;
       const meta = document.createElement("small"); meta.textContent = `${statusLabel(listing.status)} · ${formatNumber(listing.price_af_coins)} AF Coins`;
       const actions = document.createElement("div"); actions.className = "admin-record__actions";
       const promotion = document.createElement("button"); promotion.dataset.adminListingAction = "promote"; promotion.dataset.listingId = listing.id; promotion.textContent = listing.pinned ? "Закреплено" : "Закрепить"; promotion.disabled = listing.pinned;
@@ -2395,6 +2397,18 @@ async function hideCurrentConversation() {
   function notify(message) { if (telegram?.initData && telegram.showAlert) return telegram.showAlert(message); elements.toast.textContent = message; elements.toast.classList.add("is-visible"); clearTimeout(notify.timeout); notify.timeout = setTimeout(() => elements.toast.classList.remove("is-visible"), 2600); }
   function coin(extraClass = "") { const item = document.createElement("i"); item.className = `af-coin ${extraClass}`.trim(); item.setAttribute("aria-label", "AF Coins"); return item; }
   function absoluteMediaUrl(url) { return url.startsWith("/") ? `${api.baseUrl.replace(/\/api$/, "")}${url}` : url; }
+  function listingTitle(listing) { return [listing?.brand, listing?.model].filter(Boolean).join(" ") || "Автомобиль"; }
+  function deliveryTimeLabel(value) {
+    return ({
+      up_to_15m: "до 15 минут",
+      up_to_30m: "до 30 минут",
+      up_to_1h: "до 1 часа",
+      up_to_3h: "до 3 часов",
+      up_to_6h: "до 6 часов",
+      up_to_12h: "до 12 часов",
+      up_to_24h: "до 24 часов",
+    })[value] || "до 1 часа";
+  }
   function formatNumber(value) { return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(Number(value)); }
   function formatDate(value) { return new Intl.DateTimeFormat("ru-RU", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)); }
   function formatMessageTime(value) { return value ? new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)) : ""; }

@@ -98,6 +98,7 @@ from .services import (
     delete_training_material,
     begin_training_delivery,
     finish_training_delivery,
+    get_or_create_deal_conversation,
     get_or_create_conversation,
     process_successful_payment,
     purchase_listing,
@@ -152,11 +153,21 @@ async def expire_promotions(session: AsyncSession) -> None:
         await session.commit()
 
 
-async def conversation_details(session: AsyncSession, conversation: Conversation, viewer: User | None = None, allow_admin: bool = False) -> dict:
+async def conversation_details(
+    session: AsyncSession,
+    conversation: Conversation,
+    viewer: User | None = None,
+    allow_admin: bool = False,
+    deal_override: Deal | None = None,
+) -> dict:
     if viewer and not allow_admin and viewer.id not in {conversation.buyer_id, conversation.seller_id}:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    listing = await session.get(Listing, conversation.listing_id)
-    deal = await session.get(Deal, conversation.deal_id) if conversation.deal_id else None
+    deal = deal_override or await session.scalar(
+        select(Deal).where(Deal.conversation_id == conversation.id).order_by(Deal.created_at.desc()).limit(1)
+    )
+    if not deal and conversation.deal_id:
+        deal = await session.get(Deal, conversation.deal_id)
+    listing = await session.get(Listing, deal.listing_id if deal else conversation.listing_id)
     other_id = conversation.seller_id if viewer and viewer.id == conversation.buyer_id else conversation.buyer_id
     other = await session.get(User, other_id)
     offers = list((await session.scalars(select(PriceOffer).where(PriceOffer.conversation_id == conversation.id).order_by(PriceOffer.created_at))).all())
@@ -423,19 +434,21 @@ async def delete_advertisement(
 async def list_listings(
     listing_type: str = Query(alias="type", pattern="^(regular|unique)$"),
     brand: str | None = None,
-    model: str | None = None,
-    max_price: Decimal | None = Query(default=None, ge=50),
+    min_price: Decimal | None = Query(default=None, ge=0),
+    max_price: Decimal | None = Query(default=None, ge=0),
     min_power: int | None = Query(default=None, gt=0),
     min_speed: int | None = Query(default=None, gt=0),
     session: AsyncSession = Depends(get_session),
 ):
+    if min_price is not None and max_price is not None and min_price > max_price:
+        raise HTTPException(status_code=422, detail="Цена от не может быть больше цены до")
     await expire_promotions(session)
     query = select(Listing).where(Listing.listing_type == listing_type, Listing.status.in_(["active", "reserved"]))
     if brand:
         query = query.where(Listing.brand == brand)
-    if model:
-        query = query.where(Listing.model == model)
-    if max_price:
+    if min_price is not None:
+        query = query.where(Listing.price_af_coins >= min_price)
+    if max_price is not None:
         query = query.where(Listing.price_af_coins <= max_price)
     if min_power:
         query = query.where(Listing.power_hp >= min_power)
@@ -1172,7 +1185,7 @@ async def get_deal(deal_id: uuid.UUID, user: User = Depends(get_current_user), s
     listing = await session.get(Listing, deal.listing_id)
     other_id = deal.seller_id if user.id == deal.buyer_id else deal.buyer_id
     other = await session.get(User, other_id)
-    conversation_id = await session.scalar(select(Conversation.id).where(Conversation.deal_id == deal.id))
+    conversation_id = deal.conversation_id or await session.scalar(select(Conversation.id).where(Conversation.deal_id == deal.id))
     return {
         "deal": DealOut.model_validate(deal),
         "listing": await listing_out(session, listing),
@@ -1186,6 +1199,17 @@ async def get_deal(deal_id: uuid.UUID, user: User = Depends(get_current_user), s
         "buyer_confirmation_available_at": deal.transfer_started_at,
         "conversation_id": str(conversation_id) if conversation_id else None,
     }
+
+
+@router.post("/deals/{deal_id}/conversation", status_code=200)
+async def open_deal_conversation(
+    deal_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    conversation = await get_or_create_deal_conversation(session, user, deal_id)
+    deal = await session.get(Deal, deal_id)
+    return await conversation_details(session, conversation, user, deal_override=deal)
 
 
 @router.get("/deals/{deal_id}/messages", response_model=list[MessageOut])
