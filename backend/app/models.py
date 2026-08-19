@@ -535,10 +535,31 @@ class SupportTicket(Base, TimestampMixin):
     __tablename__ = "support_tickets"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    author_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    case_type: Mapped[str] = mapped_column(String(16), nullable=False, default="general", index=True)
+    deal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("deals.id", ondelete="RESTRICT"), index=True)
+    listing_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"), index=True)
+    buyer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    seller_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
     topic: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="open", index=True)
     screenshot_url: Mapped[str | None] = mapped_column(Text)
-    __table_args__ = (CheckConstraint("status IN ('open','in_progress','resolved','closed')", name="ck_support_ticket_status"),)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    unread_by_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    __table_args__ = (
+        CheckConstraint("case_type IN ('general','deal')", name="ck_support_ticket_case_type"),
+        CheckConstraint("status IN ('open','in_progress','resolved','closed')", name="ck_support_ticket_status"),
+        CheckConstraint(
+            "case_type = 'general' OR (deal_id IS NOT NULL AND listing_id IS NOT NULL AND buyer_id IS NOT NULL AND seller_id IS NOT NULL)",
+            name="ck_support_ticket_deal_context",
+        ),
+        Index(
+            "uq_support_active_deal",
+            "deal_id",
+            unique=True,
+            postgresql_where=sql_text("case_type = 'deal' AND status IN ('open','in_progress')"),
+        ),
+    )
 
 
 class SupportMessage(Base):
@@ -546,7 +567,23 @@ class SupportMessage(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("support_tickets.id", ondelete="CASCADE"), nullable=False, index=True)
     sender_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    client_request_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    __table_args__ = (
+        UniqueConstraint("ticket_id", "sender_id", "client_request_id", name="uq_support_message_client_request"),
+    )
+
+
+class SupportCaseEvent(Base):
+    __tablename__ = "support_case_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("support_tickets.id", ondelete="RESTRICT"), nullable=False, index=True)
+    actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(24))
+    to_status: Mapped[str | None] = mapped_column(String(24))
+    details: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 

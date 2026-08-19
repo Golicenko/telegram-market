@@ -264,7 +264,9 @@ def test_start_and_how_it_works_menus_have_web_app_and_back_buttons():
     assert details["reply_markup"]["inline_keyboard"][1][0]["callback_data"] == "autoflow:start"
 
 
-def test_start_payload_is_not_captured_by_plain_start_handler():
+def test_start_payload_is_preserved_for_mini_app_deep_links():
     source = open("app/routes.py", encoding="utf-8").read()
-    assert 'message.get("text") == "/start"' in source
-    assert 'message.get("text").startswith("/start")' not in source
+    assert 'start_text.split(maxsplit=1)' in source
+    assert 'start_payload=start_payload' in source
+    _, payload = bot_menu_payload(False, "https://market.example", chat_id=1, start_payload="deal_123")
+    assert payload["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"] == "https://market.example?start=deal_123"

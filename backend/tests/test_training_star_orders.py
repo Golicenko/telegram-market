@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from app import bot as bot_module
-from app.bot import personal_training_order_payload, send_bot_material
+from app.bot import personal_training_order_payload, send_bot_material, send_personal_training_order_notification
 from app.models import Conversation, StarPayment, StarPaymentIntent, TrainingProduct, TrainingPurchase, User, Wallet
 from app.services import process_successful_payment, purchase_training_product, update_training_purchase_status
 
@@ -105,6 +105,33 @@ def test_admin_notification_omits_broken_chat_link_without_username():
     assert len(button_rows) == 1
     assert "url" not in button_rows[0][0]
     assert button_rows[0][0]["web_app"]["url"].endswith("training_order=order-456")
+
+
+@pytest.mark.asyncio
+async def test_personal_training_admin_notification_is_really_sent(monkeypatch):
+    calls = []
+
+    async def fake_call(method, payload):
+        calls.append((method, payload))
+        return {"ok": True}
+
+    settings = type("Settings", (), {"externally_reachable_url": "https://autoflow.example"})()
+    monkeypatch.setattr(bot_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(bot_module, "call_bot_api", fake_call)
+
+    sent = await send_personal_training_order_notification(
+        10,
+        purchase_id="order-789",
+        title="Персональное обучение",
+        buyer_name="Иван",
+        buyer_username="buyer",
+        buyer_telegram_id=20,
+        price_xtr=100,
+    )
+
+    assert sent is True
+    assert calls[0][0] == "sendMessage"
+    assert "Новый заказ на персональное обучение" in calls[0][1]["text"]
 
 
 @pytest.mark.asyncio

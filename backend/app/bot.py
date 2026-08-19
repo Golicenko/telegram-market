@@ -7,19 +7,11 @@ from .config import get_settings
 
 START_MENU_TEXT = """👋 Добро пожаловать в AutoFlow Market
 
-Здесь вы можете:
+AutoFlow Market создан для удобной покупки и продажи игровых автомобилей.
 
-🚗 Покупать и продавать машины
-Сделки проходят через защищённую систему оплаты.
+Оплата остаётся под защитой до подтверждения получения, а за проектом стоит команда с многолетним опытом работы с сообществом.
 
-👑 Покупать эксклюзивные автомобили
-Редкие и уникальные машины по выгодным ценам.
-
-🎓 Покупать обучение
-Персональные занятия и готовые материалы по работе с Game Guardian и скриптами — в рамках разрешённого и безопасного использования.
-
-🛡 Безопасная покупка
-Продавец получает средства только после завершения сделки.
+Наша аудитория на разных площадках — более 10 000 подписчиков.
 
 Нажмите кнопку ниже, чтобы открыть маркет."""
 
@@ -89,8 +81,19 @@ AutoFlow Market — единый маркет для CRMP: машины, экс�
 AutoFlow Market — всё необходимое в одном Telegram-маркете. 🚘"""
 
 
-def bot_menu_payload(detailed: bool, public_url: str, *, chat_id: int, message_id: int | None = None) -> tuple[str, dict]:
-    keyboard = [[{"text": "🚘 Открыть AutoFlow Market", "web_app": {"url": public_url}}]]
+def bot_menu_payload(
+    detailed: bool,
+    public_url: str,
+    *,
+    chat_id: int,
+    message_id: int | None = None,
+    start_payload: str | None = None,
+) -> tuple[str, dict]:
+    target_url = public_url
+    if start_payload:
+        separator = "&" if "?" in target_url else "?"
+        target_url = f"{target_url}{separator}{urlencode({'start': start_payload})}"
+    keyboard = [[{"text": "🚘 Открыть AutoFlow Market", "web_app": {"url": target_url}}]]
     keyboard.append([{"text": "⬅️ Назад" if detailed else "❓ Как это работает", "callback_data": "autoflow:start" if detailed else "autoflow:how"}])
     payload: dict = {
         "chat_id": chat_id,
@@ -102,11 +105,23 @@ def bot_menu_payload(detailed: bool, public_url: str, *, chat_id: int, message_i
     return ("editMessageText" if message_id is not None else "sendMessage"), payload
 
 
-async def send_bot_menu(telegram_id: int, *, detailed: bool = False, message_id: int | None = None) -> bool:
+async def send_bot_menu(
+    telegram_id: int,
+    *,
+    detailed: bool = False,
+    message_id: int | None = None,
+    start_payload: str | None = None,
+) -> bool:
     public_url = get_settings().externally_reachable_url
     if not public_url:
         return await send_bot_notification(telegram_id, "AutoFlow Market временно недоступен. Попробуйте открыть приложение позже.")
-    method, payload = bot_menu_payload(detailed, public_url, chat_id=telegram_id, message_id=message_id)
+    method, payload = bot_menu_payload(
+        detailed,
+        public_url,
+        chat_id=telegram_id,
+        message_id=message_id,
+        start_payload=start_payload,
+    )
     try:
         await call_bot_api(method, payload)
         return True
@@ -205,6 +220,52 @@ async def send_personal_training_order_notification(telegram_id: int, **order) -
         await call_bot_api(
             "sendMessage",
             personal_training_order_payload(telegram_id, public_url=public_url, **order),
+        )
+        return True
+    except HTTPException:
+        return False
+
+
+def deal_support_case_payload(
+    telegram_id: int,
+    *,
+    ticket_id: str,
+    deal_id: str,
+    listing_title: str,
+    buyer_label: str,
+    seller_label: str,
+    author_label: str,
+    reason: str,
+    public_url: str,
+) -> dict:
+    target = f"{public_url.rstrip('/')}/?{urlencode({'support_case': ticket_id})}"
+    text = (
+        "🛟 Новое обращение по сделке\n\n"
+        f"Сделка: #{deal_id[:8]}\n"
+        f"Машина: {listing_title}\n"
+        f"Покупатель: {buyer_label}\n"
+        f"Продавец: {seller_label}\n"
+        f"Автор обращения: {author_label}\n"
+        f"Причина: {reason[:1000]}"
+    )
+    return {
+        "chat_id": telegram_id,
+        "text": text,
+        "reply_markup": {"inline_keyboard": [[{
+            "text": "Открыть обращение",
+            "web_app": {"url": target},
+        }]]},
+    }
+
+
+async def send_deal_support_case_notification(telegram_id: int, **case) -> bool:
+    public_url = get_settings().externally_reachable_url
+    if not public_url:
+        return False
+    try:
+        await call_bot_api(
+            "sendMessage",
+            deal_support_case_payload(telegram_id, public_url=public_url, **case),
         )
         return True
     except HTTPException:

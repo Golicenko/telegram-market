@@ -24,6 +24,7 @@ from .models import (
     PriceOffer,
     StarPayment,
     StarPaymentIntent,
+    SupportCaseEvent,
     SupportMessage,
     SupportTicket,
     TrainingMaterial,
@@ -1415,6 +1416,90 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
     return deal
 
 
+async def create_deal_support_case(
+    session: AsyncSession,
+    author: User,
+    deal_id: uuid.UUID,
+    message: str,
+    client_request_id: uuid.UUID,
+) -> tuple[SupportTicket, Listing, User, User, list[User]]:
+    """Open (or reuse) one active support case and freeze the deal for review."""
+    async with session.begin():
+        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+        if not deal or author.id not in {deal.buyer_id, deal.seller_id}:
+            raise HTTPException(status_code=404, detail="Сделка не найдена")
+        if deal.status in {"completed", "cancelled", "pending_payment"}:
+            raise HTTPException(status_code=409, detail="Для этой сделки обращение сейчас недоступно")
+        listing = await session.get(Listing, deal.listing_id)
+        buyer = await session.get(User, deal.buyer_id)
+        seller = await session.get(User, deal.seller_id)
+        if not listing or not buyer or not seller:
+            raise HTTPException(status_code=409, detail="Контекст сделки повреждён")
+        ticket = await session.scalar(
+            select(SupportTicket).where(
+                SupportTicket.deal_id == deal.id,
+                SupportTicket.status.in_({"open", "in_progress"}),
+            ).with_for_update()
+        )
+        created = ticket is None
+        if ticket:
+            existing_message = await session.scalar(select(SupportMessage).where(
+                SupportMessage.ticket_id == ticket.id,
+                SupportMessage.sender_id == author.id,
+                SupportMessage.client_request_id == client_request_id,
+            ))
+            if existing_message:
+                return ticket, listing, buyer, seller, []
+        if created:
+            ticket = SupportTicket(
+                user_id=author.id,
+                author_id=author.id,
+                case_type="deal",
+                deal_id=deal.id,
+                listing_id=listing.id,
+                buyer_id=deal.buyer_id,
+                seller_id=deal.seller_id,
+                topic="Проблема по сделке",
+                status="open",
+                unread_by_admin=True,
+            )
+            session.add(ticket)
+            await session.flush()
+            session.add(SupportCaseEvent(
+                ticket_id=ticket.id,
+                actor_id=author.id,
+                event_type="case_created",
+                to_status="open",
+                details={"deal_id": str(deal.id)},
+            ))
+        ticket.unread_by_admin = True
+        session.add(SupportMessage(
+            ticket_id=ticket.id,
+            sender_id=author.id,
+            client_request_id=client_request_id,
+            body=message.strip(),
+        ))
+        session.add(SupportCaseEvent(
+            ticket_id=ticket.id,
+            actor_id=author.id,
+            event_type="participant_message",
+            details={"created_with_case": created},
+        ))
+        if deal.status != "disputed":
+            deal.status = "disputed"
+        administrators = list((await session.scalars(select(User).where(User.role == "admin"))).all())
+        for administrator in administrators:
+            await create_notification(
+                session,
+                administrator.id,
+                "deal_support_case",
+                "Новое обращение по сделке",
+                f"{listing.brand} {listing.model}".strip(),
+                {"ticket_id": str(ticket.id), "deal_id": str(deal.id)},
+            )
+    return ticket, listing, buyer, seller, administrators
+
+
 async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) -> Deal:
     async with session.begin():
         deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
@@ -1496,7 +1581,15 @@ async def cancel_deal(session: AsyncSession, actor: User, deal_id: uuid.UUID) ->
     return deal
 
 
-async def resolve_dispute(session: AsyncSession, admin: User, deal_id: uuid.UUID, outcome: str, reason: str) -> Deal:
+async def resolve_dispute(
+    session: AsyncSession,
+    admin: User,
+    deal_id: uuid.UUID,
+    outcome: str,
+    reason: str,
+    *,
+    support_ticket_id: uuid.UUID | None = None,
+) -> Deal:
     async with session.begin():
         deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
         if not deal or deal.status != "disputed":
@@ -1508,6 +1601,15 @@ async def resolve_dispute(session: AsyncSession, admin: User, deal_id: uuid.UUID
             raise HTTPException(status_code=409, detail="Settlement state is inconsistent")
         buyer_available_before, buyer_frozen_before = buyer_wallet.available_balance, buyer_wallet.frozen_balance
         now = datetime.now(UTC)
+        support_ticket = None
+        if support_ticket_id:
+            support_ticket = await session.scalar(
+                select(SupportTicket).where(SupportTicket.id == support_ticket_id).with_for_update()
+            )
+            if not support_ticket or support_ticket.deal_id != deal.id:
+                raise HTTPException(status_code=404, detail="Обращение по сделке не найдено")
+            if support_ticket.status in {"resolved", "closed"}:
+                raise HTTPException(status_code=409, detail="Обращение уже решено")
         if outcome == "refund":
             release_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount)
             buyer_wallet.version += 1
@@ -1536,6 +1638,27 @@ async def resolve_dispute(session: AsyncSession, admin: User, deal_id: uuid.UUID
             buyer_body = "Сделка завершена решением администратора"
             seller_body = f"Сделка завершена, начислено {deal.seller_payout} AF Coins"
         session.add(AdminAction(admin_id=admin.id, action=f"resolve_dispute_{outcome}", target_type="deal", target_id=deal.id, reason=reason))
+        if support_ticket:
+            previous_status = support_ticket.status
+            support_ticket.status = "resolved"
+            support_ticket.resolved_at = now
+            support_ticket.unread_by_admin = False
+            session.add(SupportCaseEvent(
+                ticket_id=support_ticket.id,
+                actor_id=admin.id,
+                event_type=f"financial_resolution_{outcome}",
+                from_status=previous_status,
+                to_status="resolved",
+                details={"reason": reason, "deal_id": str(deal.id), "amount": str(deal.frozen_amount)},
+            ))
+            session.add(AdminAction(
+                admin_id=admin.id,
+                action=f"resolve_support_case_{outcome}",
+                target_type="support_ticket",
+                target_id=support_ticket.id,
+                reason=reason,
+                metadata_json={"deal_id": str(deal.id), "amount": str(deal.frozen_amount)},
+            ))
         await create_notification(session, deal.buyer_id, "dispute_resolved", "Спор рассмотрен", buyer_body, {"deal_id": str(deal.id)})
         await create_notification(session, deal.seller_id, "dispute_resolved", "Спор рассмотрен", seller_body, {"deal_id": str(deal.id)})
     return deal

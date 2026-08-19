@@ -40,7 +40,7 @@ test("training purchase and library use authenticated backend workflows", () => 
 });
 
 test("personal training orders are managed without creating an internal conversation", () => {
-  assert.match(app, /Администратор получил заказ и свяжется с вами в Telegram/);
+  assert.match(app, /Ваш заказ на персональное обучение принят\. Статус: Ожидает обучения/);
   assert.match(app, /dataset\.trainingPurchaseAction = purchase\.status === "awaiting_start" \? "in_progress" : "completed"/);
   const purchaseFlow = app.slice(app.indexOf("async function buyTrainingProduct"), app.indexOf("async function redeliverTraining"));
   assert.doesNotMatch(purchaseFlow, /conversation|chat/i);
