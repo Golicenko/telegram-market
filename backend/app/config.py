@@ -1,3 +1,4 @@
+import hashlib
 import os
 from functools import lru_cache
 
@@ -96,6 +97,15 @@ class Settings(BaseSettings):
         if self.railway_public_domain:
             return f"https://{self.railway_public_domain.strip('/')}"
         return None
+
+    @property
+    def effective_telegram_webhook_secret(self) -> str:
+        """Use an explicit secret or a stable token-derived secret for Telegram webhooks."""
+        if self.telegram_webhook_secret:
+            return self.telegram_webhook_secret
+        if not self.bot_token:
+            return ""
+        return hashlib.sha256(f"autoflow-webhook:{self.bot_token}".encode()).hexdigest()
 
 
 @lru_cache

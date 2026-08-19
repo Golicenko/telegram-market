@@ -335,8 +335,8 @@ async def configure_telegram_webhook() -> bool:
         "allowed_updates": ["message", "pre_checkout_query", "callback_query"],
         "drop_pending_updates": False,
     }
-    if settings.telegram_webhook_secret:
-        payload["secret_token"] = settings.telegram_webhook_secret
+    if settings.effective_telegram_webhook_secret:
+        payload["secret_token"] = settings.effective_telegram_webhook_secret
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.post(f"https://api.telegram.org/bot{settings.bot_token}/setWebhook", json=payload)

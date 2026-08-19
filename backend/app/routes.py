@@ -1,3 +1,4 @@
+import hmac
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -8,6 +9,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import get_current_user, require_admin
+from .broadcasts import create_admin_broadcast, parse_broadcast_command, run_admin_broadcast
 from .bot import (
     answer_bot_callback,
     answer_pre_checkout_query,
@@ -17,7 +19,6 @@ from .bot import (
     send_bot_notification,
     send_bot_menu,
     send_bot_material,
-    send_bot_photo,
     upload_bot_material,
 )
 from .config import Settings, get_settings
@@ -1801,7 +1802,8 @@ async def telegram_webhook(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
-    if settings.telegram_webhook_secret and x_telegram_bot_api_secret_token != settings.telegram_webhook_secret:
+    expected_secret = settings.effective_telegram_webhook_secret
+    if expected_secret and not hmac.compare_digest(x_telegram_bot_api_secret_token or "", expected_secret):
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
     pre_checkout = update.get("pre_checkout_query") or {}
     if pre_checkout.get("id"):
@@ -1832,99 +1834,38 @@ async def telegram_webhook(
         return {"ok": True}
     message = update.get("message") or {}
     sender = message.get("from") or {}
-    # Админская рассылка
+    # Admin broadcasts are claimed by Telegram update_id and executed after the
+    # webhook response. Telegram retries can therefore never start duplicates.
     if sender.get("id") in settings.admin_telegram_ids:
-        text_value = message.get("text") or ""
-
-        if text_value.startswith("#рассылка"):
-            text = text_value.replace("#рассылка", "", 1).strip()
-
-            users = list(
-                (
-                    await session.scalars(
-                        select(User).where(User.bot_started.is_(True))
-                    )
-                ).all()
-            )
-
-            sent_count = 0
-            failed_count = 0
-
-            for item in users:
-                sent = await send_bot_notification(
-                    item.telegram_id,
-                    text,
-                )
-
-                if sent:
-                    sent_count += 1
-                else:
-                    failed_count += 1
-
-            await send_bot_notification(
-                int(sender["id"]),
-                (
-                    "✅ Рассылка завершена.\n\n"
-                    f"Получили: {sent_count}\n"
-                    f"Не удалось отправить: {failed_count}"
-                ),
-            )
-
-            return {
-                "ok": True,
-                "sent": sent_count,
-                "failed": failed_count,
-            }
-
-        if message.get("photo"):
-            caption_value = message.get("caption") or ""
-
-            if caption_value.startswith("#рассылка"):
-                caption = caption_value.replace(
-                    "#рассылка",
-                    "",
-                    1,
-                ).strip()
-
-                photo = message["photo"][-1]["file_id"]
-
-                users = list(
-                    (
-                        await session.scalars(
-                            select(User).where(User.bot_started.is_(True))
-                        )
-                    ).all()
-                )
-
-                sent_count = 0
-                failed_count = 0
-
-                for item in users:
-                    sent = await send_bot_photo(
-                        item.telegram_id,
-                        photo,
-                        caption,
-                    )
-
-                    if sent:
-                        sent_count += 1
-                    else:
-                        failed_count += 1
-
-                await send_bot_notification(
+        text = parse_broadcast_command(message.get("text"))
+        content_type = "text"
+        photo_file_id = None
+        if text is None and message.get("photo"):
+            text = parse_broadcast_command(message.get("caption"))
+            content_type = "photo"
+            photo_file_id = str(message["photo"][-1]["file_id"])
+        if text is not None:
+            update_id = int(update.get("update_id") or 0)
+            if not update_id:
+                return {"ok": True, "accepted": False}
+            if content_type == "text" and not text:
+                background_tasks.add_task(
+                    send_bot_notification,
                     int(sender["id"]),
-                    (
-                        "✅ Рассылка завершена.\n\n"
-                        f"Получили: {sent_count}\n"
-                        f"Не удалось отправить: {failed_count}"
-                    ),
+                    "Добавьте текст после команды /рассылка или #рассылка.",
                 )
-
-                return {
-                    "ok": True,
-                    "sent": sent_count,
-                    "failed": failed_count,
-                }
+                return {"ok": True, "accepted": False}
+            broadcast_id = await create_admin_broadcast(
+                session,
+                telegram_update_id=update_id,
+                admin_telegram_id=int(sender["id"]),
+                content_type=content_type,
+                text=text,
+                photo_file_id=photo_file_id,
+            )
+            if broadcast_id is not None:
+                background_tasks.add_task(run_admin_broadcast, broadcast_id)
+            return {"ok": True, "accepted": broadcast_id is not None}
     if message.get("text") == "/start" and sender.get("id"):
         user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
         if not user:
