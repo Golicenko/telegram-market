@@ -175,7 +175,12 @@
     bind(document.getElementById("resetFiltersButton"), "click", resetFilters, "resetFiltersButton");
     bind(document.getElementById("applyFiltersButton"), "click", renderListings, "applyFiltersButton");
     bind(elements.brandFilter, "change", renderListings, "brandFilter");
-    [elements.priceMinFilter, elements.priceMaxFilter].forEach((control) => bind(control, "input", renderListings, "priceFilter"));
+    [elements.priceMinFilter, elements.priceMaxFilter].forEach((control, index) => {
+      bind(control, "input", renderListings, `priceFilter${index}`);
+      bind(control, "keydown", finishPriceFilterInput, `priceFilterDone${index}`);
+      bind(control, "focus", beginPriceFilterInput, `priceFilterFocus${index}`);
+      bind(control, "blur", endPriceFilterInput, `priceFilterBlur${index}`);
+    });
     bind(elements.brandInput, "input", updateBrandSuggestions, "brandInput");
     bind(elements.carPhotos, "change", previewPhotos, "carPhotos");
     bind(elements.carForm, "submit", submitListing, "carForm");
@@ -1060,12 +1065,18 @@ function handleClick(event) {
     const formData = new FormData(form);
     const button = form.querySelector("button[type=submit]");
     if (button.disabled) return;
+    const originalButtonText = button.textContent;
     button.disabled = true;
     try {
       const imageUrls = [];
-      for (const file of state.photoFiles) {
-        const uploaded = await api.upload(file);
-        imageUrls.push(uploaded.url);
+      for (const [index, file] of state.photoFiles.entries()) {
+        button.textContent = `Загрузка фото ${index + 1} из ${state.photoFiles.length}…`;
+        try {
+          const uploaded = await api.upload(file);
+          imageUrls.push(uploaded.url);
+        } catch (error) {
+          throw new Error(`Не удалось загрузить фотографию ${index + 1}: ${error.message}`);
+        }
       }
       const payload = {
         brand: String(formData.get("brand")).trim(),
@@ -1075,12 +1086,14 @@ function handleClick(event) {
         description: String(formData.get("description") || "").trim(),
         price_af_coins: Number(formData.get("price_af_coins")),
       };
-      if (!state.editingListingId && imageUrls.length !== 1) throw new Error("Добавьте одну фотографию автомобиля");
+      if (!state.editingListingId && imageUrls.length < 1) throw new Error("Добавьте хотя бы одну фотографию автомобиля");
+      if (imageUrls.length > 10) throw new Error("Можно добавить не более 10 фотографий");
       if (!state.editingListingId || imageUrls.length) payload.image_urls = imageUrls;
       const promotionSelected = formData.get("promote_for_24h") === "on";
       const shouldPromote = promotionSelected && (state.listingMode === "unique" || await confirmAction("Закрепить объявление за 15 AF Coins?"));
       const path = state.editingListingId ? `/listings/${state.editingListingId}` : state.listingMode === "unique" ? "/admin/listings/unique" : "/listings";
       if (state.listingMode === "unique") payload.pinned = shouldPromote;
+      button.textContent = state.editingListingId ? "Сохраняем…" : "Публикуем…";
       const savedListing = await api.request(path, { method: state.editingListingId ? "PATCH" : "POST", body: JSON.stringify(payload) });
       let promotionError = null;
       if (shouldPromote && !savedListing.pinned) {
@@ -1099,7 +1112,7 @@ function handleClick(event) {
       if (promotionError) notify(`Объявление опубликовано бесплатно, но не закреплено: ${promotionError.message}`);
       else notify(wasEditing ? "Объявление обновлено бесплатно" : "Объявление опубликовано бесплатно");
     } catch (error) { notify(error.message); }
-    finally { button.disabled = false; }
+    finally { button.disabled = false; button.textContent = originalButtonText; }
   }
 
   function findListing(id) { return [...state.regular, ...state.unique, ...(state.profile?.active_listings || [])].find((item) => item.id === id); }
@@ -1168,25 +1181,51 @@ function handleClick(event) {
   }
 
   function previewPhotos(event) {
-    const file = event.target.files?.[0];
-    if (!file) { state.photoFiles = []; elements.photoPreview.replaceChildren(); return; }
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) { state.photoFiles = []; elements.photoPreview.replaceChildren(); return; }
+    if (files.length > 10) {
       event.target.value = "";
       state.photoFiles = [];
-      return notify("Разрешены только JPG, PNG и WEBP");
+      return notify("Можно добавить не более 10 фотографий");
     }
-    if (file.size > 5 * 1024 * 1024) {
+    const supportedExtension = /\.(jpe?g|png|webp|heic|heif)$/i;
+    const unsupported = files.find((file) => !(file.type || "").startsWith("image/") && !supportedExtension.test(file.name || ""));
+    if (unsupported) {
       event.target.value = "";
       state.photoFiles = [];
-      return notify("Фотография не должна превышать 5 МБ");
+      return notify(`Файл «${unsupported.name}» не является поддерживаемой фотографией`);
     }
-    state.photoFiles = [file];
+    const oversized = files.find((file) => file.size > 20 * 1024 * 1024);
+    if (oversized) {
+      event.target.value = "";
+      state.photoFiles = [];
+      return notify(`Фотография «${oversized.name}» превышает 20 МБ`);
+    }
+    state.photoFiles = files;
     elements.photoPreview.replaceChildren(...state.photoFiles.map((file, index) => {
       const image = document.createElement("img");
       image.src = URL.createObjectURL(file);
       image.alt = `Фотография ${index + 1}`;
+      image.addEventListener("load", () => URL.revokeObjectURL(image.src), { once: true });
       return image;
     }));
+  }
+
+  function beginPriceFilterInput(event) {
+    document.body.classList.add("filter-keyboard-open");
+    window.setTimeout(() => event.currentTarget.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" }), 80);
+  }
+
+  function endPriceFilterInput() {
+    document.body.classList.remove("filter-keyboard-open");
+    renderListings();
+  }
+
+  function finishPriceFilterInput(event) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    renderListings();
+    event.currentTarget.blur();
   }
 
   function selectPrice(button) {

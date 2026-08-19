@@ -13,7 +13,7 @@ from starlette.requests import Request
 
 from app.auth import get_current_user, require_admin, validate_init_data
 from app.config import Settings
-from app.models import Deal, Listing, StarPayment, StarPaymentIntent, User, Wallet, WalletTransaction
+from app.models import Deal, Listing, ListingImage, StarPayment, StarPaymentIntent, User, Wallet, WalletTransaction
 from app.schemas import ListingCreate
 from app.services import (
     charge_listing_promotion,
@@ -46,20 +46,23 @@ def test_telegram_init_data_signature_and_tampering():
         validate_init_data(payload.replace("123", "124", 1), token)
 
 
-def test_listing_requires_exactly_one_image():
+def test_listing_accepts_multiple_images_and_unbounded_positive_stats():
     values = {
-        "brand": "BMW",
-        "model": "M5",
-        "power_hp": 600,
-        "max_speed_kph": 300,
+        "brand": "Произвольное название автомобиля",
+        "model": None,
+        "power_hp": 1_000_000_000_000,
+        "max_speed_kph": 1_000_000_000_000,
         "description": "Описание",
         "price_af_coins": 100,
     }
     assert len(ListingCreate(**values, image_urls=["/uploads/one.jpg"]).image_urls) == 1
+    assert len(ListingCreate(**values, image_urls=["one", "two", "three"]).image_urls) == 3
     with pytest.raises(ValidationError):
         ListingCreate(**values, image_urls=[])
     with pytest.raises(ValidationError):
-        ListingCreate(**values, image_urls=["one", "two"])
+        ListingCreate(**values, image_urls=[str(index) for index in range(11)])
+    with pytest.raises(ValidationError):
+        ListingCreate(**{**values, "power_hp": 0}, image_urls=["one"])
 
 
 def test_server_commission_is_single_70_30_formula():
@@ -134,13 +137,14 @@ async def test_creating_multiple_regular_listings_is_free():
         max_speed_kph=300,
         description="Описание",
         price_af_coins=100,
-        image_urls=["/uploads/car.jpg"],
+        image_urls=["/api/media/one", "/api/media/two"],
     )
     session = FakeSession()
     first = await create_listing(session, seller, payload, listing_type="regular")
     second = await create_listing(session, seller, payload, listing_type="regular")
     assert first.status == second.status == "active"
     assert not any(isinstance(item, WalletTransaction) for item in session.added)
+    assert len([item for item in session.added if isinstance(item, ListingImage)]) == 4
 
 
 @pytest.mark.asyncio

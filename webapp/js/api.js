@@ -133,7 +133,7 @@
   async function upload(file, path = "/uploads") {
     const body = new FormData();
     body.append("file", file);
-    return request(path, { method: "POST", body, timeoutMs: 15000 });
+    return request(path, { method: "POST", body, timeoutMs: 60000, retries: 1 });
   }
 
   window.AutoFlowApi = Object.freeze({ request, resource, upload, ApiError, baseUrl: API_BASE });
