@@ -2,8 +2,9 @@ import uuid
 from decimal import Decimal
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import Text
 
-from app.models import AccountListing, Base, TrainingProduct, User
+from app.models import AccountListing, Base, TrainingProduct, TrainingPurchase, User
 from app.schemas import TrainingProductCreate, TrainingProductOut
 from app.services import create_training_product
 
@@ -56,6 +57,23 @@ def test_public_training_schema_contains_no_private_materials():
     assert "delivery_payload" not in fields
     automatic = payload().model_copy(update={"product_type": "automatic"})
     assert automatic.product_type == "automatic"
+
+
+def test_training_text_is_not_artificially_truncated_and_price_is_positive():
+    long_text = "Т" * 20_000
+    value = payload().model_copy(update={
+        "title": long_text,
+        "short_description": long_text,
+        "full_description": long_text,
+        "price_af_coins": Decimal("0.01"),
+    })
+    validated = TrainingProductCreate.model_validate(value.model_dump())
+    assert validated.title == long_text
+    assert validated.price_af_coins == Decimal("0.01")
+    assert isinstance(TrainingProduct.title.type, Text)
+    assert isinstance(TrainingPurchase.title_snapshot.type, Text)
+    with pytest.raises(Exception):
+        TrainingProductCreate.model_validate({**value.model_dump(), "price_af_coins": 0})
 
 
 @pytest.mark.asyncio

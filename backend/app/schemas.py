@@ -174,26 +174,26 @@ class AccountListingOut(ORMModel):
 
 
 class TrainingProductCreate(BaseModel):
-    title: str = Field(min_length=2, max_length=180)
-    short_description: str = Field(min_length=5, max_length=360)
-    full_description: str = Field(min_length=10, max_length=12000)
+    title: str = Field(min_length=1)
+    short_description: str = Field(min_length=1)
+    full_description: str = Field(min_length=1)
     cover_url: str = Field(min_length=1, max_length=2000)
     promo_video_url: str | None = Field(default=None, max_length=2000)
     product_type: str = Field(pattern="^(personal|automatic)$")
-    price_af_coins: Decimal = Field(ge=0, decimal_places=2)
+    price_af_coins: Decimal = Field(gt=0, decimal_places=2)
     availability: str = Field(default="available", pattern="^(available|unavailable|coming_soon)$")
     published: bool = False
     pinned: bool = False
 
 
 class TrainingProductUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=2, max_length=180)
-    short_description: str | None = Field(default=None, min_length=5, max_length=360)
-    full_description: str | None = Field(default=None, min_length=10, max_length=12000)
+    title: str | None = Field(default=None, min_length=1)
+    short_description: str | None = Field(default=None, min_length=1)
+    full_description: str | None = Field(default=None, min_length=1)
     cover_url: str | None = Field(default=None, min_length=1, max_length=2000)
     promo_video_url: str | None = Field(default=None, max_length=2000)
     product_type: str | None = Field(default=None, pattern="^(personal|automatic)$")
-    price_af_coins: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    price_af_coins: Decimal | None = Field(default=None, gt=0, decimal_places=2)
     availability: str | None = Field(default=None, pattern="^(available|unavailable|coming_soon)$")
     published: bool | None = None
     pinned: bool | None = None
@@ -217,7 +217,7 @@ class TrainingProductOut(ORMModel):
 
 
 class TrainingMaterialCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=180)
+    title: str = Field(min_length=1)
     material_type: str = Field(pattern="^(text|link|photo|video|document)$")
     delivery_reference: str = Field(min_length=1, max_length=8000)
     mime_type: str | None = Field(default=None, max_length=160)
@@ -227,7 +227,7 @@ class TrainingMaterialCreate(BaseModel):
 
 
 class TrainingMaterialUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=180)
+    title: str | None = Field(default=None, min_length=1)
     material_type: str | None = Field(default=None, pattern="^(text|link|photo|video|document)$")
     delivery_reference: str | None = Field(default=None, min_length=1, max_length=8000)
     mime_type: str | None = Field(default=None, max_length=160)
@@ -264,6 +264,7 @@ class TrainingPurchaseOut(ORMModel):
     buyer_telegram_id: int
     buyer_display_name: str
     buyer_username: str | None
+    payment_status: str
     status: str
     delivery_status: str
     delivery_attempts: int
@@ -287,6 +288,11 @@ class TrainingPurchaseAdminOut(TrainingPurchaseOut):
     seller_payout: Decimal
     platform_commission: Decimal
     settled_at: datetime | None
+    admin_notification_status: str
+    admin_notification_attempts: int
+    admin_notification_error: str | None
+    admin_notification_last_attempt_at: datetime | None
+    admin_notified_at: datetime | None
 
 
 class TrainingAdminProductOut(TrainingProductOut):
@@ -441,7 +447,7 @@ class SupportReplyCreate(BaseModel):
 
 
 class SupportStatusUpdate(BaseModel):
-    status: str = Field(pattern="^(open|in_progress|resolved|closed)$")
+    status: str = Field(pattern="^(new|open|in_progress|resolved|closed)$")
 
 
 class SupportMessageOut(ORMModel):

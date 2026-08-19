@@ -1,8 +1,12 @@
 import httpx
+import logging
 from fastapi import HTTPException
 from urllib.parse import quote, urlencode
 
 from .config import get_settings
+
+
+logger = logging.getLogger("autoflow.bot")
 
 
 START_MENU_TEXT = """👋 Добро пожаловать в AutoFlow Market
@@ -202,7 +206,8 @@ def personal_training_order_payload(
         f"Username: {username_line}\n"
         f"Telegram ID: {buyer_telegram_id}\n"
         f"Стоимость: {price_xtr} ⭐\n"
-        "Статус: Ожидает обучения"
+        "Оплата: успешно\n"
+        "Статус: Ожидает обработки"
     )
     button_rows = []
     if username:
@@ -215,15 +220,12 @@ def personal_training_order_payload(
 async def send_personal_training_order_notification(telegram_id: int, **order) -> bool:
     public_url = get_settings().externally_reachable_url
     if not public_url:
-        return False
-    try:
-        await call_bot_api(
-            "sendMessage",
-            personal_training_order_payload(telegram_id, public_url=public_url, **order),
-        )
-        return True
-    except HTTPException:
-        return False
+        raise HTTPException(status_code=503, detail="PUBLIC_BASE_URL или RAILWAY_PUBLIC_DOMAIN не настроен")
+    await call_bot_api(
+        "sendMessage",
+        personal_training_order_payload(telegram_id, public_url=public_url, **order),
+    )
+    return True
 
 
 def deal_support_case_payload(
@@ -401,6 +403,10 @@ async def configure_telegram_webhook() -> bool:
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.post(f"https://api.telegram.org/bot{settings.bot_token}/setWebhook", json=payload)
-            return response.is_success and bool(response.json().get("ok"))
-    except (httpx.HTTPError, ValueError):
+            configured = response.is_success and bool(response.json().get("ok"))
+            if not configured:
+                logger.error("telegram_webhook_configuration_rejected status=%s", response.status_code)
+            return configured
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.error("telegram_webhook_configuration_failed error_type=%s", type(exc).__name__)
         return False

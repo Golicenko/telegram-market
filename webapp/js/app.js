@@ -18,6 +18,7 @@
     adminTrainingFilter: "all",
     adminTrainingPurchases: [],
     adminTrainingOrders: [],
+    adminTrainingOrderFilter: "new",
     adminTrainingMaterials: [],
     selectedAdminTrainingId: null,
     cart: [],
@@ -169,6 +170,13 @@
   }
 
   function bindEvents() {
+    const trainingForm = document.getElementById("trainingForm");
+    ["title", "short_description", "full_description"].forEach((name) => {
+      trainingForm?.elements[name]?.removeAttribute("maxlength");
+      trainingForm?.elements[name]?.setAttribute("minlength", "1");
+    });
+    trainingForm?.elements.price_af_coins?.setAttribute("min", "0.01");
+    document.getElementById("trainingMaterialForm")?.elements.title?.removeAttribute("maxlength");
     document.addEventListener("click", handleClick);
     bind(document.getElementById("infoButton"), "click", () => openDialog(elements.infoModal), "infoButton");
     bind(document.getElementById("settingsButton"), "click", () => notify("Настройки появятся в следующей версии"), "settingsButton");
@@ -498,6 +506,17 @@ function handleClick(event) {
     if (trainingAdminAction) return void runTrainingAdminAction(trainingAdminAction);
     const trainingPurchaseAction = target.closest("[data-training-purchase-action]");
     if (trainingPurchaseAction) return void updatePersonalTrainingStatus(trainingPurchaseAction);
+    const trainingOrderFilter = target.closest("[data-training-order-filter]");
+    if (trainingOrderFilter) { state.adminTrainingOrderFilter = trainingOrderFilter.dataset.trainingOrderFilter; renderAdminTrainingOrders(); return; }
+    const trainingNotify = target.closest("[data-training-notify]");
+    if (trainingNotify) return void retryPersonalTrainingNotification(trainingNotify);
+    const trainingAdminRedeliver = target.closest("[data-training-admin-redeliver]");
+    if (trainingAdminRedeliver) return void adminRedeliverTraining(trainingAdminRedeliver);
+    const trainingBuyerChat = target.closest("[data-training-buyer-username]");
+    if (trainingBuyerChat) {
+      const url = `https://t.me/${encodeURIComponent(trainingBuyerChat.dataset.trainingBuyerUsername)}`;
+      return void (telegram?.openTelegramLink ? telegram.openTelegramLink(url) : window.open(url, "_blank", "noopener"));
+    }
     const trainingMaterialAction = target.closest("[data-training-material-action]");
     if (trainingMaterialAction) return void runTrainingMaterialAction(trainingMaterialAction);
     const redeliverTraining = target.closest("[data-training-redeliver]");
@@ -524,6 +543,7 @@ function handleClick(event) {
     if (!next) return;
     state.currentView = viewName;
     document.body.classList.toggle("chat-open", viewName === "deal-chat");
+    document.body.classList.toggle("admin-open", viewName === "admin");
     if (viewName === "deal-chat") updateChatViewport();
     updateFloatingChatVisibility();
     elements.views.forEach((view) => {
@@ -1702,8 +1722,11 @@ async function hideCurrentConversation() {
     const visualHeight = Number(viewport?.height);
     const telegramHeight = Number(telegram?.viewportHeight);
     const height = visualHeight > 0 ? visualHeight : telegramHeight > 0 ? telegramHeight : window.innerHeight;
+    const width = Number(viewport?.width) > 0 ? Number(viewport.width) : window.innerWidth;
     document.documentElement.style.setProperty("--chat-viewport-height", `${Math.round(height)}px`);
     document.documentElement.style.setProperty("--chat-viewport-top", `${Math.round(viewport?.offsetTop || 0)}px`);
+    document.documentElement.style.setProperty("--chat-viewport-width", `${Math.round(width)}px`);
+    document.documentElement.style.setProperty("--chat-viewport-left", `${Math.round(viewport?.offsetLeft || 0)}px`);
     if (document.body.classList.contains("chat-open")) requestAnimationFrame(() => {
       elements.dealMessages.scrollTop = elements.dealMessages.scrollHeight;
     });
@@ -2015,7 +2038,7 @@ async function hideCurrentConversation() {
       elements.adminSupportTickets.before(filters);
     }
     filters.querySelectorAll("button").forEach((button) => button.classList.toggle("is-active", button.dataset.supportFilter === filter));
-    const query = filter === "active" ? "?status=open" : `?status=${encodeURIComponent(filter)}`;
+    const query = filter === "active" ? "?status=new" : `?status=${encodeURIComponent(filter)}`;
     const tickets = await api.request(`/admin/support/tickets${query}`);
     if (!tickets.length) { elements.adminSupportTickets.textContent = "Обращений пока нет"; return; }
     elements.adminSupportTickets.replaceChildren(...tickets.map((ticket) => createSupportTicketCard(ticket, true)));
@@ -2194,11 +2217,17 @@ async function hideCurrentConversation() {
       const title = document.createElement("h3"); title.textContent = "Заказы персонального обучения";
       const note = document.createElement("span"); note.textContent = "Сохраняются в PostgreSQL";
       const list = document.createElement("div"); list.id = "adminTrainingOrders";
-      heading.append(title, note); section.append(heading, list); filters.before(section);
+      const orderFilters = document.createElement("div"); orderFilters.className = "training-order-filters";
+      [["new", "Новые"], ["in_progress", "В процессе"], ["completed", "Завершённые"]].forEach(([value, label]) => {
+        const button = document.createElement("button"); button.type = "button"; button.dataset.trainingOrderFilter = value; button.textContent = label; orderFilters.append(button);
+      });
+      heading.append(title, note); section.append(heading, orderFilters, list); filters.before(section);
     }
     const list = document.getElementById("adminTrainingOrders");
-    if (!state.adminTrainingOrders.length) { const empty = document.createElement("div"); empty.className = "history-empty"; empty.textContent = "Заказов пока нет"; list.replaceChildren(empty); return; }
-    list.replaceChildren(...state.adminTrainingOrders.map((purchase) => {
+    document.querySelectorAll("[data-training-order-filter]").forEach((button) => button.classList.toggle("is-active", button.dataset.trainingOrderFilter === state.adminTrainingOrderFilter));
+    const orders = state.adminTrainingOrders.filter((purchase) => state.adminTrainingOrderFilter === "new" ? purchase.status === "awaiting_start" : purchase.status === state.adminTrainingOrderFilter);
+    if (!orders.length) { const empty = document.createElement("div"); empty.className = "history-empty"; empty.textContent = "В этой категории заказов нет"; list.replaceChildren(empty); return; }
+    list.replaceChildren(...orders.map((purchase) => {
       const card = createTrainingBuyerCard(purchase); card.dataset.trainingOrderId = purchase.id; return card;
     }));
   }
@@ -2234,8 +2263,16 @@ async function hideCurrentConversation() {
     const course = document.createElement("small"); course.textContent = purchase.title_snapshot;
     const usernameValue = purchase.buyer_username || purchase.buyer.username;
     const username = document.createElement("small"); username.textContent = `${usernameValue ? `@${usernameValue} · ` : "Username не указан · "}Telegram ID ${purchase.buyer_telegram_id || purchase.buyer.telegram_id}`;
-    const meta = document.createElement("span"); meta.textContent = `${formatDate(purchase.created_at)} · ${formatNumber(purchase.price_af_coins)} ⭐ · ${trainingPurchaseStatusLabel(purchase.status)}`; copy.append(name, course, username, meta); card.append(avatar, copy);
+    const meta = document.createElement("span"); meta.textContent = `Заказ #${purchase.id.slice(0, 8)} · ${formatDate(purchase.created_at)} · ${formatNumber(purchase.price_af_coins)} ⭐ · Оплата: успешно · ${trainingPurchaseStatusLabel(purchase.status)}`; copy.append(name, course, username, meta); card.append(avatar, copy);
+    if (purchase.buyer_username) { const chat = document.createElement("button"); chat.type = "button"; chat.className = "training-order-secondary"; chat.dataset.trainingBuyerUsername = purchase.buyer_username; chat.textContent = "💬 Написать покупателю"; card.append(chat); }
+    if (purchase.product_type === "personal") {
+      const notification = document.createElement("small"); notification.className = `training-notification-status is-${purchase.admin_notification_status}`;
+      notification.textContent = purchase.admin_notification_status === "sent" ? "Уведомление администратору отправлено" : purchase.admin_notification_status === "failed" ? `Уведомление не доставлено: ${purchase.admin_notification_error || "Telegram API error"}` : "Уведомление ожидает отправки";
+      card.append(notification);
+      if (["failed", "pending", "sending"].includes(purchase.admin_notification_status)) { const retry = document.createElement("button"); retry.type = "button"; retry.className = "training-order-secondary"; retry.dataset.trainingNotify = purchase.id; retry.textContent = "Повторить уведомление"; card.append(retry); }
+    }
     if (purchase.product_type === "personal" && purchase.status !== "completed") { const action = document.createElement("button"); action.type = "button"; action.dataset.trainingPurchaseAction = purchase.status === "awaiting_start" ? "in_progress" : "completed"; action.dataset.purchaseId = purchase.id; action.textContent = purchase.status === "awaiting_start" ? "Начать обучение" : "Обучение завершено"; card.append(action); }
+    if (purchase.product_type === "automatic" && purchase.delivery_status === "failed") { const retry = document.createElement("button"); retry.type = "button"; retry.dataset.trainingAdminRedeliver = purchase.id; retry.textContent = "Повторить автовыдачу"; card.append(retry); }
     return card;
   }
 
@@ -2247,6 +2284,23 @@ async function hideCurrentConversation() {
       state.adminTrainingOrders = state.adminTrainingOrders.map((item) => item.id === purchase.id ? purchase : item);
       elements.adminTrainingBuyers.replaceChildren(...state.adminTrainingPurchases.map(createTrainingBuyerCard));
       await loadAdminTraining(state.adminTrainingFilter); notify("Статус обучения обновлён");
+    } catch (error) { button.disabled = false; notify(error.message); }
+  }
+
+  async function retryPersonalTrainingNotification(button) {
+    button.disabled = true;
+    try {
+      const purchase = await api.request(`/admin/training/purchases/${button.dataset.trainingNotify}/notify`, { method: "POST" });
+      state.adminTrainingOrders = state.adminTrainingOrders.map((item) => item.id === purchase.id ? purchase : item);
+      renderAdminTrainingOrders(); notify("Повторная отправка поставлена в очередь");
+    } catch (error) { button.disabled = false; notify(error.message); }
+  }
+
+  async function adminRedeliverTraining(button) {
+    button.disabled = true;
+    try {
+      await api.request(`/admin/training/purchases/${button.dataset.trainingAdminRedeliver}/redeliver`, { method: "POST" });
+      notify("Повторная автовыдача запущена");
     } catch (error) { button.disabled = false; notify(error.message); }
   }
 
@@ -2544,5 +2598,5 @@ async function hideCurrentConversation() {
   function statusLabel(status) { return ({ active: "Доступно", reserved: "Деньги под защитой", sold: "Уже продано", paused: "Снято с публикации", deleted: "Удалено" })[status] || status; }
   function dealStatusLabel(status) { return ({ pending_payment: "Ожидает оплаты", paid: "Оплачено", seller_contacted: "Продавец на связи", transfer_in_progress: "Передача", buyer_confirmed: "Получение подтверждено", completed: "Завершена", disputed: "Спор", cancelled: "Отменена" })[status] || status; }
   function withdrawalStatusLabel(status) { return ({ pending: "Ожидает проверки", approved: "Одобрена", paid: "Выплачена", rejected: "Отклонена", cancelled: "Отменена" })[status] || status; }
-  function supportStatusLabel(status) { return ({ open: "Открыто", in_progress: "В работе", resolved: "Решено", closed: "Закрыто" })[status] || status; }
+  function supportStatusLabel(status) { return ({ new: "Новое", open: "Открыто", in_progress: "В работе", resolved: "Решено", closed: "Закрыто" })[status] || status; }
 })();
