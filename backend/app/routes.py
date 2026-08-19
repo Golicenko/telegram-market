@@ -1,6 +1,7 @@
 import hmac
+import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
@@ -132,6 +133,7 @@ from .services import (
 
 
 router = APIRouter(prefix="/api")
+logger = logging.getLogger("autoflow.training")
 register_heif_opener()
 Image.MAX_IMAGE_PIXELS = 100_000_000
 UPLOAD_DIR = Path(get_settings().upload_dir) if get_settings().upload_dir else Path(__file__).resolve().parents[1] / "uploads"
@@ -334,6 +336,132 @@ async def deliver_training_materials(purchase_id: uuid.UUID) -> None:
                 success = False
     async with SessionLocal() as session:
         await finish_training_delivery(session, purchase_id, success)
+
+
+async def notify_personal_training_admin(purchase_id: uuid.UUID) -> None:
+    """Deliver and persist the result of the personal-order Telegram notification."""
+    async with SessionLocal() as session:
+        purchase = await session.scalar(
+            select(TrainingPurchase).where(TrainingPurchase.id == purchase_id).with_for_update()
+        )
+        if not purchase or purchase.product_type != "personal" or purchase.admin_notification_status == "sent":
+            return
+        if purchase.admin_notification_status == "sending":
+            return
+        purchase.admin_notification_status = "sending"
+        purchase.admin_notification_attempts += 1
+        purchase.admin_notification_error = None
+        purchase.admin_notification_last_attempt_at = datetime.now(UTC)
+        seller = await session.get(User, purchase.seller_id)
+        intent = await session.scalar(
+            select(StarPaymentIntent).where(StarPaymentIntent.training_purchase_id == purchase.id)
+        )
+        await session.commit()
+
+    error: str | None = None
+    if not seller or not seller.bot_started:
+        error = "Администратор не запускал бота командой /start или заблокировал его"
+    else:
+        try:
+            await send_personal_training_order_notification(
+                seller.telegram_id,
+                purchase_id=str(purchase.id),
+                title=purchase.title_snapshot,
+                buyer_name=purchase.buyer_display_name,
+                buyer_username=purchase.buyer_username,
+                buyer_telegram_id=purchase.buyer_telegram_id,
+                price_xtr=int(intent.xtr_amount) if intent else int(purchase.price_af_coins),
+            )
+        except HTTPException as exc:
+            logger.warning(
+                "personal_training_admin_notification_failed purchase_id=%s status=%s detail=%s",
+                purchase_id,
+                exc.status_code,
+                str(exc.detail)[:300],
+            )
+            error = str(exc.detail)
+        except Exception as exc:
+            logger.exception("personal_training_admin_notification_failed purchase_id=%s", purchase_id)
+            error = f"{type(exc).__name__}: ошибка отправки Telegram notification"
+
+    async with SessionLocal() as session:
+        purchase = await session.scalar(
+            select(TrainingPurchase).where(TrainingPurchase.id == purchase_id).with_for_update()
+        )
+        if not purchase:
+            return
+        purchase.admin_notification_status = "failed" if error else "sent"
+        purchase.admin_notification_error = error
+        purchase.admin_notified_at = None if error else datetime.now(UTC)
+        await session.commit()
+
+
+async def recover_training_background_jobs() -> None:
+    """Resume persisted training work that was interrupted by a process restart."""
+    now = datetime.now(UTC)
+    stale_cutoff = now - timedelta(minutes=2)
+    async with SessionLocal() as session:
+        async with session.begin():
+            personal = list((await session.scalars(
+                select(TrainingPurchase)
+                .where(
+                    TrainingPurchase.product_type == "personal",
+                    or_(
+                        TrainingPurchase.admin_notification_status == "pending",
+                        and_(
+                            TrainingPurchase.admin_notification_status == "sending",
+                            or_(
+                                TrainingPurchase.admin_notification_last_attempt_at.is_(None),
+                                TrainingPurchase.admin_notification_last_attempt_at < stale_cutoff,
+                            ),
+                        ),
+                    ),
+                )
+                .with_for_update(skip_locked=True)
+            )).all())
+            for purchase in personal:
+                if purchase.admin_notification_status == "sending":
+                    purchase.admin_notification_status = "pending"
+                    purchase.admin_notification_error = "Отправка была прервана перезапуском сервиса"
+            personal_ids = [purchase.id for purchase in personal]
+
+            automatic = list((await session.scalars(
+                select(TrainingPurchase)
+                .where(
+                    TrainingPurchase.product_type == "automatic",
+                    or_(
+                        TrainingPurchase.delivery_status == "pending",
+                        and_(
+                            TrainingPurchase.delivery_status == "sending",
+                            or_(
+                                TrainingPurchase.delivery_lock_until.is_(None),
+                                TrainingPurchase.delivery_lock_until < now,
+                            ),
+                        ),
+                    ),
+                )
+                .with_for_update(skip_locked=True)
+            )).all())
+            for purchase in automatic:
+                if purchase.delivery_status == "sending":
+                    purchase.delivery_status = "failed"
+                    purchase.delivery_lock_until = None
+            automatic_jobs = [(purchase.id, purchase.buyer_id) for purchase in automatic]
+
+    for purchase_id in personal_ids:
+        await notify_personal_training_admin(purchase_id)
+    for purchase_id, buyer_id in automatic_jobs:
+        try:
+            async with SessionLocal() as session:
+                await begin_training_delivery(session, buyer_id, purchase_id, cooldown_seconds=0)
+            await deliver_training_materials(purchase_id)
+        except HTTPException as exc:
+            logger.warning(
+                "training_delivery_recovery_skipped purchase_id=%s status=%s detail=%s",
+                purchase_id,
+                exc.status_code,
+                str(exc.detail)[:300],
+            )
 
 
 def normalize_image_content(content: bytes) -> tuple[bytes, str, str]:
@@ -922,10 +1050,65 @@ async def change_training_purchase_status(
     purchase = await update_training_purchase_status(session, admin, purchase_id, payload.status)
     buyer = await session.get(User, purchase.buyer_id)
     if buyer and buyer.bot_started:
-        text = "🎓 Ваше обучение началось." if payload.status == "in_progress" else "✅ Персональное обучение завершено."
+        text = "🎓 Ваш заказ принят в работу." if payload.status == "in_progress" else "✅ Персональное обучение завершено."
         background_tasks.add_task(send_bot_notification, buyer.telegram_id, text)
     if not buyer:
         raise HTTPException(status_code=404, detail="Покупатель не найден")
+    return await training_purchase_admin_out(session, purchase, buyer)
+
+
+@router.post("/admin/training/purchases/{purchase_id}/notify", response_model=TrainingPurchaseAdminOut)
+async def retry_personal_training_notification(
+    purchase_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    purchase = await session.scalar(
+        select(TrainingPurchase).where(TrainingPurchase.id == purchase_id).with_for_update()
+    )
+    if not purchase:
+        raise HTTPException(status_code=404, detail="Заказ обучения не найден")
+    if purchase.seller_id != admin.id or purchase.product_type != "personal":
+        raise HTTPException(status_code=403, detail="Нет доступа к заказу")
+    if purchase.admin_notification_status == "sent":
+        buyer = await session.get(User, purchase.buyer_id)
+        return await training_purchase_admin_out(session, purchase, buyer)
+    if (
+        purchase.admin_notification_status == "sending"
+        and purchase.admin_notification_last_attempt_at
+        and purchase.admin_notification_last_attempt_at > datetime.now(UTC) - timedelta(minutes=2)
+    ):
+        raise HTTPException(status_code=409, detail="Уведомление уже отправляется. Повторите через две минуты")
+    purchase.admin_notification_status = "pending"
+    purchase.admin_notification_error = None
+    await session.commit()
+    background_tasks.add_task(notify_personal_training_admin, purchase.id)
+    buyer = await session.get(User, purchase.buyer_id)
+    return await training_purchase_admin_out(session, purchase, buyer)
+
+
+@router.post("/admin/training/purchases/{purchase_id}/redeliver", response_model=TrainingPurchaseAdminOut)
+async def admin_redeliver_training_purchase(
+    purchase_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    purchase = await session.get(TrainingPurchase, purchase_id)
+    if not purchase:
+        raise HTTPException(status_code=404, detail="Покупка не найдена")
+    if purchase.seller_id != admin.id or purchase.product_type != "automatic":
+        raise HTTPException(status_code=403, detail="Нет доступа к автовыдаче")
+    purchase = await begin_training_delivery(
+        session,
+        purchase.buyer_id,
+        purchase.id,
+        cooldown_seconds=settings.training_delivery_cooldown_seconds,
+    )
+    background_tasks.add_task(deliver_training_materials, purchase.id)
+    buyer = await session.get(User, purchase.buyer_id)
     return await training_purchase_admin_out(session, purchase, buyer)
 
 
@@ -1792,7 +1975,7 @@ async def reply_to_support_ticket(
         client_request_id=payload.client_request_id,
         body=payload.message.strip(),
     )
-    ticket.status = "open"
+    ticket.status = "new" if ticket.case_type == "deal" else "open"
     ticket.unread_by_admin = True
     session.add(message)
     session.add(SupportCaseEvent(
@@ -1821,7 +2004,7 @@ async def reply_to_support_ticket(
 
 @router.get("/admin/support/tickets", response_model=list[SupportTicketOut])
 async def admin_support_tickets(
-    status_filter: str | None = Query(default=None, alias="status", pattern="^(open|in_progress|resolved|closed)$"),
+    status_filter: str | None = Query(default=None, alias="status", pattern="^(new|open|in_progress|resolved|closed)$"),
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     admin: User = Depends(require_admin),
@@ -1831,7 +2014,13 @@ async def admin_support_tickets(
         (
             await session.scalars(
                 select(SupportTicket)
-                .where(SupportTicket.status == status_filter if status_filter else True)
+                .where(
+                    SupportTicket.status.in_({"new", "open"})
+                    if status_filter == "new"
+                    else SupportTicket.status == status_filter
+                    if status_filter
+                    else True
+                )
                 .order_by(SupportTicket.unread_by_admin.desc(), SupportTicket.updated_at.desc())
                 .offset(offset)
                 .limit(limit)
@@ -1852,7 +2041,7 @@ async def admin_support_ticket(
         raise HTTPException(status_code=404, detail="Обращение не найдено")
     ticket.unread_by_admin = False
     previous_status = ticket.status
-    if ticket.status == "open":
+    if ticket.status in {"new", "open"}:
         ticket.status = "in_progress"
     session.add(SupportCaseEvent(
         ticket_id=ticket.id,
@@ -2159,7 +2348,13 @@ async def telegram_webhook(
                     payment_intent.id,
                     str(payment.get("telegram_payment_charge_id") or ""),
                 )
-            except HTTPException:
+            except HTTPException as exc:
+                logger.error(
+                    "training_checkout_completion_failed intent_id=%s status=%s detail=%s",
+                    payment_intent.id,
+                    exc.status_code,
+                    str(exc.detail)[:300],
+                )
                 background_tasks.add_task(
                     send_bot_notification,
                     int(sender["id"]),
@@ -2181,18 +2376,7 @@ async def telegram_webhook(
                             int(sender["id"]),
                             "✅ Оплата получена.\nВаш заказ на персональное обучение принят. Администратор свяжется с вами в Telegram.",
                         )
-                        seller = await session.get(User, purchase.seller_id)
-                        if seller and seller.bot_started:
-                            background_tasks.add_task(
-                                send_personal_training_order_notification,
-                                seller.telegram_id,
-                                purchase_id=str(purchase.id),
-                                title=purchase.title_snapshot,
-                                buyer_name=purchase.buyer_display_name,
-                                buyer_username=purchase.buyer_username,
-                                buyer_telegram_id=purchase.buyer_telegram_id,
-                                price_xtr=completed_intent.xtr_amount,
-                            )
+                        background_tasks.add_task(notify_personal_training_admin, purchase.id)
         elif payment_intent and payment_user and payment_intent.purpose == "listing_checkout":
             completed_intent, deal, seller_telegram_id = await complete_listing_payment_intent(
                 session, payment_user, payment_intent.id

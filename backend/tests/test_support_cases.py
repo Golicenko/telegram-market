@@ -102,6 +102,7 @@ async def test_deal_support_case_links_context_and_freezes_deal_for_admin_review
     assert ticket.listing_id == listing.id
     assert ticket.buyer_id == buyer.id and ticket.seller_id == seller.id
     assert ticket.author_id == buyer.id
+    assert ticket.status == "new"
     assert deal.status == "disputed"
     assert administrators == [admin]
     assert any(isinstance(item, SupportMessage) and item.client_request_id == request_id for item in session.added)
@@ -121,6 +122,9 @@ def test_support_case_has_deal_context_and_audit_table():
     migration = (Path(__file__).parents[1] / "migrations" / "versions" / "0016_deal_support_cases.py").read_text(encoding="utf-8")
     assert "drop_table(\"support_tickets\")" not in migration
     assert "uq_support_active_deal" in migration
+    status_migration = (Path(__file__).parents[1] / "migrations" / "versions" / "0018_support_case_statuses.py").read_text(encoding="utf-8")
+    assert "UPDATE support_tickets SET status = 'new'" in status_migration
+    assert "drop_table" not in status_migration
 
 
 def test_admin_support_notification_handles_missing_username_and_opens_case():
@@ -190,7 +194,8 @@ def test_frontend_training_success_and_support_workflows_are_explicit():
     assert "Возникла проблема" not in app
     assert "🛟 Написать в поддержку" in app
     assert "/deals/${dealId}/support" in app
-    assert "width:100vw" in css and "max-width:100vw" in css
+    assert "--chat-viewport-width" in app
+    assert "width:var(--chat-viewport-width,100%)" in css
 
 
 class ResolutionSession:

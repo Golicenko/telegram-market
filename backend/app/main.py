@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 from datetime import UTC, datetime
 import json
 import logging
@@ -12,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import get_settings
 from .bot import configure_telegram_webhook
 from .database import engine
-from .routes import UPLOAD_DIR, router
+from .routes import UPLOAD_DIR, recover_training_background_jobs, router
 
 
 settings = get_settings()
@@ -23,8 +24,13 @@ logger = logging.getLogger("autoflow.api")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     await configure_telegram_webhook()
-    yield
-    await engine.dispose()
+    recovery_task = asyncio.create_task(recover_training_background_jobs())
+    try:
+        yield
+    finally:
+        if not recovery_task.done():
+            recovery_task.cancel()
+        await engine.dispose()
 
 
 app = FastAPI(title="AUTOFLOW MARKET API", version="0.3.0", lifespan=lifespan)

@@ -45,3 +45,11 @@ test("personal training orders are managed without creating an internal conversa
   const purchaseFlow = app.slice(app.indexOf("async function buyTrainingProduct"), app.indexOf("async function redeliverTraining"));
   assert.doesNotMatch(purchaseFlow, /conversation|chat/i);
 });
+
+test("admin training orders expose durable notification state and filters", () => {
+  assert.match(app, /data\.trainingOrderFilter|dataset\.trainingOrderFilter/);
+  assert.match(app, /admin_notification_status/);
+  assert.match(app, /\/admin\/training\/purchases\/\$\{button\.dataset\.trainingNotify\}\/notify/);
+  assert.match(app, /dataTrainingBuyerUsername|dataset\.trainingBuyerUsername/);
+  assert.match(app, /--chat-viewport-width/);
+});

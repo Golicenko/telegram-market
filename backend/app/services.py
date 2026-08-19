@@ -531,6 +531,8 @@ async def purchase_training_product(
             buyer_display_name=" ".join(filter(None, [buyer.first_name, buyer.last_name])).strip() or "Telegram User",
             buyer_username=buyer.username,
             telegram_payment_charge_id=telegram_payment_charge_id,
+            payment_status="paid",
+            admin_notification_status="pending" if product.product_type == "personal" else "not_required",
             product_type=product.product_type,
             title_snapshot=product.title,
             cover_url_snapshot=product.cover_url,
@@ -1438,7 +1440,7 @@ async def create_deal_support_case(
         ticket = await session.scalar(
             select(SupportTicket).where(
                 SupportTicket.deal_id == deal.id,
-                SupportTicket.status.in_({"open", "in_progress"}),
+                SupportTicket.status.in_({"new", "open", "in_progress"}),
             ).with_for_update()
         )
         created = ticket is None
@@ -1460,7 +1462,7 @@ async def create_deal_support_case(
                 buyer_id=deal.buyer_id,
                 seller_id=deal.seller_id,
                 topic="Проблема по сделке",
-                status="open",
+                status="new",
                 unread_by_admin=True,
             )
             session.add(ticket)
@@ -1469,7 +1471,7 @@ async def create_deal_support_case(
                 ticket_id=ticket.id,
                 actor_id=author.id,
                 event_type="case_created",
-                to_status="open",
+                to_status="new",
                 details={"deal_id": str(deal.id)},
             ))
         ticket.unread_by_admin = True

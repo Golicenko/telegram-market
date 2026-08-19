@@ -116,8 +116,8 @@ class TrainingProduct(Base, TimestampMixin):
     __tablename__ = "training_products"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
-    title: Mapped[str] = mapped_column(String(180), nullable=False)
-    short_description: Mapped[str] = mapped_column(String(360), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    short_description: Mapped[str] = mapped_column(Text, nullable=False)
     full_description: Mapped[str] = mapped_column(Text, nullable=False)
     cover_url: Mapped[str] = mapped_column(Text, nullable=False)
     promo_video_url: Mapped[str | None] = mapped_column(Text)
@@ -139,7 +139,7 @@ class TrainingMaterial(Base, TimestampMixin):
     __tablename__ = "training_materials"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("training_products.id", ondelete="RESTRICT"), nullable=False, index=True)
-    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
     material_type: Mapped[str] = mapped_column(String(24), nullable=False)
     delivery_reference: Mapped[str] = mapped_column(Text, nullable=False)
     mime_type: Mapped[str | None] = mapped_column(String(160))
@@ -165,8 +165,14 @@ class TrainingPurchase(Base, TimestampMixin):
     buyer_display_name: Mapped[str] = mapped_column(String(256), nullable=False)
     buyer_username: Mapped[str | None] = mapped_column(String(64))
     telegram_payment_charge_id: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
+    payment_status: Mapped[str] = mapped_column(String(16), nullable=False, default="paid", index=True)
+    admin_notification_status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    admin_notification_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    admin_notification_error: Mapped[str | None] = mapped_column(Text)
+    admin_notification_last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    admin_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     product_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    title_snapshot: Mapped[str] = mapped_column(String(180), nullable=False)
+    title_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     cover_url_snapshot: Mapped[str] = mapped_column(Text, nullable=False)
     price_af_coins: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     seller_payout: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
@@ -183,6 +189,9 @@ class TrainingPurchase(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("product_id", "buyer_id", name="uq_training_purchase_product_buyer"),
         CheckConstraint("product_type IN ('personal','automatic')", name="ck_training_purchases_type"),
+        CheckConstraint("payment_status = 'paid'", name="ck_training_purchases_payment_status"),
+        CheckConstraint("admin_notification_status IN ('pending','sending','sent','failed','not_required')", name="ck_training_purchases_admin_notification_status"),
+        CheckConstraint("admin_notification_attempts >= 0", name="ck_training_purchases_admin_notification_attempts"),
         CheckConstraint("status IN ('awaiting_start','in_progress','completed')", name="ck_training_purchases_status"),
         CheckConstraint("delivery_status IN ('not_applicable','pending','sending','delivered','failed')", name="ck_training_purchases_delivery_status"),
         CheckConstraint("price_af_coins >= 0 AND seller_payout >= 0 AND platform_commission >= 0", name="ck_training_purchases_amounts"),
@@ -548,7 +557,7 @@ class SupportTicket(Base, TimestampMixin):
     unread_by_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     __table_args__ = (
         CheckConstraint("case_type IN ('general','deal')", name="ck_support_ticket_case_type"),
-        CheckConstraint("status IN ('open','in_progress','resolved','closed')", name="ck_support_ticket_status"),
+        CheckConstraint("status IN ('new','open','in_progress','resolved','closed')", name="ck_support_ticket_status"),
         CheckConstraint(
             "case_type = 'general' OR (deal_id IS NOT NULL AND listing_id IS NOT NULL AND buyer_id IS NOT NULL AND seller_id IS NOT NULL)",
             name="ck_support_ticket_deal_context",
@@ -557,7 +566,7 @@ class SupportTicket(Base, TimestampMixin):
             "uq_support_active_deal",
             "deal_id",
             unique=True,
-            postgresql_where=sql_text("case_type = 'deal' AND status IN ('open','in_progress')"),
+            postgresql_where=sql_text("case_type = 'deal' AND status IN ('new','open','in_progress')"),
         ),
     )
 

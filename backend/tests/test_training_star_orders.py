@@ -1,5 +1,6 @@
 import uuid
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -83,9 +84,21 @@ def test_admin_notification_links_to_real_username_and_persisted_order():
     assert "Telegram ID: 123456" in payload["text"]
     assert "Username: @buyer_name" in payload["text"]
     assert "Стоимость: 100 ⭐" in payload["text"]
-    assert "Статус: Ожидает обучения" in payload["text"]
+    assert "Оплата: успешно" in payload["text"]
+    assert "Статус: Ожидает обработки" in payload["text"]
     assert button_rows[0][0]["url"] == "https://t.me/buyer_name"
     assert button_rows[1][0]["web_app"]["url"] == "https://autoflow.example/?training_order=order-123"
+
+
+def test_training_jobs_are_recovered_after_process_restart():
+    root = Path(__file__).parents[1]
+    routes_source = (root / "app" / "routes.py").read_text(encoding="utf-8")
+    main_source = (root / "app" / "main.py").read_text(encoding="utf-8")
+    migration = (root / "migrations" / "versions" / "0017_training_order_delivery.py").read_text(encoding="utf-8")
+    assert "recover_training_background_jobs" in routes_source
+    assert "asyncio.create_task(recover_training_background_jobs())" in main_source
+    assert "Статус доставки уведомления до обновления неизвестен" in migration
+    assert "title_snapshot" in migration
 
 
 def test_admin_notification_omits_broken_chat_link_without_username():
@@ -135,6 +148,23 @@ async def test_personal_training_admin_notification_is_really_sent(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_personal_training_notification_reports_missing_public_url(monkeypatch):
+    settings = type("Settings", (), {"externally_reachable_url": None})()
+    monkeypatch.setattr(bot_module, "get_settings", lambda: settings)
+    with pytest.raises(HTTPException, match="PUBLIC_BASE_URL") as error:
+        await send_personal_training_order_notification(
+            10,
+            purchase_id="order-no-url",
+            title="Персональное обучение",
+            buyer_name="Иван",
+            buyer_username=None,
+            buyer_telegram_id=20,
+            price_xtr=100,
+        )
+    assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
 async def test_personal_purchase_persists_telegram_snapshot_and_never_creates_internal_chat():
     admin = User(id=uuid.uuid4(), telegram_id=10, first_name="Администратор", role="admin")
     buyer = User(
@@ -159,6 +189,8 @@ async def test_personal_purchase_persists_telegram_snapshot_and_never_creates_in
     assert purchase.buyer_display_name == "Иван Иванов"
     assert purchase.buyer_username == "buyer_name"
     assert purchase.telegram_payment_charge_id == "training-charge-1"
+    assert purchase.payment_status == "paid"
+    assert purchase.admin_notification_status == "pending"
     assert buyer_wallet.available_balance == Decimal("0.00")
     assert buyer_wallet.frozen_balance == Decimal("100.00")
     assert not any(isinstance(item, Conversation) for item in session.added)

@@ -29,11 +29,14 @@ test("admin support has filters, financial confirmation and deep-link opening", 
   assert.match(app, /\/admin\/support\/tickets\/\$\{button\.dataset\.ticketId\}\/resolve/);
   assert.match(app, /confirmAction\(question\)/);
   assert.match(app, /support_case/);
+  assert.match(app, /\?status=new/);
+  assert.match(app, /new: "Новое"/);
   assert.match(app, /🛡 AutoFlow Support/);
 });
 
 test("mobile conversation owns the full viewport even with the keyboard open", () => {
   assert.match(css, /body\.chat-open \.app-shell\{width:100vw;max-width:none/);
-  assert.match(css, /@media\(max-width:619px\)\{\.chat-view\{[^}]*width:100vw;max-width:100vw/);
+  assert.match(css, /@media\(max-width:619px\)\{\.chat-view\{[^}]*width:var\(--chat-viewport-width,100%\);max-width:none/);
   assert.match(app, /const visualHeight = Number\(viewport\?\.height\)/);
+  assert.match(app, /--chat-viewport-width/);
 });
