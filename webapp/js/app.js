@@ -130,6 +130,7 @@
     purchaseModalAmount: document.getElementById("purchaseModalAmount"),
     purchaseModalNote: document.getElementById("purchaseModalNote"),
     purchaseModalAction: document.getElementById("purchaseModalAction"),
+    frontendBuildInfo: document.getElementById("frontendBuildInfo"),
   };
 
   let bootstrapPromise = null;
@@ -152,6 +153,7 @@
       telegramSdk?.addEventListener("error", () => reportClientError("telegram_sdk_load", new Error("Telegram SDK load failed")));
       initTelegram();
       bindEvents();
+      renderFrontendBuildInfo();
       installChatViewport();
       renderAll();
       void bootstrap();
@@ -174,6 +176,17 @@
       }
     });
     reportStartupStage("telegram_ready");
+    renderFrontendBuildInfo();
+  }
+
+  function renderFrontendBuildInfo() {
+    if (!elements.frontendBuildInfo) return;
+    const build = document.querySelector('meta[name="autoflow-build"]')?.content || "unknown";
+    const platform = telegram?.platform || "browser";
+    const label = platform === "ios" ? "iPhone build" : ["tdesktop", "macos", "web", "weba", "webk"].includes(platform) ? "Desktop build" : `${platform} build`;
+    const title = document.createElement("strong"); title.textContent = `${label}: ${build}`;
+    const location = document.createElement("small"); location.textContent = `URL: ${window.location.origin}${window.location.pathname}`;
+    elements.frontendBuildInfo.replaceChildren(title, location);
   }
 
   function bindEvents() {

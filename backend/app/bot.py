@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from urllib.parse import quote, urlencode
 
 from .config import get_settings
+from .frontend import versioned_webapp_url
 
 
 logger = logging.getLogger("autoflow.bot")
@@ -119,6 +120,7 @@ async def send_bot_menu(
     public_url = get_settings().externally_reachable_url
     if not public_url:
         return await send_bot_notification(telegram_id, "AutoFlow Market временно недоступен. Попробуйте открыть приложение позже.")
+    public_url = versioned_webapp_url(public_url)
     method, payload = bot_menu_payload(
         detailed,
         public_url,
@@ -406,6 +408,18 @@ async def configure_telegram_webhook() -> bool:
             configured = response.is_success and bool(response.json().get("ok"))
             if not configured:
                 logger.error("telegram_webhook_configuration_rejected status=%s", response.status_code)
+            menu_response = await client.post(
+                f"https://api.telegram.org/bot{settings.bot_token}/setChatMenuButton",
+                json={
+                    "menu_button": {
+                        "type": "web_app",
+                        "text": "Открыть AutoFlow Market",
+                        "web_app": {"url": versioned_webapp_url(public_url)},
+                    }
+                },
+            )
+            if not menu_response.is_success or not bool(menu_response.json().get("ok")):
+                logger.error("telegram_menu_button_configuration_rejected status=%s", menu_response.status_code)
             return configured
     except (httpx.HTTPError, ValueError) as exc:
         logger.error("telegram_webhook_configuration_failed error_type=%s", type(exc).__name__)
