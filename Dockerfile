@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
 COPY backend /app/backend
 COPY webapp /app/webapp
+RUN python /app/backend/scripts/build_webapp.py
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh && mkdir -p /app/backend/uploads
 

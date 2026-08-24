@@ -3,7 +3,6 @@ import asyncio
 from datetime import UTC, datetime
 import json
 import logging
-from pathlib import Path
 from time import perf_counter
 
 from fastapi import FastAPI, Request
@@ -13,12 +12,29 @@ from fastapi.staticfiles import StaticFiles
 from .config import get_settings
 from .bot import configure_telegram_webhook
 from .database import engine
+from .frontend import FRONTEND_BUILD, WEBAPP_DIR
 from .routes import UPLOAD_DIR, recover_training_background_jobs, router
 
 
 settings = get_settings()
-WEBAPP_DIR = Path(__file__).resolve().parents[2] / "webapp"
 logger = logging.getLogger("autoflow.api")
+
+
+def set_frontend_cache_headers(request: Request, response) -> None:
+    path = request.url.path
+    if path == "/" or path.endswith("/index.html") or path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    elif path.startswith(("/js/", "/css/")):
+        requested_build = request.query_params.get("v")
+        response.headers["Cache-Control"] = (
+            "public, max-age=31536000, immutable"
+            if requested_build and requested_build == FRONTEND_BUILD
+            else "no-cache, must-revalidate"
+        )
+    if path == "/" or path.startswith(("/js/", "/css/")):
+        response.headers["X-AutoFlow-Frontend-Build"] = FRONTEND_BUILD
 
 
 @asynccontextmanager
@@ -44,6 +60,7 @@ async def diagnostic_request_log(request: Request, call_next):
     error_type = None
     try:
         response = await call_next(request)
+        set_frontend_cache_headers(request, response)
         status_code = response.status_code
         if status_code >= 400:
             error_type = "http"
