@@ -7,12 +7,13 @@ from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .bot import configure_telegram_webhook
 from .database import engine
-from .frontend import FRONTEND_BUILD, WEBAPP_DIR
+from .frontend import FRONTEND_BUILD, WEBAPP_DIR, versioned_webapp_url
 from .routes import UPLOAD_DIR, recover_training_background_jobs, router
 
 
@@ -97,5 +98,17 @@ app.add_middleware(
 )
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.include_router(router)
+
+
+@app.get("/", include_in_schema=False)
+async def frontend_entry(request: Request):
+    """Turn BotFather's stable Main Mini App URL into a build-specific URL."""
+    if request.query_params.get("af_build") != FRONTEND_BUILD:
+        response = RedirectResponse(versioned_webapp_url(str(request.url)), status_code=307)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return response
+    return FileResponse(WEBAPP_DIR / "index.html", media_type="text/html")
+
+
 if WEBAPP_DIR.exists():
     app.mount("/", StaticFiles(directory=WEBAPP_DIR, html=True), name="webapp")
