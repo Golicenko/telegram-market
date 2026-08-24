@@ -121,6 +121,9 @@ async def send_bot_menu(
     if not public_url:
         return await send_bot_notification(telegram_id, "AutoFlow Market временно недоступен. Попробуйте открыть приложение позже.")
     public_url = versioned_webapp_url(public_url)
+    # A chat-specific menu button can keep an older URL after the default has
+    # changed. Refresh it whenever this user starts or reopens the bot menu.
+    await configure_chat_menu_button(telegram_id)
     method, payload = bot_menu_payload(
         detailed,
         public_url,
@@ -132,6 +135,38 @@ async def send_bot_menu(
         await call_bot_api(method, payload)
         return True
     except HTTPException:
+        return False
+
+
+def chat_menu_button_payload(public_url: str, chat_id: int | None = None) -> dict:
+    payload: dict[str, object] = {
+        "menu_button": {
+            "type": "web_app",
+            "text": "Открыть AutoFlow Market",
+            "web_app": {"url": versioned_webapp_url(public_url)},
+        }
+    }
+    if chat_id is not None:
+        payload["chat_id"] = chat_id
+    return payload
+
+
+async def configure_chat_menu_button(chat_id: int | None = None) -> bool:
+    """Set the current versioned URL for the default or private-chat menu button."""
+    settings = get_settings()
+    public_url = settings.externally_reachable_url
+    if not settings.bot_token or not public_url:
+        return False
+    try:
+        await call_bot_api("setChatMenuButton", chat_menu_button_payload(public_url, chat_id))
+        return True
+    except HTTPException as exc:
+        logger.warning(
+            "telegram_menu_button_configuration_failed chat_id=%s status=%s detail=%s",
+            chat_id,
+            exc.status_code,
+            str(exc.detail)[:300],
+        )
         return False
 
 
@@ -409,19 +444,12 @@ async def configure_telegram_webhook() -> bool:
             configured = response.is_success and bool(response.json().get("ok"))
             if not configured:
                 logger.error("telegram_webhook_configuration_rejected status=%s", response.status_code)
-            menu_response = await client.post(
-                f"https://api.telegram.org/bot{settings.bot_token}/setChatMenuButton",
-                json={
-                    "menu_button": {
-                        "type": "web_app",
-                        "text": "Открыть AutoFlow Market",
-                        "web_app": {"url": versioned_webapp_url(public_url)},
-                    }
-                },
-            )
-            if not menu_response.is_success or not bool(menu_response.json().get("ok")):
-                logger.error("telegram_menu_button_configuration_rejected status=%s", menu_response.status_code)
-            return configured
+        await configure_chat_menu_button()
+        # ADMIN_ID is refreshed explicitly because an old per-chat menu setting
+        # overrides Telegram's newly updated default button.
+        for admin_telegram_id in sorted(settings.admin_telegram_ids):
+            await configure_chat_menu_button(admin_telegram_id)
+        return configured
     except (httpx.HTTPError, ValueError) as exc:
         logger.error("telegram_webhook_configuration_failed error_type=%s", type(exc).__name__)
         return False
