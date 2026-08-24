@@ -14,8 +14,19 @@ INDEX = WEBAPP / "index.html"
 ASSETS = (WEBAPP / "css" / "style.css", WEBAPP / "js" / "api.js", WEBAPP / "js" / "app.js")
 
 
+def normalized_index_bytes() -> bytes:
+    """Hash HTML changes without feeding the previously stamped build back into the digest."""
+    html = INDEX.read_text(encoding="utf-8")
+    html = re.sub(r'(<meta name="autoflow-build" content=")[^"]+(" */?>)', r'\g<1>BUILD\2', html)
+    for asset_url in ("css/style.css", "js/api.js", "js/app.js"):
+        html = re.sub(rf'({re.escape(asset_url)}\?v=)[^"&]+', rf'\g<1>BUILD', html)
+    return html.encode("utf-8")
+
+
 def calculate_build_id() -> str:
     digest = hashlib.sha256()
+    digest.update(b"index.html")
+    digest.update(normalized_index_bytes())
     for asset in ASSETS:
         digest.update(asset.relative_to(WEBAPP).as_posix().encode("utf-8"))
         digest.update(asset.read_bytes())
