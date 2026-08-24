@@ -1746,10 +1746,13 @@ async function hideCurrentConversation() {
     const viewport = window.visualViewport;
     const visualHeight = Number(viewport?.height);
     const telegramHeight = Number(telegram?.viewportHeight);
-    const height = visualHeight > 0 ? visualHeight : telegramHeight > 0 ? telegramHeight : window.innerHeight;
+    const fullHeight = Math.max(window.innerHeight, telegramHeight || 0, visualHeight || 0);
+    const chatInputFocused = document.activeElement === document.getElementById("chatInput");
+    const keyboardOpen = chatInputFocused && visualHeight > 0 && fullHeight - visualHeight > 80;
+    const height = keyboardOpen ? visualHeight : fullHeight;
     const width = Number(viewport?.width) > 0 ? Number(viewport.width) : window.innerWidth;
     document.documentElement.style.setProperty("--chat-viewport-height", `${Math.round(height)}px`);
-    document.documentElement.style.setProperty("--chat-viewport-top", `${Math.round(viewport?.offsetTop || 0)}px`);
+    document.documentElement.style.setProperty("--chat-viewport-top", `${Math.round(keyboardOpen ? viewport?.offsetTop || 0 : 0)}px`);
     document.documentElement.style.setProperty("--chat-viewport-width", `${Math.round(width)}px`);
     document.documentElement.style.setProperty("--chat-viewport-left", `${Math.round(viewport?.offsetLeft || 0)}px`);
     if (document.body.classList.contains("chat-open")) requestAnimationFrame(() => {
@@ -2299,12 +2302,17 @@ async function hideCurrentConversation() {
   async function loadAdminTraining(filter = "all") {
     if (state.me?.user.role !== "admin") return;
     state.adminTrainingFilter = filter;
-    const [products, stats, orders] = await Promise.all([
+    const [productsResult, statsResult, ordersResult] = await Promise.allSettled([
       api.request(`/admin/training/management?filter=${encodeURIComponent(filter)}`),
       api.request("/admin/training/stats"),
       api.request("/admin/training/purchases?product_type=personal"),
     ]);
-    state.adminTraining = products; state.adminTrainingStats = stats; state.adminTrainingOrders = orders;
+    if (productsResult.status === "fulfilled") state.adminTraining = productsResult.value;
+    else reportClientError("admin_training_products", productsResult.reason);
+    if (statsResult.status === "fulfilled") state.adminTrainingStats = statsResult.value;
+    else reportClientError("admin_training_stats", statsResult.reason);
+    if (ordersResult.status === "fulfilled") state.adminTrainingOrders = ordersResult.value;
+    else { state.adminTrainingOrders = []; reportClientError("admin_training_orders", ordersResult.reason); }
     document.querySelectorAll("[data-training-filter]").forEach((button) => button.classList.toggle("is-active", button.dataset.trainingFilter === filter));
     renderAdminTraining();
   }
@@ -2346,7 +2354,7 @@ async function hideCurrentConversation() {
       const note = document.createElement("span"); note.textContent = "Сохраняются в PostgreSQL";
       const list = document.createElement("div"); list.id = "adminTrainingOrders";
       const orderFilters = document.createElement("div"); orderFilters.className = "training-order-filters";
-      [["new", "Новые"], ["in_progress", "В процессе"], ["completed", "Завершённые"]].forEach(([value, label]) => {
+      [["new", "PAID"], ["in_progress", "IN_PROGRESS"], ["completed", "COMPLETED"]].forEach(([value, label]) => {
         const button = document.createElement("button"); button.type = "button"; button.dataset.trainingOrderFilter = value; button.textContent = label; orderFilters.append(button);
       });
       heading.append(title, note); section.append(heading, orderFilters, list); filters.before(section);
@@ -2391,15 +2399,15 @@ async function hideCurrentConversation() {
     const course = document.createElement("small"); course.textContent = purchase.title_snapshot;
     const usernameValue = purchase.buyer_username || purchase.buyer.username;
     const username = document.createElement("small"); username.textContent = `${usernameValue ? `@${usernameValue} · ` : "Username не указан · "}Telegram ID ${purchase.buyer_telegram_id || purchase.buyer.telegram_id}`;
-    const meta = document.createElement("span"); meta.textContent = `Заказ #${purchase.id.slice(0, 8)} · ${formatDate(purchase.created_at)} · ${formatNumber(purchase.price_af_coins)} ⭐ · Оплата: успешно · ${trainingPurchaseStatusLabel(purchase.status)}`; copy.append(name, course, username, meta); card.append(avatar, copy);
-    if (purchase.buyer_username) { const chat = document.createElement("button"); chat.type = "button"; chat.className = "training-order-secondary"; chat.dataset.trainingBuyerUsername = purchase.buyer_username; chat.textContent = "💬 Написать покупателю"; card.append(chat); }
+    const meta = document.createElement("span"); meta.textContent = `Заказ #${purchase.id.slice(0, 8)} · ${formatDate(purchase.created_at)} · ${formatNumber(purchase.price_af_coins)} ⭐ · Статус: ${trainingAdminOrderStatusLabel(purchase.status)}`; copy.append(name, course, username, meta); card.append(avatar, copy);
+    if (purchase.buyer_username) { const chat = document.createElement("button"); chat.type = "button"; chat.className = "training-order-secondary"; chat.dataset.trainingBuyerUsername = purchase.buyer_username; chat.textContent = "💬 Написать"; card.append(chat); }
     if (purchase.product_type === "personal") {
       const notification = document.createElement("small"); notification.className = `training-notification-status is-${purchase.admin_notification_status}`;
       notification.textContent = purchase.admin_notification_status === "sent" ? "Уведомление администратору отправлено" : purchase.admin_notification_status === "failed" ? `Уведомление не доставлено: ${purchase.admin_notification_error || "Telegram API error"}` : "Уведомление ожидает отправки";
       card.append(notification);
       if (["failed", "pending", "sending"].includes(purchase.admin_notification_status)) { const retry = document.createElement("button"); retry.type = "button"; retry.className = "training-order-secondary"; retry.dataset.trainingNotify = purchase.id; retry.textContent = "Повторить уведомление"; card.append(retry); }
     }
-    if (purchase.product_type === "personal" && purchase.status !== "completed") { const action = document.createElement("button"); action.type = "button"; action.dataset.trainingPurchaseAction = purchase.status === "awaiting_start" ? "in_progress" : "completed"; action.dataset.purchaseId = purchase.id; action.textContent = purchase.status === "awaiting_start" ? "Начать обучение" : "Обучение завершено"; card.append(action); }
+    if (purchase.product_type === "personal" && purchase.status !== "completed") { const action = document.createElement("button"); action.type = "button"; action.dataset.trainingPurchaseAction = purchase.status === "awaiting_start" ? "in_progress" : "completed"; action.dataset.purchaseId = purchase.id; action.textContent = purchase.status === "awaiting_start" ? "Начать обучение" : "✅ Завершить"; card.append(action); }
     if (purchase.product_type === "automatic" && purchase.delivery_status === "failed") { const retry = document.createElement("button"); retry.type = "button"; retry.dataset.trainingAdminRedeliver = purchase.id; retry.textContent = "Повторить автовыдачу"; card.append(retry); }
     return card;
   }
@@ -2751,7 +2759,8 @@ async function hideCurrentConversation() {
   function formatMessageTime(value) { return value ? new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)) : ""; }
   function trainingTypeLabel(value) { return value === "personal" ? "Персональное обучение" : "Автоматическое обучение"; }
   function trainingAvailabilityLabel(value) { return ({ available: "Доступно", unavailable: "Недоступно", coming_soon: "Скоро" })[value] || value; }
-  function trainingPurchaseStatusLabel(value) { return ({ awaiting_start: "Ожидает начала", in_progress: "В процессе", completed: "Завершено" })[value] || value; }
+  function trainingPurchaseStatusLabel(value) { return ({ awaiting_start: "Оплачено", in_progress: "В процессе", completed: "Завершено" })[value] || value; }
+  function trainingAdminOrderStatusLabel(value) { return ({ awaiting_start: "PAID", in_progress: "IN_PROGRESS", completed: "COMPLETED" })[value] || value; }
   function trainingDeliveryStatusLabel(value) { return ({ not_applicable: "Не требуется", pending: "Ожидает отправки", sending: "Отправляется", delivered: "Доставлено", failed: "Ошибка отправки" })[value] || value; }
   function trainingMaterialTypeLabel(value) { return ({ text: "Текст", link: "Ссылка", photo: "Фото", video: "Видео", document: "Документ" })[value] || value; }
   function formatFileSize(value) { const bytes = Number(value || 0); return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} МБ` : `${Math.max(1, Math.round(bytes / 1024))} КБ`; }

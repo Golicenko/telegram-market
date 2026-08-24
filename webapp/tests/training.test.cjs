@@ -52,4 +52,9 @@ test("admin training orders expose durable notification state and filters", () =
   assert.match(app, /\/admin\/training\/purchases\/\$\{button\.dataset\.trainingNotify\}\/notify/);
   assert.match(app, /dataTrainingBuyerUsername|dataset\.trainingBuyerUsername/);
   assert.match(app, /--chat-viewport-width/);
+  assert.match(app, /Promise\.allSettled/);
+  assert.match(app, /awaiting_start: "Оплачено"/);
+  assert.match(app, /awaiting_start: "PAID"/);
+  assert.match(app, /\["new", "PAID"\]/);
+  assert.match(app, /"✅ Завершить"/);
 });

@@ -3,10 +3,11 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
-from app import bot as bot_module
+from app import bot as bot_module, routes
 from app.bot import personal_training_order_payload, send_bot_material, send_personal_training_order_notification
+from app.config import Settings
 from app.models import Conversation, StarPayment, StarPaymentIntent, TrainingProduct, TrainingPurchase, User, Wallet
 from app.services import process_successful_payment, purchase_training_product, update_training_purchase_status
 
@@ -83,9 +84,8 @@ def test_admin_notification_links_to_real_username_and_persisted_order():
     assert payload["chat_id"] == 10
     assert "Telegram ID: 123456" in payload["text"]
     assert "Username: @buyer_name" in payload["text"]
-    assert "Стоимость: 100 ⭐" in payload["text"]
-    assert "Оплата: успешно" in payload["text"]
-    assert "Статус: Ожидает обработки" in payload["text"]
+    assert "Оплачено: 100 ⭐" in payload["text"]
+    assert "Статус: Оплачено / ожидает обучения" in payload["text"]
     assert button_rows[0][0]["url"] == "https://t.me/buyer_name"
     assert button_rows[1][0]["web_app"]["url"] == "https://autoflow.example/?training_order=order-123"
 
@@ -148,20 +148,97 @@ async def test_personal_training_admin_notification_is_really_sent(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_personal_training_notification_reports_missing_public_url(monkeypatch):
+async def test_personal_training_notification_still_sends_without_public_url(monkeypatch):
+    calls = []
+
+    async def fake_call(method, payload):
+        calls.append((method, payload))
+        return {"ok": True}
+
     settings = type("Settings", (), {"externally_reachable_url": None})()
     monkeypatch.setattr(bot_module, "get_settings", lambda: settings)
-    with pytest.raises(HTTPException, match="PUBLIC_BASE_URL") as error:
-        await send_personal_training_order_notification(
-            10,
-            purchase_id="order-no-url",
-            title="Персональное обучение",
-            buyer_name="Иван",
-            buyer_username=None,
-            buyer_telegram_id=20,
-            price_xtr=100,
-        )
-    assert error.value.status_code == 503
+    monkeypatch.setattr(bot_module, "call_bot_api", fake_call)
+    assert await send_personal_training_order_notification(
+        10,
+        purchase_id="order-no-url",
+        title="Персональное обучение",
+        buyer_name="Иван",
+        buyer_username=None,
+        buyer_telegram_id=20,
+        price_xtr=100,
+    ) is True
+    assert calls[0][1]["chat_id"] == 10
+    assert "reply_markup" not in calls[0][1]
+
+
+def test_personal_order_notification_uses_configured_admin_id(monkeypatch):
+    monkeypatch.setattr(routes, "get_settings", lambda: Settings(admin_id=777))
+    stale_seller = User(id=uuid.uuid4(), telegram_id=10, first_name="Старый админ", role="admin", bot_started=False)
+    assert routes.resolve_training_admin_telegram_id(stale_seller) == 777
+
+
+@pytest.mark.asyncio
+async def test_successful_payment_queues_admin_notification_after_order_creation(monkeypatch):
+    buyer = User(id=uuid.uuid4(), telegram_id=20, first_name="Иван", username="buyer", role="user")
+    intent = StarPaymentIntent(
+        id=uuid.uuid4(), user_id=buyer.id, invoice_payload="autoflow_training:test", xtr_amount=100,
+        purpose="training_checkout", status="paid", checkout_status="pending", training_product_id=uuid.uuid4(),
+    )
+    purchase = TrainingPurchase(
+        id=uuid.uuid4(), product_id=intent.training_product_id, buyer_id=buyer.id, seller_id=uuid.uuid4(),
+        buyer_telegram_id=buyer.telegram_id, buyer_display_name="Иван", buyer_username="buyer",
+        product_type="personal", title_snapshot="Курс", cover_url_snapshot="/cover.jpg",
+        price_af_coins=Decimal("100"), seller_payout=Decimal("70"), platform_commission=Decimal("30"),
+        status="awaiting_start", delivery_status="not_applicable", payment_status="paid",
+        admin_notification_status="pending", purchased_frozen_amount=Decimal("100"), earned_frozen_amount=Decimal("0"),
+    )
+
+    class WebhookSession:
+        def __init__(self): self.values = [intent, buyer]
+        async def scalar(self, _query): return self.values.pop(0)
+        async def commit(self): return None
+
+    async def paid(*_args, **_kwargs): return True
+    async def complete(*_args, **_kwargs): return intent, purchase, True
+    monkeypatch.setattr(routes, "process_successful_payment", paid)
+    monkeypatch.setattr(routes, "complete_training_payment_intent", complete)
+    tasks = BackgroundTasks()
+    settings = Settings(bot_token="test-token", admin_id=777)
+    update = {"message": {"from": {"id": 20}, "successful_payment": {
+        "currency": "XTR", "invoice_payload": intent.invoice_payload,
+        "telegram_payment_charge_id": "charge-1", "total_amount": 100,
+    }}}
+
+    assert await routes.telegram_webhook(update, tasks, settings.effective_telegram_webhook_secret, WebhookSession(), settings) == {"ok": True}
+    assert any(task.func is routes.notify_personal_training_admin and task.args == (purchase.id,) for task in tasks.tasks)
+
+
+@pytest.mark.asyncio
+async def test_admin_orders_endpoint_returns_paid_personal_order(monkeypatch):
+    admin = User(id=uuid.uuid4(), telegram_id=777, first_name="Admin", role="admin")
+    buyer = User(id=uuid.uuid4(), telegram_id=20, first_name="Иван", username="buyer", role="user")
+    purchase = TrainingPurchase(
+        id=uuid.uuid4(), product_id=uuid.uuid4(), buyer_id=buyer.id, seller_id=admin.id,
+        buyer_telegram_id=buyer.telegram_id, buyer_display_name="Иван", buyer_username="buyer",
+        product_type="personal", title_snapshot="Курс", cover_url_snapshot="/cover.jpg",
+        price_af_coins=Decimal("100"), seller_payout=Decimal("70"), platform_commission=Decimal("30"),
+        status="awaiting_start", delivery_status="not_applicable", payment_status="paid",
+        admin_notification_status="pending", purchased_frozen_amount=Decimal("100"), earned_frozen_amount=Decimal("0"),
+    )
+
+    class Rows:
+        def __init__(self, values): self.values = values
+        def all(self): return self.values
+
+    class AdminOrderSession:
+        def __init__(self): self.results = [[purchase], [buyer]]
+        async def scalars(self, _query): return Rows(self.results.pop(0))
+
+    async def output(_session, current, _buyer=None): return current
+    monkeypatch.setattr(routes, "training_purchase_admin_out", output)
+    orders = await routes.all_training_orders("personal", None, admin, AdminOrderSession())
+    assert orders == [purchase]
+    assert orders[0].payment_status == "paid"
 
 
 @pytest.mark.asyncio

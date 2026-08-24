@@ -197,7 +197,7 @@ def personal_training_order_payload(
     buyer_username: str | None,
     buyer_telegram_id: int,
     price_xtr: int,
-    public_url: str,
+    public_url: str | None,
 ) -> dict:
     username = (buyer_username or "").lstrip("@").strip()
     username_line = f"@{username}" if username else "не указан"
@@ -207,22 +207,23 @@ def personal_training_order_payload(
         f"Покупатель: {buyer_name}\n"
         f"Username: {username_line}\n"
         f"Telegram ID: {buyer_telegram_id}\n"
-        f"Стоимость: {price_xtr} ⭐\n"
-        "Оплата: успешно\n"
-        "Статус: Ожидает обработки"
+        f"Оплачено: {price_xtr} ⭐\n"
+        "Статус: Оплачено / ожидает обучения"
     )
     button_rows = []
     if username:
         button_rows.append([{"text": "💬 Написать покупателю", "url": f"https://t.me/{quote(username, safe='')}"}])
-    order_url = f"{public_url.rstrip('/')}/?{urlencode({'training_order': purchase_id})}"
-    button_rows.append([{"text": "📋 Открыть заказ", "web_app": {"url": order_url}}])
-    return {"chat_id": telegram_id, "text": text, "reply_markup": {"inline_keyboard": button_rows}}
+    if public_url:
+        order_url = f"{public_url.rstrip('/')}/?{urlencode({'training_order': purchase_id})}"
+        button_rows.append([{"text": "📋 Открыть заказ", "web_app": {"url": order_url}}])
+    payload = {"chat_id": telegram_id, "text": text}
+    if button_rows:
+        payload["reply_markup"] = {"inline_keyboard": button_rows}
+    return payload
 
 
 async def send_personal_training_order_notification(telegram_id: int, **order) -> bool:
     public_url = get_settings().externally_reachable_url
-    if not public_url:
-        raise HTTPException(status_code=503, detail="PUBLIC_BASE_URL или RAILWAY_PUBLIC_DOMAIN не настроен")
     await call_bot_api(
         "sendMessage",
         personal_training_order_payload(telegram_id, public_url=public_url, **order),
