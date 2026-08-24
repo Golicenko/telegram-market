@@ -128,9 +128,12 @@ async def test_personal_training_settles_only_after_completion():
         id=uuid.uuid4(), product_id=uuid.uuid4(), buyer_id=buyer_id, seller_id=admin.id,
         product_type="personal", title_snapshot="Персональный курс", cover_url_snapshot="/cover.jpg",
         price_af_coins=Decimal("100"), seller_payout=Decimal("70"), platform_commission=Decimal("30"),
-        status="in_progress", delivery_status="not_applicable", purchased_frozen_amount=Decimal("100"),
+        status="awaiting_start", delivery_status="not_applicable", purchased_frozen_amount=Decimal("100"),
         earned_frozen_amount=Decimal("0"), delivery_attempts=0,
     )
+    started = await update_training_purchase_status(FakeSession([purchase]), admin, purchase.id, "in_progress")
+    assert started.status == "in_progress"
+
     session = FakeSession([purchase, buyer_wallet, seller_wallet])
 
     completed = await update_training_purchase_status(session, admin, purchase.id, "completed")

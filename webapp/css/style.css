@@ -479,6 +479,10 @@ body.chat-open .app-shell{width:100vw;max-width:none;margin:0;padding:0;border:0
 .support-admin-filters{display:flex;gap:6px;overflow-x:auto;margin:0 0 10px;padding-bottom:3px}.support-admin-filters button{flex:none;min-height:32px;padding:0 10px;border:1px solid var(--line);border-radius:9px;color:var(--muted);background:var(--panel)}.support-admin-filters button.is-active{border-color:var(--line-bright);color:#231605;background:linear-gradient(135deg,#ffc128,#ff8500)}
 @media(max-width:619px){.chat-view{top:var(--chat-viewport-top,0px);right:auto;bottom:auto;left:var(--chat-viewport-left,0px);width:var(--chat-viewport-width,100%);max-width:none;height:var(--chat-viewport-height,100dvh);transform:none;border:0}}
 
+/* One-column mobile messenger: the message list consumes all free height and
+   the composer is always the last visible row, with or without the keyboard. */
+@media(max-width:619px){body.chat-open{position:fixed;inset:0;width:100%;height:var(--chat-viewport-height,100dvh)}.chat-view{display:flex;flex-direction:column;min-height:0;overflow:hidden}.chat-header,.chat-status,.chat-listing,.offer-panel,.chat-compose{flex:0 0 auto}.messages{flex:1 1 auto;min-height:0;max-height:none;overflow-y:auto}.chat-compose{margin-top:auto;padding-bottom:max(0px,env(safe-area-inset-bottom))}}
+
 /* Premium training products use the administrator-provided silver emblem. */
 .gg-nav-icon{width:27px;height:27px;margin:auto;border:1px solid rgba(216,180,83,.38);border-radius:9px;object-fit:cover;object-position:center;box-shadow:0 0 10px rgba(204,170,84,.13)}
 .training-identity{width:78px;height:78px;margin-bottom:3px;border:1px solid rgba(216,180,83,.4);border-radius:22px;object-fit:cover;object-position:center;box-shadow:0 0 24px rgba(200,154,48,.12)}

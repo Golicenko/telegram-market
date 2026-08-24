@@ -140,6 +140,18 @@ UPLOAD_DIR = Path(get_settings().upload_dir) if get_settings().upload_dir else P
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def resolve_training_admin_telegram_id(seller: User | None) -> int | None:
+    """Use the configured ADMIN_ID first; the persisted seller is a safe fallback."""
+    settings = get_settings()
+    if settings.admin_id:
+        return settings.admin_id
+    if settings.admin_telegram_ids:
+        return min(settings.admin_telegram_ids)
+    if seller and seller.role == "admin":
+        return seller.telegram_id
+    return None
+
+
 async def listing_out(session: AsyncSession, listing: Listing, buyer_id: uuid.UUID | None = None) -> ListingOut:
     images = list((await session.scalars(select(ListingImage.url).where(ListingImage.listing_id == listing.id).order_by(ListingImage.position))).all())
     effective_price = None
@@ -359,12 +371,13 @@ async def notify_personal_training_admin(purchase_id: uuid.UUID) -> None:
         await session.commit()
 
     error: str | None = None
-    if not seller or not seller.bot_started:
-        error = "Администратор не запускал бота командой /start или заблокировал его"
+    admin_telegram_id = resolve_training_admin_telegram_id(seller)
+    if not admin_telegram_id:
+        error = "ADMIN_ID не настроен и администратор заказа не найден"
     else:
         try:
             await send_personal_training_order_notification(
-                seller.telegram_id,
+                admin_telegram_id,
                 purchase_id=str(purchase.id),
                 title=purchase.title_snapshot,
                 buyer_name=purchase.buyer_display_name,
@@ -2308,7 +2321,8 @@ async def telegram_webhook(
                 background_tasks.add_task(run_admin_broadcast, broadcast_id)
             return {"ok": True, "accepted": broadcast_id is not None}
     start_text = str(message.get("text") or "").strip()
-    if start_text.split(maxsplit=1)[0].split("@", 1)[0] == "/start" and sender.get("id"):
+    start_command = start_text.split(maxsplit=1)[0].split("@", 1)[0] if start_text else ""
+    if start_command == "/start" and sender.get("id"):
         start_payload = start_text.split(maxsplit=1)[1].strip() if len(start_text.split(maxsplit=1)) == 2 else None
         user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
         if not user:
