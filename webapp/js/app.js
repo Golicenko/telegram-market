@@ -38,6 +38,10 @@
     totalUnread: 0,
     messagePollingId: null,
     pendingCheckoutTopup: false,
+    activeTopupIntentId: null,
+    confirmedTopupPayments: new Set(),
+    adminBalanceUser: null,
+    adminBalanceDirection: "credit",
     purchaseFlow: null,
     serverAvailable: true,
   };
@@ -77,6 +81,9 @@
     infoModal: document.getElementById("infoModal"),
     toast: document.getElementById("toast"),
     paymentResult: document.getElementById("paymentResult"),
+    adminBalanceLookupMessage: document.getElementById("adminBalanceLookupMessage"),
+    adminBalanceUserCard: document.getElementById("adminBalanceUserCard"),
+    adminBalanceResult: document.getElementById("adminBalanceResult"),
     profileActive: document.getElementById("profileActiveCars"),
     profileSold: document.getElementById("profileSoldCars"),
     profilePurchases: document.getElementById("profilePurchaseCars"),
@@ -207,6 +214,7 @@
     bind(elements.advertisementForm, "submit", submitAdvertisement, "advertisementForm");
     bind(document.getElementById("deleteAdvertisementButton"), "click", deleteAdvertisement, "deleteAdvertisementButton");
     bind(document.getElementById("balanceAdjustmentForm"), "submit", createBalanceAdjustment, "balanceAdjustmentForm");
+    bind(document.getElementById("adminBalanceLookupForm"), "submit", findAdminBalanceUser, "adminBalanceLookupForm");
     bind(document.getElementById("adminUserSearch"), "submit", searchAdminUsers, "adminUserSearch");
     bind(elements.startupRetry, "click", () => void bootstrap({ manual: true }), "startupRetry");
     bind(elements.syncRetry, "click", () => void retryFailedOptional(), "syncRetry");
@@ -526,6 +534,10 @@ function handleClick(event) {
     if (adminTab) return void switchAdminTab(adminTab.dataset.adminTab);
     const userAction = target.closest("[data-admin-user-action]");
     if (userAction) return void adminUserAction(userAction);
+    const paymentRetry = target.closest("[data-payment-retry]");
+    if (paymentRetry) return void checkStarPaymentStatus(paymentRetry.dataset.paymentRetry);
+    const balanceDirection = target.closest("[data-balance-direction]");
+    if (balanceDirection) return void setAdminBalanceDirection(balanceDirection.dataset.balanceDirection);
     const listingAction = target.closest("[data-admin-listing-action]");
     if (listingAction) return void adminListingAction(listingAction);
     const supportReply = target.closest("[data-support-reply]");
@@ -1762,7 +1774,8 @@ async function hideCurrentConversation() {
     const form = event.currentTarget;
     const button = form.querySelector("button[type=submit]");
     if (button.disabled) return;
-    elements.paymentResult.textContent = "";
+    state.activeTopupIntentId = null;
+    renderPaymentStatus("idle");
     if (!telegram?.initData || typeof telegram.openInvoice !== "function") {
       elements.paymentResult.className = "payment-result is-error";
       elements.paymentResult.textContent = "Откройте AUTOFLOW MARKET внутри Telegram, чтобы оплатить счёт";
@@ -1773,48 +1786,93 @@ async function hideCurrentConversation() {
       const amount = Number(document.getElementById("topupAmount").value);
       const purpose = state.pendingCheckoutTopup ? "cart_checkout" : "topup";
       const intent = await api.request("/wallet/star-payments/intent", { method: "POST", body: JSON.stringify({ amount, purpose }) });
-      elements.paymentResult.className = "payment-result";
-      elements.paymentResult.textContent = "Счёт открыт в Telegram";
+      state.activeTopupIntentId = intent.id;
+      renderPaymentStatus("invoice_open");
       const invoiceStatus = await new Promise((resolve, reject) => {
         try { telegram.openInvoice(intent.invoice_url, resolve); }
         catch (error) { reject(error); }
       });
       if (invoiceStatus === "cancelled") {
-        elements.paymentResult.className = "payment-result is-cancelled";
-        elements.paymentResult.textContent = "Оплата отменена. Баланс не изменён";
+        renderPaymentStatus("cancelled");
         state.pendingCheckoutTopup = false;
         return;
       }
       if (invoiceStatus === "failed") {
-        elements.paymentResult.className = "payment-result is-error";
-        elements.paymentResult.textContent = "Telegram не завершил оплату. Баланс не изменён";
+        renderPaymentStatus("failed");
         state.pendingCheckoutTopup = false;
         return;
       }
-      const payment = await waitForStarPayment(intent.id);
-      if (payment.status !== "paid") throw new Error("Подтверждение оплаты ещё не получено сервером. Проверьте баланс через несколько секунд");
-      state.me.wallet = payment.wallet;
-      await refreshMarketplace();
-      elements.paymentResult.className = "payment-result is-success";
-      elements.paymentResult.textContent = purpose === "cart_checkout"
-        ? "Оплата подтверждена. Сервер завершает защищённую покупку"
-        : "Оплата успешно завершена";
-      if (purpose === "cart_checkout") await navigate("market");
+      await checkStarPaymentStatus(intent.id, { automatic: true, purpose });
       state.pendingCheckoutTopup = false;
     } catch (error) {
-      elements.paymentResult.className = "payment-result is-error";
-      elements.paymentResult.textContent = error.message;
+      renderPaymentStatus(state.activeTopupIntentId ? "verification_error" : "request_error", state.activeTopupIntentId);
     } finally { button.disabled = false; }
   }
 
+  async function checkStarPaymentStatus(intentId = state.activeTopupIntentId, options = {}) {
+    if (!intentId) return;
+    renderPaymentStatus("checking");
+    try {
+      let payment = null;
+      const attempts = options.automatic ? 6 : 1;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        payment = await api.request(`/wallet/star-payments/intents/${intentId}`);
+        if (payment.status !== "pending") break;
+        if (attempt < attempts - 1) await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      }
+      if (payment.status === "paid") {
+        const alreadyConfirmed = state.confirmedTopupPayments.has(intentId);
+        state.me.wallet = payment.wallet;
+        if (!alreadyConfirmed) await loadOptionalData(["profile"], { allowRecovery: false });
+        renderBalance();
+        state.confirmedTopupPayments.add(intentId);
+        renderPaymentStatus("confirmed");
+        if ((options.purpose || payment.purpose) === "cart_checkout") await navigate("market");
+        return;
+      }
+      if (["cancelled", "failed", "expired"].includes(payment.status)) {
+        renderPaymentStatus(payment.status === "cancelled" ? "cancelled" : "failed");
+        return;
+      }
+      renderPaymentStatus("pending", intentId);
+    } catch (_error) {
+      renderPaymentStatus("verification_error", intentId);
+    }
+  }
+
   async function waitForStarPayment(intentId) {
-    let status = null;
+    let payment = null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      status = await api.request(`/wallet/star-payments/intents/${intentId}`);
-      if (status.status !== "pending") return status;
+      payment = await api.request(`/wallet/star-payments/intents/${intentId}`);
+      if (payment.status !== "pending") return payment;
       await new Promise((resolve) => window.setTimeout(resolve, 1500));
     }
-    return status;
+    return payment;
+  }
+
+  function renderPaymentStatus(kind, intentId = state.activeTopupIntentId) {
+    const content = {
+      idle: ["", ""],
+      invoice_open: ["", "Счёт открыт в Telegram"],
+      checking: ["is-pending", "⏳ Проверяем платёж…"],
+      confirmed: ["is-success", "✅ Оплата подтверждена\nAF Coins зачислены"],
+      pending: ["is-pending", "⏳ Платёж подтверждается\nНе закрывайте приложение. Обычно это занимает несколько секунд."],
+      verification_error: ["is-error", "⚠️ Платёж получен, но баланс пока не обновился\nНажмите «Проверить снова» или обратитесь в поддержку."],
+      request_error: ["is-error", "Не удалось открыть оплату. Попробуйте ещё раз."],
+      cancelled: ["is-cancelled", "Оплата не завершена"],
+      failed: ["is-cancelled", "Оплата не завершена"],
+    }[kind] || ["", ""];
+    elements.paymentResult.className = `payment-result ${content[0]}`.trim();
+    const message = document.createElement("span");
+    message.textContent = content[1];
+    elements.paymentResult.replaceChildren(message);
+    if (["pending", "verification_error"].includes(kind) && intentId) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.dataset.paymentRetry = intentId;
+      retry.textContent = "Проверить снова";
+      elements.paymentResult.append(retry);
+    }
   }
 
   async function createWithdrawal(event) {
@@ -2131,6 +2189,63 @@ async function hideCurrentConversation() {
   }
 
   async function searchAdminUsers(event) { event.preventDefault(); try { await loadAdminUsers(new FormData(event.currentTarget).get("q").trim()); } catch (error) { notify(error.message); } }
+
+  async function findAdminBalanceUser(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const username = String(new FormData(form).get("username") || "").trim().replace(/^@+/, "");
+    state.adminBalanceUser = null;
+    elements.adminBalanceUserCard.hidden = true;
+    document.getElementById("balanceAdjustmentForm").hidden = true;
+    elements.adminBalanceResult.replaceChildren();
+    if (!username) return setAdminBalanceLookupMessage("Введите username");
+    setAdminBalanceLookupMessage("Ищем пользователя…");
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const users = await api.request(`/admin/users?q=${encodeURIComponent(username)}`);
+      const found = users.find((item) => String(item.user.username || "").toLowerCase() === username.toLowerCase());
+      if (!found) return setAdminBalanceLookupMessage("Пользователь не найден", true);
+      state.adminBalanceUser = found;
+      setAdminBalanceLookupMessage("");
+      renderAdminBalanceUser(found);
+    } catch (_error) {
+      setAdminBalanceLookupMessage("Не удалось найти пользователя. Попробуйте снова.", true);
+    } finally { button.disabled = false; }
+  }
+
+  function setAdminBalanceLookupMessage(message, isError = false) {
+    elements.adminBalanceLookupMessage.textContent = message;
+    elements.adminBalanceLookupMessage.classList.toggle("is-error", isError);
+  }
+
+  function renderAdminBalanceUser(item) {
+    const user = item.user;
+    const name = [user.first_name, user.last_name].filter(Boolean).join(" ") || "Без имени";
+    const rows = [
+      ["Имя", name],
+      ["Username", user.username ? `@${user.username}` : "Не указан"],
+      ["Telegram ID", String(user.telegram_id)],
+      ["Текущий баланс", `${formatNumber(item.wallet.available_balance)} AF Coins`],
+    ].map(([label, value]) => {
+      const row = document.createElement("p");
+      const title = document.createElement("span"); title.textContent = `${label}:`;
+      const data = document.createElement("strong"); data.textContent = value;
+      row.append(title, data); return row;
+    });
+    elements.adminBalanceUserCard.replaceChildren(...rows);
+    elements.adminBalanceUserCard.hidden = false;
+    document.getElementById("balanceAdjustmentForm").hidden = false;
+  }
+
+  function setAdminBalanceDirection(direction) {
+    if (!["credit", "debit"].includes(direction)) return;
+    state.adminBalanceDirection = direction;
+    document.querySelectorAll("[data-balance-direction]").forEach((button) => {
+      button.classList.toggle("is-active", button.dataset.balanceDirection === direction);
+      button.setAttribute("aria-pressed", String(button.dataset.balanceDirection === direction));
+    });
+  }
 
   async function adminUserAction(button) {
     if (!(await confirmAction(`${button.textContent} пользователя?`))) return;
@@ -2459,11 +2574,44 @@ async function hideCurrentConversation() {
   }
 
   async function createBalanceAdjustment(event) {
-    event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement);
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const selected = state.adminBalanceUser;
+    const data = new FormData(formElement);
+    const rawAmount = Number(data.get("amount"));
+    if (!selected) return setAdminBalanceLookupMessage("Сначала найдите пользователя", true);
+    if (!Number.isFinite(rawAmount) || rawAmount <= 0) return void (elements.adminBalanceResult.textContent = "Введите сумму больше нуля");
+    const signedAmount = state.adminBalanceDirection === "debit" ? -rawAmount : rawAmount;
+    const username = selected.user.username ? `@${selected.user.username}` : `Telegram ID ${selected.user.telegram_id}`;
+    const action = signedAmount > 0 ? "Начислить" : "Списать";
+    if (!(await confirmAction(`${action} ${formatNumber(rawAmount)} AF Coins ${signedAmount > 0 ? "пользователю" : "у пользователя"} ${username}?`))) return;
+    const button = formElement.querySelector("button[type=submit]");
+    button.disabled = true;
+    elements.adminBalanceResult.textContent = "Сохраняем операцию…";
     try {
-      await api.request("/admin/balance-adjustments", { method: "POST", body: JSON.stringify({ user_id: form.get("user_id"), amount: Number(form.get("amount")), reason: form.get("reason") }) });
-      formElement.reset(); notify("Корректировка записана отдельной транзакцией");
-    } catch (error) { notify(error.message); }
+      const before = selected.wallet.available_balance;
+      const wallet = await api.request("/admin/balance-adjustments", {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: selected.user.id,
+          amount: signedAmount,
+          reason: String(data.get("reason") || "").trim() || "Корректировка баланса администратором",
+        }),
+      });
+      selected.wallet = wallet;
+      elements.adminBalanceResult.classList.remove("is-error");
+      renderAdminBalanceUser(selected);
+      const title = document.createElement("strong"); title.textContent = "✅ Баланс изменён";
+      const values = document.createElement("span"); values.textContent = `Было: ${formatNumber(before)} AF Coins\nСтало: ${formatNumber(wallet.available_balance)} AF Coins`;
+      elements.adminBalanceResult.replaceChildren(title, values);
+      formElement.reset();
+      setAdminBalanceDirection(state.adminBalanceDirection);
+      await loadAdminFinancialHistory(selected.user.id);
+    } catch (error) {
+      const message = error.status === 409 ? "Недостаточно AF Coins для списания" : "Не удалось изменить баланс. Проверьте данные и попробуйте снова.";
+      elements.adminBalanceResult.textContent = message;
+      elements.adminBalanceResult.classList.add("is-error");
+    } finally { button.disabled = false; }
   }
 
   function renderBalance() {
