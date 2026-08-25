@@ -2062,29 +2062,53 @@ async function hideCurrentConversation() {
     if (form && fields) fields.hidden = form.elements.product_type.value !== "automatic";
   }
 
-  async function saveInitialAutomaticMaterials(productId, form) {
-    if (form.get("product_type") !== "automatic") return 0;
-    const materials = [];
+  function hasAutomaticMaterialInput(form) {
+    if (form.get("product_type") !== "automatic") return false;
+    return Boolean(
+      String(form.get("automatic_text") || "").trim()
+      || form.get("automatic_video")?.size
+      || form.get("automatic_file")?.size
+    );
+  }
+
+  async function saveInitialAutomaticMaterials(productId, form, startPosition = 0) {
+    if (form.get("product_type") !== "automatic") return { savedCount: 0, failures: [] };
+    let position = startPosition;
+    let savedCount = 0;
+    const failures = [];
+    const persist = async (label, material) => {
+      try {
+        await api.request(`/admin/training/${productId}/materials`, { method: "POST", body: JSON.stringify({ ...material, position }) });
+        position += 1;
+        savedCount += 1;
+      } catch (error) {
+        failures.push(`${label}: ${error.message}`);
+        reportClientError("training_material_save", error);
+      }
+    };
     const textReference = String(form.get("automatic_text") || "").trim();
-    if (textReference) materials.push({ title: "Инструкция", material_type: "text", delivery_reference: textReference, position: 0 });
+    if (textReference) {
+      await persist("Инструкция", { title: "Инструкция", material_type: "text", delivery_reference: textReference });
+    }
     for (const [field, type, fallbackTitle] of [["automatic_video", "video", "Видео"], ["automatic_file", "document", "Материал"]]) {
       const file = form.get(field);
       if (!file?.size) continue;
-      const upload = await api.upload(file, `/admin/training/materials/upload?material_type=${encodeURIComponent(type)}`);
-      materials.push({
-        title: file.name || fallbackTitle,
-        material_type: type,
-        delivery_reference: upload.delivery_reference,
-        mime_type: upload.mime_type || null,
-        file_size: upload.file_size || null,
-        metadata_json: upload.metadata_json || {},
-        position: materials.length,
-      });
+      try {
+        const upload = await api.upload(file, `/admin/training/materials/upload?material_type=${encodeURIComponent(type)}`);
+        await persist(file.name || fallbackTitle, {
+          title: file.name || fallbackTitle,
+          material_type: type,
+          delivery_reference: upload.delivery_reference,
+          mime_type: upload.mime_type || null,
+          file_size: upload.file_size || null,
+          metadata_json: upload.metadata_json || {},
+        });
+      } catch (error) {
+        failures.push(`${file.name || fallbackTitle}: ${error.message}`);
+        reportClientError("training_material_upload", error);
+      }
     }
-    for (const material of materials) {
-      await api.request(`/admin/training/${productId}/materials`, { method: "POST", body: JSON.stringify(material) });
-    }
-    return materials.length;
+    return { savedCount, failures };
   }
 
   async function submitTrainingProduct(event) {
@@ -2093,28 +2117,58 @@ async function hideCurrentConversation() {
       const id = form.get("product_id"); const existing = id ? [...state.training, ...state.adminTraining].find((item) => String(item.id) === String(id)) : null;
       let coverUrl = existing?.cover_url || null; const cover = form.get("cover"); if (cover?.size) coverUrl = (await api.upload(cover)).url;
       if (!coverUrl) throw new Error("Добавьте одну основную обложку");
-      const payload = { title: form.get("title"), short_description: form.get("short_description"), full_description: form.get("full_description"), cover_url: coverUrl, promo_video_url: form.get("promo_video_url") || null, product_type: form.get("product_type"), availability: form.get("availability"), price_af_coins: Number(form.get("price_af_coins")), published: form.get("published") === "on", pinned: form.get("pinned") === "on" };
-      const saved = await api.request(id ? `/admin/training/${id}` : "/admin/training", { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) });
-      const materialCount = await saveInitialAutomaticMaterials(saved.id, form);
+      const automatic = form.get("product_type") === "automatic";
+      const wantsPublished = form.get("published") === "on";
+      let existingMaterials = [];
+      if (automatic && id) existingMaterials = await api.request(`/admin/training/${id}/materials`);
+      if (automatic && wantsPublished && !existingMaterials.length && !hasAutomaticMaterialInput(form)) {
+        throw new Error("Для публикации автовыдачи добавьте хотя бы один материал");
+      }
+      const publishAfterMaterials = automatic && wantsPublished && !existingMaterials.length;
+      const payload = { title: form.get("title"), short_description: form.get("short_description"), full_description: form.get("full_description"), cover_url: coverUrl, promo_video_url: form.get("promo_video_url") || null, product_type: form.get("product_type"), availability: form.get("availability"), price_af_coins: Number(form.get("price_af_coins")), published: publishAfterMaterials ? false : wantsPublished, pinned: form.get("pinned") === "on" };
+      let saved = await api.request(id ? `/admin/training/${id}` : "/admin/training", { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) });
+      const materialResult = await saveInitialAutomaticMaterials(saved.id, form, existingMaterials.length);
+      if (publishAfterMaterials && materialResult.savedCount) {
+        try {
+          saved = await api.request(`/admin/training/${saved.id}`, { method: "PATCH", body: JSON.stringify({ published: true }) });
+        } catch (error) {
+          materialResult.failures.push(`Публикация: ${error.message}`);
+          reportClientError("training_publish_after_materials", error);
+        }
+      } else if (publishAfterMaterials && !materialResult.savedCount) {
+        materialResult.failures.push("Обучение оставлено скрытым: ни один материал не был сохранён");
+      }
       const upsert = (items) => [saved, ...items.filter((item) => item.id !== saved.id)];
       state.training = saved.published ? upsert(state.training) : state.training.filter((item) => item.id !== saved.id);
       const previousAdmin = state.adminTraining.find((item) => item.id === saved.id);
       const savedAdmin = { purchase_count: 0, revenue_af_coins: 0, archived: false, ...previousAdmin, ...saved };
       state.adminTraining = [savedAdmin, ...state.adminTraining.filter((item) => item.id !== saved.id)];
-      formElement.reset(); toggleAutomaticMaterialFields(); renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training");
-      if (materialCount) notify(`Сохранено. Материалов добавлено: ${materialCount}`); else notify("Сохранено");
       try {
         await loadAdminTraining(state.adminTrainingFilter);
       } catch (refreshError) {
         reportClientError("training_refresh_after_save", refreshError);
-        notify("Сохранено. Список обновится при следующем открытии.");
       }
+      formElement.reset(); toggleAutomaticMaterialFields(); renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training");
+      const successMessage = id ? "✅ Обучение успешно изменено" : "✅ Обучение успешно создано";
+      notify(materialResult.failures.length ? `${successMessage}. ⚠️ ${materialResult.failures.join("; ")}` : successMessage);
     } catch (error) { notify(error.message); } finally { button.disabled = false; }
   }
 
   async function deleteTrainingProduct(id) {
     if (!(await confirmAction("Удалить это обучение? Купленные заказы и финансовая история сохранятся."))) return;
-    try { await api.request(`/admin/training/${id}`, { method: "DELETE" }); state.training = await api.request("/admin/training"); renderTraining(); notify("Обучение скрыто"); }
+    try {
+      await api.request(`/admin/training/${id}`, { method: "DELETE" });
+      state.training = state.training.filter((item) => String(item.id) !== String(id));
+      state.adminTraining = state.adminTraining.filter((item) => String(item.id) !== String(id));
+      if (String(state.selectedAdminTrainingId || "") === String(id)) {
+        state.selectedAdminTrainingId = null;
+        elements.adminTrainingDetail.hidden = true;
+      }
+      renderTraining(); renderAdminTraining();
+      try { await loadAdminTraining(state.adminTrainingFilter); }
+      catch (refreshError) { reportClientError("training_refresh_after_delete", refreshError); }
+      notify("Обучение удалено");
+    }
     catch (error) { notify(error.message); }
   }
 
@@ -2459,7 +2513,7 @@ async function hideCurrentConversation() {
       const note = document.createElement("span"); note.textContent = "Сохраняются в PostgreSQL";
       const list = document.createElement("div"); list.id = "adminTrainingOrders";
       const orderFilters = document.createElement("div"); orderFilters.className = "training-order-filters";
-      [["new", "PAID"], ["in_progress", "IN_PROGRESS"], ["completed", "COMPLETED"]].forEach(([value, label]) => {
+      [["new", "Ожидают"], ["in_progress", "В процессе"], ["completed", "Завершённые"]].forEach(([value, label]) => {
         const button = document.createElement("button"); button.type = "button"; button.dataset.trainingOrderFilter = value; button.textContent = label; orderFilters.append(button);
       });
       heading.append(title, note); section.append(heading, orderFilters, list); filters.before(section);
@@ -2518,7 +2572,10 @@ async function hideCurrentConversation() {
   }
 
   async function updatePersonalTrainingStatus(button) {
-    if (button.dataset.trainingPurchaseAction === "completed" && !(await confirmAction(`Завершить заказ #${button.dataset.purchaseId.slice(0, 8)}? После подтверждения средства будут рассчитаны.`))) return;
+    const currentPurchase = [...state.adminTrainingOrders, ...state.adminTrainingPurchases].find((item) => String(item.id) === String(button.dataset.purchaseId));
+    const username = currentPurchase?.buyer_username || currentPurchase?.buyer?.username;
+    const buyerLabel = username ? `@${username}` : currentPurchase?.buyer_display_name || `Telegram ID ${currentPurchase?.buyer_telegram_id || "не указан"}`;
+    if (button.dataset.trainingPurchaseAction === "completed" && !(await confirmAction(`Завершить обучение для ${buyerLabel}?`))) return;
     button.disabled = true;
     try {
       const purchase = await api.request(`/admin/training/purchases/${button.dataset.purchaseId}/status`, { method: "PATCH", body: JSON.stringify({ status: button.dataset.trainingPurchaseAction }) });

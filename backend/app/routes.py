@@ -884,13 +884,16 @@ async def manage_training_products(
     statement = (
         select(TrainingProduct, aggregate.c.purchase_count, aggregate.c.revenue)
         .outerjoin(aggregate, aggregate.c.product_id == TrainingProduct.id)
-        .where(TrainingProduct.admin_id == admin.id)
+        .where(
+            TrainingProduct.admin_id == admin.id,
+            TrainingProduct.deleted_at.is_(None),
+        )
         .order_by(TrainingProduct.pinned.desc(), TrainingProduct.created_at.desc())
     )
     if filter == "published":
         statement = statement.where(TrainingProduct.published.is_(True), TrainingProduct.deleted_at.is_(None))
     elif filter == "hidden":
-        statement = statement.where(or_(TrainingProduct.published.is_(False), TrainingProduct.deleted_at.is_not(None)))
+        statement = statement.where(TrainingProduct.published.is_(False))
     elif filter == "pinned":
         statement = statement.where(TrainingProduct.pinned.is_(True), TrainingProduct.deleted_at.is_(None))
     elif filter in {"personal", "automatic"}:
