@@ -43,6 +43,8 @@
     adminBalanceUser: null,
     adminBalanceDirection: "credit",
     purchaseFlow: null,
+    pendingDealDeepLink: new URLSearchParams(window.location.search).get("deal_id"),
+    openingDealDeepLink: false,
     serverAvailable: true,
   };
 
@@ -95,6 +97,7 @@
     dealControls: document.getElementById("dealControls"),
     offerPanel: document.getElementById("offerPanel"),
     chatListing: document.getElementById("chatListing"),
+    dealDeliveryPanel: document.getElementById("dealDeliveryPanel"),
     chatForm: document.getElementById("chatForm"),
     withdrawForm: document.getElementById("withdrawForm"),
     adminWithdrawals: document.getElementById("adminWithdrawals"),
@@ -296,6 +299,7 @@
     void loadOptionalData();
     void openTrainingOrderDeepLink();
     void openSupportCaseDeepLink();
+    void openDealDeepLink();
   }
 
   async function authenticateCurrentUser() {
@@ -648,14 +652,25 @@ function handleClick(event) {
 
   if (!conversationId) return;
 
-  const messages = await api.request(
-    `/conversations/${conversationId}/messages`
-  );
+  const dealId = state.currentConversation?.deal?.id;
+  const [messages, dealDetails] = await Promise.all([
+    api.request(`/conversations/${conversationId}/messages`),
+    dealId ? api.request(`/deals/${dealId}`) : Promise.resolve(null),
+  ]);
 
   const oldLastMessageId = state.messages.at(-1)?.id;
   const newLastMessageId = messages.at(-1)?.id;
 
-  if (oldLastMessageId !== newLastMessageId) {
+  const previousDeal = state.currentConversation?.deal;
+  const refreshedDeal = dealDetails?.deal || null;
+  const dealChanged = refreshedDeal && (
+    previousDeal?.status !== refreshedDeal.status ||
+    previousDeal?.buyer_game_id !== refreshedDeal.buyer_game_id ||
+    previousDeal?.preferred_delivery_time !== refreshedDeal.preferred_delivery_time
+  );
+  if (refreshedDeal) state.currentConversation.deal = refreshedDeal;
+
+  if (oldLastMessageId !== newLastMessageId || dealChanged) {
     state.messages = messages;
     renderConversation();
   }
@@ -1035,7 +1050,7 @@ function handleClick(event) {
     if (elements.purchaseModal?.open) elements.purchaseModal.close();
     state.purchaseFlow = null;
     await refreshMarketplace();
-    showPurchaseSuccess("Покупка оформлена", "Деньги находятся под защитой до подтверждения получения.");
+    showPurchaseSuccess("✅ Покупка успешно оплачена", "Открываем чат этой сделки.");
     if (!deal?.id) return;
     await openDealConversation(deal.id);
   }
@@ -1102,10 +1117,11 @@ function handleClick(event) {
     try {
       const deals = await api.request("/cart/checkout", { method: "POST" });
       await refreshMarketplace();
-      notify("Покупатель оплатил. Деньги под защитой до подтверждения получения");
-      if (deals[0]) {
-        await openDealConversation(deals[0].id);
-      }
+      const [onlyDeal] = deals;
+      if (deals.length === 1) return await finishListingPurchase(onlyDeal);
+      showPurchaseSuccess("✅ Покупки успешно оплачены", `Создано сделок: ${deals.length}`);
+      switchProfileTab("deals");
+      await navigate("profile");
     } catch (error) {
       if (error.status === 402) {
         state.pendingCheckoutTopup = true;
@@ -1583,14 +1599,15 @@ async function hideCurrentConversation() {
       await markConversationRead(id);
       state.messages = await api.request(`/conversations/${id}/messages`);
       renderConversation();
-    } catch (error) { notify(error.message); }
+      return true;
+    } catch (error) { notify(error.message); return false; }
   }
 
   async function openDealConversation(dealId) {
     try {
       const conversation = await api.request(`/deals/${dealId}/conversation`, { method: "POST" });
-      await openConversation(conversation.id, conversation);
-    } catch (error) { notify(error.message); }
+      return await openConversation(conversation.id, conversation);
+    } catch (error) { notify(error.message); return false; }
   }
 
   function renderConversation() {
@@ -1621,9 +1638,88 @@ async function hideCurrentConversation() {
       bubble.append(meta); renderedMessages.push(bubble);
     });
     elements.dealMessages.replaceChildren(...renderedMessages);
+    renderDealDeliveryPanel();
     renderOffers();
     renderDealControls();
     requestAnimationFrame(() => { elements.dealMessages.scrollTop = elements.dealMessages.scrollHeight; });
+  }
+
+  function renderDealDeliveryPanel() {
+    const panel = elements.dealDeliveryPanel;
+    const deal = state.currentConversation?.deal;
+    panel.replaceChildren();
+    panel.hidden = !deal;
+    if (!deal) return;
+    const isBuyer = deal.buyer_id === state.me.user.id;
+    const hasDetails = Boolean(deal.buyer_game_id && deal.preferred_delivery_time);
+
+    const title = document.createElement("strong");
+    const copy = document.createElement("p");
+    if (isBuyer && hasDetails) {
+      title.textContent = "✅ Данные отправлены продавцу";
+      copy.textContent = `ID: ${deal.buyer_game_id}\nВремя: ${deal.preferred_delivery_time}\nОжидайте передачи автомобиля.`;
+      panel.append(title, copy);
+      return;
+    }
+    if (!isBuyer && hasDetails) {
+      title.textContent = "🚗 Передайте автомобиль покупателю";
+      copy.textContent = `ID покупателя: ${deal.buyer_game_id}\nУдобное время: ${deal.preferred_delivery_time}\n\nПередайте автомобиль по указанному ID. После получения покупатель подтвердит передачу, и деньги будут начислены вам. Если возникла проблема — обратитесь в поддержку.`;
+      panel.append(title, copy);
+      return;
+    }
+    if (!isBuyer) {
+      title.textContent = "⏳ Ожидаем данные покупателя";
+      copy.textContent = "Покупатель ещё не указал игровой ID и удобное время передачи. Как только данные появятся, этот блок обновится.";
+      panel.append(title, copy);
+      return;
+    }
+
+    title.textContent = "🚗 Данные для передачи автомобиля";
+    copy.textContent = "Продавцу нужен ваш игровой ID, чтобы передать автомобиль.";
+    const form = document.createElement("form");
+    form.className = "deal-delivery__form";
+    form.innerHTML = `
+      <label>Ваш игровой ID<input name="buyer_game_id" type="text" maxlength="128" autocomplete="off" placeholder="Введите ID" required></label>
+      <fieldset><legend>Когда вам удобно получить автомобиль?</legend>
+        <label><input type="radio" name="delivery_window" value="now" checked> Сейчас</label>
+        <label><input type="radio" name="delivery_window" value="today"> Сегодня</label>
+        <label><input type="radio" name="delivery_window" value="scheduled"> Выбрать время</label>
+      </fieldset>
+      <label class="deal-delivery__time" hidden>Удобное время<input name="preferred_time" type="time"></label>
+      <button type="submit">Отправить продавцу</button>`;
+    form.addEventListener("change", () => {
+      const scheduled = form.elements.delivery_window.value === "scheduled";
+      form.querySelector(".deal-delivery__time").hidden = !scheduled;
+      form.elements.preferred_time.required = scheduled;
+    });
+    form.addEventListener("submit", submitDealDeliveryDetails);
+    panel.append(title, copy, form);
+  }
+
+  async function submitDealDeliveryDetails(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const dealId = state.currentConversation?.deal?.id;
+    const gameId = form.elements.buyer_game_id.value.trim();
+    if (!dealId || !gameId) return notify("Укажите игровой ID");
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const updated = await api.request(`/deals/${dealId}/delivery-details`, {
+        method: "PUT",
+        body: JSON.stringify({
+          buyer_game_id: gameId,
+          delivery_window: form.elements.delivery_window.value,
+          preferred_time: form.elements.preferred_time.value || null,
+        }),
+      });
+      state.currentConversation.deal = updated;
+      state.messages = await api.request(`/conversations/${state.currentConversation.id}/messages`);
+      renderConversation();
+    } catch (error) {
+      notify(error.message);
+      button.disabled = false;
+    }
   }
 
   function renderOffers() {
@@ -2674,6 +2770,22 @@ async function hideCurrentConversation() {
       const ticket = await api.request(`/admin/support/tickets/${ticketId}`);
       elements.adminSupportTickets.replaceChildren(createSupportTicketCard(ticket, true));
     } catch (error) { notify(error.message); }
+  }
+
+  async function openDealDeepLink() {
+    const dealId = state.pendingDealDeepLink;
+    if (!dealId || state.openingDealDeepLink || !state.me) return;
+    state.openingDealDeepLink = true;
+    try {
+      const details = await api.request(`/deals/${encodeURIComponent(dealId)}`);
+      if (!details?.deal?.id) throw new Error("Сделка не найдена");
+      const opened = await openDealConversation(details.deal.id);
+      if (opened) state.pendingDealDeepLink = null;
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      state.openingDealDeepLink = false;
+    }
   }
 
   function switchAdminTab(tab) {

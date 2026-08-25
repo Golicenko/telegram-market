@@ -234,12 +234,24 @@ class Deal(Base, TimestampMixin):
     earned_frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
     seller_payout: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     platform_commission: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    buyer_game_id: Mapped[str | None] = mapped_column(String(128))
+    preferred_delivery_time: Mapped[str | None] = mapped_column(String(64))
+    seller_purchase_notification_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending", index=True
+    )
+    seller_purchase_notification_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    seller_purchase_notification_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    seller_purchase_notification_error: Mapped[str | None] = mapped_column(Text)
     transfer_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     buyer_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         CheckConstraint("status IN ('pending_payment','paid','seller_contacted','transfer_in_progress','buyer_confirmed','completed','disputed','cancelled')", name="ck_deals_status"),
+        CheckConstraint(
+            "seller_purchase_notification_status IN ('pending','sending','sent','failed')",
+            name="ck_deals_seller_purchase_notification_status",
+        ),
         Index(
             "uq_deals_open_listing",
             "listing_id",

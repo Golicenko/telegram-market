@@ -19,6 +19,7 @@ from .bot import (
     answer_pre_checkout_query,
     create_star_invoice_link,
     send_deal_support_case_notification,
+    send_deal_purchase_notification,
     send_personal_training_order_notification,
     send_bot_notification,
     send_bot_menu,
@@ -40,6 +41,7 @@ from .schemas import (
     ConversationMessageCreate,
     CounterOfferCreate,
     DealResolution,
+    DealDeliveryDetailsCreate,
     DealOut,
     ListingCreate,
     ListingOut,
@@ -116,6 +118,7 @@ from .services import (
     resolve_dispute,
     respond_price_offer,
     send_conversation_message,
+    save_deal_delivery_details,
     set_deal_status,
     set_listing_publication,
     update_account_listing,
@@ -402,6 +405,46 @@ async def notify_personal_training_admin(purchase_id: uuid.UUID) -> None:
         purchase.admin_notification_error = error
         purchase.admin_notified_at = None if error else datetime.now(UTC)
         await session.commit()
+
+
+async def notify_deal_purchase_seller(deal_id: uuid.UUID) -> None:
+    """Claim one deal notification durably before touching Telegram."""
+    telegram_id = None
+    async with SessionLocal() as session:
+        async with session.begin():
+            deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+            if not deal or deal.seller_purchase_notification_status != "pending":
+                return
+            deal.seller_purchase_notification_status = "sending"
+            deal.seller_purchase_notification_claimed_at = datetime.now(UTC)
+            seller = await session.get(User, deal.seller_id)
+            if seller and seller.bot_started:
+                telegram_id = seller.telegram_id
+            else:
+                deal.seller_purchase_notification_status = "failed"
+                deal.seller_purchase_notification_error = "Продавец не запускал бота"
+
+    if telegram_id is None:
+        return
+    sent = await send_deal_purchase_notification(telegram_id, deal_id=str(deal_id))
+    async with SessionLocal() as session:
+        async with session.begin():
+            deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+            if not deal or deal.seller_purchase_notification_status != "sending":
+                return
+            deal.seller_purchase_notification_status = "sent" if sent else "failed"
+            deal.seller_purchase_notification_sent_at = datetime.now(UTC) if sent else None
+            deal.seller_purchase_notification_error = None if sent else "Telegram не принял уведомление"
+
+
+async def recover_deal_purchase_notifications() -> None:
+    """Send only notifications that were never claimed before a restart."""
+    async with SessionLocal() as session:
+        pending_ids = list((await session.scalars(
+            select(Deal.id).where(Deal.seller_purchase_notification_status == "pending")
+        )).all())
+    for deal_id in pending_ids:
+        await notify_deal_purchase_seller(deal_id)
 
 
 async def recover_training_background_jobs() -> None:
@@ -700,13 +743,8 @@ async def buy_listing_now(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    deal, seller_telegram_id, created = await purchase_listing(session, user, listing_id)
-    if created and seller_telegram_id:
-        background_tasks.add_task(
-            send_bot_notification,
-            seller_telegram_id,
-            "Ваш товар хотят купить. Покупатель оплатил, деньги находятся под защитой. Откройте AUTOFLOW MARKET.",
-        )
+    deal, _seller_telegram_id, _created = await purchase_listing(session, user, listing_id)
+    background_tasks.add_task(notify_deal_purchase_seller, deal.id)
     return deal
 
 
@@ -1167,9 +1205,9 @@ async def checkout(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    deals, seller_ids = await checkout_cart(session, user)
-    for telegram_id in seller_ids:
-        background_tasks.add_task(send_bot_notification, telegram_id, "Ваш товар хотят купить. Откройте AUTOFLOW MARKET, чтобы ответить покупателю")
+    deals, _seller_ids = await checkout_cart(session, user)
+    for deal in deals:
+        background_tasks.add_task(notify_deal_purchase_seller, deal.id)
     return deals
 
 
@@ -1483,6 +1521,18 @@ async def open_deal_conversation(
     return await conversation_details(session, conversation, user, deal_override=deal)
 
 
+@router.put("/deals/{deal_id}/delivery-details", response_model=DealOut)
+async def update_deal_delivery_details(
+    deal_id: uuid.UUID,
+    payload: DealDeliveryDetailsCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    return await save_deal_delivery_details(
+        session, user, deal_id, payload.buyer_game_id, payload.delivery_window, payload.preferred_time
+    )
+
+
 @router.get("/deals/{deal_id}/messages", response_model=list[MessageOut])
 async def get_messages(deal_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     await ensure_deal_participant(session, deal_id, user)
@@ -1666,13 +1716,9 @@ async def resume_listing_checkout(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    intent, deal, seller_telegram_id = await complete_listing_payment_intent(session, user, intent_id)
-    if deal and seller_telegram_id:
-        background_tasks.add_task(
-            send_bot_notification,
-            seller_telegram_id,
-            "Ваш товар хотят купить. Покупатель оплатил, деньги находятся под защитой. Откройте AUTOFLOW MARKET.",
-        )
+    intent, deal, _seller_telegram_id = await complete_listing_payment_intent(session, user, intent_id)
+    if deal:
+        background_tasks.add_task(notify_deal_purchase_seller, deal.id)
     wallet_value = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
     messages = {
         "completed": "Покупка оформлена. Деньги находятся под защитой.",
@@ -2401,16 +2447,11 @@ async def telegram_webhook(
                         )
                         background_tasks.add_task(notify_personal_training_admin, purchase.id)
         elif payment_intent and payment_user and payment_intent.purpose == "listing_checkout":
-            completed_intent, deal, seller_telegram_id = await complete_listing_payment_intent(
+            completed_intent, deal, _seller_telegram_id = await complete_listing_payment_intent(
                 session, payment_user, payment_intent.id
             )
             if deal:
-                if seller_telegram_id:
-                    background_tasks.add_task(
-                        send_bot_notification,
-                        seller_telegram_id,
-                        "Ваш товар хотят купить. Покупатель оплатил, деньги находятся под защитой. Откройте AUTOFLOW MARKET.",
-                    )
+                background_tasks.add_task(notify_deal_purchase_seller, deal.id)
                 background_tasks.add_task(
                     send_bot_notification,
                     int(sender["id"]),
@@ -2432,7 +2473,7 @@ async def telegram_webhook(
             try:
                 if current_cart_ids != expected_cart_ids:
                     raise HTTPException(status_code=409, detail="Состав корзины изменился после выставления счёта")
-                deals, seller_ids = await checkout_cart(session, payment_user)
+                deals, _seller_ids = await checkout_cart(session, payment_user)
             except HTTPException as error:
                 await create_notification(
                     session,
@@ -2443,7 +2484,7 @@ async def telegram_webhook(
                 )
                 await session.commit()
             else:
-                for telegram_id in seller_ids:
-                    background_tasks.add_task(send_bot_notification, telegram_id, "Ваш товар хотят купить. Откройте AUTOFLOW MARKET, чтобы ответить покупателю")
+                for deal in deals:
+                    background_tasks.add_task(notify_deal_purchase_seller, deal.id)
                 background_tasks.add_task(send_bot_notification, int(sender["id"]), f"Покупка оформлена. Создано сделок: {len(deals)}")
     return {"ok": True}

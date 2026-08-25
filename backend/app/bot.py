@@ -267,6 +267,50 @@ async def send_personal_training_order_notification(telegram_id: int, **order) -
     return True
 
 
+def deal_purchase_notification_payload(
+    telegram_id: int,
+    *,
+    deal_id: str,
+    public_url: str,
+) -> dict:
+    target = versioned_webapp_url(
+        f"{public_url.rstrip('/')}/?{urlencode({'deal_id': deal_id})}"
+    )
+    return {
+        "chat_id": telegram_id,
+        "text": (
+            "💰 Вашу машину купили\n\n"
+            "Покупатель уже оплатил покупку. Деньги находятся под защитой.\n"
+            "Откройте сделку и передайте автомобиль по игровому ID, который укажет покупатель.\n"
+            "После получения автомобиля покупатель подтвердит передачу, и деньги будут начислены вам."
+        ),
+        "reply_markup": {
+            "inline_keyboard": [[{
+                "text": "🚗 Открыть сделку",
+                "web_app": {"url": target},
+            }]]
+        },
+    }
+
+
+async def send_deal_purchase_notification(telegram_id: int, *, deal_id: str) -> bool:
+    public_url = get_settings().externally_reachable_url
+    if not public_url:
+        return False
+    try:
+        await call_bot_api(
+            "sendMessage",
+            deal_purchase_notification_payload(
+                telegram_id,
+                deal_id=deal_id,
+                public_url=public_url,
+            ),
+        )
+        return True
+    except HTTPException:
+        return False
+
+
 def deal_support_case_payload(
     telegram_id: int,
     *,
