@@ -28,13 +28,15 @@ from .bot import (
 )
 from .config import Settings, get_settings
 from .database import SessionLocal, get_session
-from .models import AccountListing, AdminAction, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportCaseEvent, SupportMessage, SupportTicket, TrainingMaterial, TrainingProduct, TrainingPurchase, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
+from .models import AccountListing, AdminAction, AdminBroadcast, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportCaseEvent, SupportMessage, SupportTicket, TrainingMaterial, TrainingProduct, TrainingPurchase, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
 from .schemas import (
     AccountListingCreate,
     AccountListingOut,
     AccountListingUpdate,
     AdvertisementOut,
     AdvertisementUpsert,
+    AdminBroadcastCreate,
+    AdminBroadcastOut,
     AdminWithdrawalOut,
     BalanceAdjustmentCreate,
     ConversationMessageOut,
@@ -680,6 +682,62 @@ async def delete_advertisement(
                 target_id=advertisement_id,
             )
         )
+
+
+@router.post("/admin/broadcasts", response_model=AdminBroadcastOut, status_code=201)
+async def create_broadcast_from_admin_panel(
+    payload: AdminBroadcastCreate,
+    background_tasks: BackgroundTasks,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    if not payload.text and not payload.photo_url:
+        raise HTTPException(status_code=422, detail="Добавьте текст или фотографию")
+    if payload.photo_url and len(payload.text) > 1024:
+        raise HTTPException(status_code=422, detail="Подпись к фотографии не должна превышать 1024 символа")
+    existing = await session.scalar(
+        select(AdminBroadcast).where(AdminBroadcast.client_request_id == payload.client_request_id)
+    )
+    if existing:
+        return existing
+    broadcast_id = await create_admin_broadcast(
+        session,
+        telegram_update_id=None,
+        client_request_id=payload.client_request_id,
+        admin_telegram_id=admin.telegram_id,
+        content_type="photo" if payload.photo_url else "text",
+        text=payload.text,
+        photo_file_id=payload.photo_url,
+    )
+    if broadcast_id is None:
+        raise HTTPException(status_code=409, detail="Другая рассылка ещё отправляется. Дождитесь её завершения")
+    broadcast = await session.get(AdminBroadcast, broadcast_id)
+    background_tasks.add_task(run_admin_broadcast, broadcast_id)
+    return broadcast
+
+
+@router.get("/admin/broadcasts", response_model=list[AdminBroadcastOut])
+async def list_admin_broadcasts(
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    del admin
+    return list((await session.scalars(
+        select(AdminBroadcast).order_by(AdminBroadcast.created_at.desc()).limit(30)
+    )).all())
+
+
+@router.get("/admin/broadcasts/{broadcast_id}", response_model=AdminBroadcastOut)
+async def get_admin_broadcast(
+    broadcast_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    del admin
+    broadcast = await session.get(AdminBroadcast, broadcast_id)
+    if not broadcast:
+        raise HTTPException(status_code=404, detail="Рассылка не найдена")
+    return broadcast
 
 
 @router.get("/listings", response_model=list[ListingOut])
@@ -2373,6 +2431,11 @@ async def telegram_webhook(
                 photo_file_id=photo_file_id,
             )
             if broadcast_id is not None:
+                background_tasks.add_task(
+                    send_bot_notification,
+                    int(sender["id"]),
+                    f"Рассылка запущена\nID: #{str(broadcast_id)[:8]}",
+                )
                 background_tasks.add_task(run_admin_broadcast, broadcast_id)
             return {"ok": True, "accepted": broadcast_id is not None}
     start_text = str(message.get("text") or "").strip()

@@ -526,12 +526,14 @@ class AdminAction(Base):
 class AdminBroadcast(Base):
     __tablename__ = "admin_broadcasts"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    telegram_update_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    telegram_update_id: Mapped[int | None] = mapped_column(BigInteger)
+    client_request_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     admin_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
     content_type: Mapped[str] = mapped_column(String(16), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     photo_file_id: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued", index=True)
+    total_recipients: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sent_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -540,15 +542,36 @@ class AdminBroadcast(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     __table_args__ = (
         UniqueConstraint("telegram_update_id", name="uq_admin_broadcast_telegram_update"),
+        UniqueConstraint("client_request_id", name="uq_admin_broadcast_client_request"),
         CheckConstraint("content_type IN ('text','photo')", name="ck_admin_broadcast_content_type"),
-        CheckConstraint("status IN ('pending','running','completed','failed')", name="ck_admin_broadcast_status"),
-        CheckConstraint("sent_count >= 0 AND failed_count >= 0", name="ck_admin_broadcast_counts"),
+        CheckConstraint("status IN ('draft','queued','running','completed','failed')", name="ck_admin_broadcast_status"),
+        CheckConstraint("total_recipients >= 0 AND sent_count >= 0 AND failed_count >= 0", name="ck_admin_broadcast_counts"),
         Index(
             "uq_admin_broadcast_active_admin",
             "admin_telegram_id",
             unique=True,
-            postgresql_where=sql_text("status IN ('pending','running')"),
+            postgresql_where=sql_text("status IN ('queued','running')"),
         ),
+    )
+
+
+class AdminBroadcastRecipient(Base):
+    __tablename__ = "admin_broadcast_recipients"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    broadcast_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("admin_broadcasts.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_type: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("broadcast_id", "user_id", name="uq_broadcast_recipient_user"),
+        CheckConstraint("status IN ('pending','sending','sent','failed')", name="ck_broadcast_recipient_status"),
+        CheckConstraint("attempts >= 0", name="ck_broadcast_recipient_attempts"),
     )
 
 

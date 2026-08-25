@@ -1,5 +1,6 @@
 import httpx
 import logging
+from dataclasses import dataclass
 from fastapi import HTTPException
 from urllib.parse import quote, urlencode
 
@@ -8,6 +9,14 @@ from .frontend import versioned_webapp_url
 
 
 logger = logging.getLogger("autoflow.bot")
+
+
+@dataclass(frozen=True)
+class BroadcastSendResult:
+    success: bool
+    error_type: str | None = None
+    error_message: str | None = None
+    retry_after: int | None = None
 
 
 START_MENU_TEXT = """👋 Добро пожаловать в AutoFlow Market
@@ -404,6 +413,70 @@ async def send_bot_photo(
         return response.is_success and bool(response.json().get("ok"))
     except (httpx.HTTPError, ValueError):
         return False
+
+
+def broadcast_market_payload(
+    telegram_id: int,
+    *,
+    text: str,
+    photo: str | None,
+    public_url: str,
+) -> tuple[str, dict]:
+    market_url = versioned_webapp_url(public_url)
+    payload: dict = {
+        "chat_id": telegram_id,
+        "reply_markup": {
+            "inline_keyboard": [[{
+                "text": "🚘 Открыть Market",
+                "web_app": {"url": market_url},
+            }]]
+        },
+    }
+    if photo:
+        payload["photo"] = photo
+        if text:
+            payload["caption"] = text[:1024]
+        return "sendPhoto", payload
+    payload["text"] = text[:4096]
+    return "sendMessage", payload
+
+
+async def send_broadcast_message(
+    telegram_id: int,
+    *,
+    text: str,
+    photo: str | None = None,
+) -> BroadcastSendResult:
+    settings = get_settings()
+    public_url = settings.externally_reachable_url
+    if not settings.bot_token or not public_url:
+        return BroadcastSendResult(False, "configuration", "BOT_TOKEN или публичный URL не настроен")
+    if photo and photo.startswith("/"):
+        photo = f"{public_url.rstrip('/')}{photo}"
+    method, payload = broadcast_market_payload(
+        telegram_id, text=text, photo=photo, public_url=public_url
+    )
+    url = f"https://api.telegram.org/bot{settings.bot_token}/{method}"
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(url, json=payload)
+        data = response.json()
+    except httpx.HTTPError:
+        return BroadcastSendResult(False, "network", "Telegram Bot API временно недоступен")
+    except ValueError:
+        return BroadcastSendResult(False, "invalid_response", "Telegram вернул некорректный ответ")
+    if not isinstance(data, dict):
+        return BroadcastSendResult(False, "invalid_response", "Telegram вернул некорректный ответ")
+    if response.is_success and data.get("ok"):
+        return BroadcastSendResult(True)
+    raw_retry_after = data.get("parameters", {}).get("retry_after") if isinstance(data.get("parameters"), dict) else None
+    try:
+        retry_after = int(raw_retry_after) if raw_retry_after is not None else None
+    except (TypeError, ValueError):
+        retry_after = None
+    description = str(data.get("description") or "Telegram отклонил отправку")[:500]
+    error_type = "rate_limited" if response.status_code == 429 else "recipient_unavailable" if response.status_code in {400, 403} else "telegram_api"
+    return BroadcastSendResult(False, error_type, description, retry_after)
 
 
 async def send_bot_material(telegram_id: int, material_type: str, reference: str, title: str) -> bool:
