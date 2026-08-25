@@ -222,7 +222,7 @@
     bind(elements.withdrawForm, "submit", createWithdrawal, "withdrawForm");
     bind(document.getElementById("trainingForm"), "submit", submitTrainingProduct, "trainingForm");
     bind(trainingForm?.elements.product_type, "change", toggleAutomaticMaterialFields, "trainingProductType");
-    bind(document.getElementById("trainingBuyButton"), "click", buyTrainingProduct, "trainingBuyButton");
+    bind(document.getElementById("trainingBuyButton"), "click", () => buyTrainingProduct(), "trainingBuyButton");
     bind(document.getElementById("trainingMaterialForm"), "submit", saveTrainingMaterial, "trainingMaterialForm");
     bind(elements.supportForm, "submit", submitSupportTicket, "supportForm");
     bind(elements.advertisementForm, "submit", submitAdvertisement, "advertisementForm");

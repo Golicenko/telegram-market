@@ -71,6 +71,14 @@ test("training cards expose a real buy action and automatic editor has protected
   assert.match(app, /saveInitialAutomaticMaterials/);
 });
 
+test("training purchase works from both the catalog card and the details screen", () => {
+  assert.match(app, /trainingBuy\.dataset\.buyTraining/);
+  assert.match(app, /buyTrainingProduct\(trainingBuy\.dataset\.buyTraining\)/);
+  assert.match(app, /bind\(document\.getElementById\("trainingBuyButton"\), "click", \(\) => buyTrainingProduct\(\)/);
+  assert.match(app, /: state\.selectedTraining/);
+  assert.doesNotMatch(app, /"click", buyTrainingProduct, "trainingBuyButton"/);
+});
+
 test("automatic materials are persisted one by one and publication waits for a saved material", () => {
   const materialFlow = app.slice(app.indexOf("async function saveInitialAutomaticMaterials"), app.indexOf("async function submitTrainingProduct"));
   assert.match(materialFlow, /await api\.request\(`\/admin\/training\/\$\{productId\}\/materials`/);
