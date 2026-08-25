@@ -10,10 +10,11 @@ const css = fs.readFileSync(path.join(root, "css", "style.css"), "utf8");
 
 test("training save is successful before optional refresh", () => {
   const flow = app.slice(app.indexOf("async function submitTrainingProduct"), app.indexOf("async function deleteTrainingProduct"));
-  assert.match(flow, /const saved = await api\.request/);
-  assert.match(flow, /notify\("Сохранено"\)/);
+  assert.match(flow, /let saved = await api\.request/);
+  assert.match(flow, /✅ Обучение успешно изменено/);
   assert.match(flow, /training_refresh_after_save/);
-  assert.ok(flow.indexOf('notify("Сохранено")') < flow.indexOf("await loadAdminTraining"));
+  assert.ok(flow.indexOf("let saved = await api.request") < flow.indexOf("await loadAdminTraining"));
+  assert.ok(flow.indexOf("await loadAdminTraining") < flow.indexOf("notify(materialResult.failures.length"));
 });
 
 test("deal support replaces the accidental dispute action and is idempotent", () => {

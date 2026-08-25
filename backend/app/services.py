@@ -322,6 +322,11 @@ async def delete_account_listing(session: AsyncSession, admin: User, account_id:
 async def create_training_product(session: AsyncSession, admin: User, payload) -> TrainingProduct:
     if admin.role != "admin":
         raise HTTPException(status_code=403, detail="Только администратор может создавать обучение")
+    if payload.product_type == "automatic" and payload.published:
+        raise HTTPException(
+            status_code=409,
+            detail="Сначала сохраните хотя бы один материал, затем опубликуйте обучение",
+        )
     async with session.begin():
         product = TrainingProduct(
             admin_id=admin.id,
@@ -352,6 +357,18 @@ async def update_training_product(session: AsyncSession, admin: User, product_id
         if product.admin_id != admin.id:
             raise HTTPException(status_code=403, detail="Можно изменять только собственные обучения")
         changes = payload.model_dump(exclude_unset=True)
+        target_type = changes.get("product_type", product.product_type)
+        target_published = changes.get("published", product.published)
+        if target_type == "automatic" and target_published and not await session.scalar(
+            select(TrainingMaterial.id).where(
+                TrainingMaterial.product_id == product.id,
+                TrainingMaterial.is_active.is_(True),
+            ).limit(1)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Сначала сохраните хотя бы один материал, затем опубликуйте обучение",
+            )
         for field, value in changes.items():
             if field == "price_af_coins" and value is not None:
                 value = money(value)
@@ -391,6 +408,16 @@ async def set_training_product_state(
         if product.admin_id != admin.id:
             raise HTTPException(status_code=403, detail="Можно управлять только собственными обучениями")
         if action == "publish":
+            if product.product_type == "automatic" and not await session.scalar(
+                select(TrainingMaterial.id).where(
+                    TrainingMaterial.product_id == product.id,
+                    TrainingMaterial.is_active.is_(True),
+                ).limit(1)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Сначала сохраните хотя бы один материал, затем опубликуйте обучение",
+                )
             product.deleted_at = None
             product.published = True
         elif action == "hide":

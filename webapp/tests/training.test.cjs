@@ -58,8 +58,9 @@ test("admin training orders expose durable notification state and filters", () =
   assert.match(app, /Promise\.allSettled/);
   assert.match(app, /awaiting_start: "Оплачено"/);
   assert.match(app, /awaiting_start: "PAID"/);
-  assert.match(app, /\["new", "PAID"\]/);
+  assert.match(app, /\["new", "Ожидают"\]/);
   assert.match(app, /"✅ Завершить"/);
+  assert.match(app, /Завершить обучение для \$\{buyerLabel\}\?/);
 });
 
 test("training cards expose a real buy action and automatic editor has protected material inputs", () => {
@@ -68,4 +69,21 @@ test("training cards expose a real buy action and automatic editor has protected
   assert.match(html, /name="automatic_video"/);
   assert.match(html, /name="automatic_file"/);
   assert.match(app, /saveInitialAutomaticMaterials/);
+});
+
+test("automatic materials are persisted one by one and publication waits for a saved material", () => {
+  const materialFlow = app.slice(app.indexOf("async function saveInitialAutomaticMaterials"), app.indexOf("async function submitTrainingProduct"));
+  assert.match(materialFlow, /await api\.request\(`\/admin\/training\/\$\{productId\}\/materials`/);
+  assert.match(materialFlow, /await persist\(file\.name \|\| fallbackTitle/);
+  assert.match(app, /publishAfterMaterials/);
+  assert.match(app, /materialResult\.savedCount/);
+  assert.match(app, /Обучение оставлено скрытым: ни один материал не был сохранён/);
+});
+
+test("deleted training disappears from both public and admin state before backend refresh", () => {
+  const flow = app.slice(app.indexOf("async function deleteTrainingProduct"), app.indexOf("async function submitSupportTicket"));
+  assert.match(flow, /state\.training = state\.training\.filter/);
+  assert.match(flow, /state\.adminTraining = state\.adminTraining\.filter/);
+  assert.match(flow, /await loadAdminTraining\(state\.adminTrainingFilter\)/);
+  assert.match(flow, /notify\("Обучение удалено"\)/);
 });

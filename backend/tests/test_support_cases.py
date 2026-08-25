@@ -188,8 +188,9 @@ def test_frontend_training_success_and_support_workflows_are_explicit():
     root = Path(__file__).parents[2]
     app = (root / "webapp" / "js" / "app.js").read_text(encoding="utf-8")
     css = (root / "webapp" / "css" / "style.css").read_text(encoding="utf-8")
-    assert 'const saved = await api.request(id ? `/admin/training/${id}`' in app
-    assert 'notify("Сохранено")' in app
+    assert 'let saved = await api.request(id ? `/admin/training/${id}`' in app
+    assert '✅ Обучение успешно изменено' in app
+    assert 'materialResult.failures.length' in app
     assert 'training_refresh_after_save' in app
     assert "Возникла проблема" not in app
     assert "🛟 Написать в поддержку" in app

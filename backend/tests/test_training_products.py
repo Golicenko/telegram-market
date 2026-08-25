@@ -4,9 +4,10 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import Text
 
-from app.models import AccountListing, Base, TrainingProduct, TrainingPurchase, User
-from app.schemas import TrainingProductCreate, TrainingProductOut
-from app.services import create_training_product
+from app import routes
+from app.models import AccountListing, AdminAction, Base, TrainingProduct, TrainingPurchase, User
+from app.schemas import TrainingProductCreate, TrainingProductOut, TrainingProductUpdate
+from app.services import create_training_product, delete_training_product, set_training_product_state, update_training_product
 
 
 class Transaction:
@@ -18,8 +19,9 @@ class Transaction:
 
 
 class Session:
-    def __init__(self):
+    def __init__(self, scalar_values=()):
         self.added = []
+        self.scalar_values = list(scalar_values)
 
     def begin(self):
         return Transaction()
@@ -29,6 +31,9 @@ class Session:
 
     async def flush(self):
         return None
+
+    async def scalar(self, _query):
+        return self.scalar_values.pop(0) if self.scalar_values else None
 
 
 def payload():
@@ -93,3 +98,77 @@ async def test_admin_can_create_pinned_training_for_free():
     assert product.product_type == "personal"
     assert product.price_af_coins == Decimal("250.00")
     assert not any(item.__class__.__name__ == "WalletTransaction" for item in session.added)
+
+
+@pytest.mark.asyncio
+async def test_automatic_training_is_created_as_draft_until_material_exists():
+    admin = User(id=uuid.uuid4(), telegram_id=2, first_name="Admin", role="admin")
+    automatic = payload().model_copy(update={"product_type": "automatic", "published": True})
+    with pytest.raises(HTTPException) as error:
+        await create_training_product(Session(), admin, automatic)
+    assert error.value.status_code == 409
+    assert "материал" in error.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_automatic_training_cannot_be_published_without_saved_material():
+    admin = User(id=uuid.uuid4(), telegram_id=2, first_name="Admin", role="admin")
+    product = TrainingProduct(
+        id=uuid.uuid4(), admin_id=admin.id, title="Автокурс", short_description="Кратко",
+        full_description="Полностью", cover_url="/cover.jpg", product_type="automatic",
+        price_af_coins=Decimal("100"), availability="available", published=False, pinned=False,
+    )
+    with pytest.raises(HTTPException) as update_error:
+        await update_training_product(Session([product, None]), admin, product.id, TrainingProductUpdate(published=True))
+    assert update_error.value.status_code == 409
+    assert product.published is False
+
+    with pytest.raises(HTTPException) as state_error:
+        await set_training_product_state(Session([product, None]), admin, product.id, "publish")
+    assert state_error.value.status_code == 409
+    assert product.published is False
+
+
+@pytest.mark.asyncio
+async def test_automatic_training_can_be_published_after_material_is_saved():
+    admin = User(id=uuid.uuid4(), telegram_id=2, first_name="Admin", role="admin")
+    product = TrainingProduct(
+        id=uuid.uuid4(), admin_id=admin.id, title="Автокурс", short_description="Кратко",
+        full_description="Полностью", cover_url="/cover.jpg", product_type="automatic",
+        price_af_coins=Decimal("100"), availability="available", published=False, pinned=False,
+    )
+    updated = await update_training_product(
+        Session([product, uuid.uuid4()]), admin, product.id, TrainingProductUpdate(published=True)
+    )
+    assert updated.published is True
+
+
+@pytest.mark.asyncio
+async def test_deleted_training_is_soft_deleted_and_excluded_from_admin_management():
+    admin = User(id=uuid.uuid4(), telegram_id=2, first_name="Admin", role="admin")
+    product = TrainingProduct(
+        id=uuid.uuid4(), admin_id=admin.id, title="Курс", short_description="Кратко",
+        full_description="Полностью", cover_url="/cover.jpg", product_type="personal",
+        price_af_coins=Decimal("100"), availability="available", published=True, pinned=True,
+    )
+    delete_session = Session([product])
+    await delete_training_product(delete_session, admin, product.id)
+    assert product.deleted_at is not None
+    assert product.published is False
+    assert product.pinned is False
+    assert any(isinstance(item, AdminAction) and item.action == "delete_training_product" for item in delete_session.added)
+
+    class Rows:
+        def all(self):
+            return []
+
+    class ManagementSession:
+        statement = None
+
+        async def execute(self, statement):
+            self.statement = statement
+            return Rows()
+
+    management_session = ManagementSession()
+    assert await routes.manage_training_products("all", admin, management_session) == []
+    assert "training_products.deleted_at IS NULL" in str(management_session.statement)
