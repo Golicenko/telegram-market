@@ -231,19 +231,20 @@ def personal_training_order_payload(
     buyer_name: str,
     buyer_username: str | None,
     buyer_telegram_id: int,
-    price_xtr: int,
+    price_af_coins: int,
     public_url: str | None,
 ) -> dict:
     username = (buyer_username or "").lstrip("@").strip()
     username_line = f"@{username}" if username else "не указан"
     text = (
-        "🎓 Новый заказ на персональное обучение\n\n"
+        "🎓 Новое персональное обучение\n\n"
         f"Обучение: {title}\n"
         f"Покупатель: {buyer_name}\n"
         f"Username: {username_line}\n"
         f"Telegram ID: {buyer_telegram_id}\n"
-        f"Оплачено: {price_xtr} ⭐\n"
-        "Статус: Оплачено / ожидает обучения"
+        f"Стоимость: {price_af_coins} AF Coins\n"
+        "Статус: Оплачено\n"
+        f"Заказ: #{purchase_id[:8]}"
     )
     button_rows = []
     if username:

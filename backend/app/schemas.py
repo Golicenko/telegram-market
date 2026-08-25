@@ -394,8 +394,9 @@ class NotificationOut(ORMModel):
 
 
 class StarPaymentIntentCreate(BaseModel):
-    amount: int = Field(ge=10, le=1000)
-    purpose: str = Field(default="topup", pattern="^(topup|cart_checkout)$")
+    amount: int = Field(ge=1, le=1000)
+    purpose: str = Field(default="topup", pattern="^(topup|cart_checkout|training_topup)$")
+    training_product_id: uuid.UUID | None = None
 
 
 class StarPaymentIntentOut(BaseModel):

@@ -221,6 +221,7 @@
     bind(elements.chatListing, "click", openChatListing, "chatListing");
     bind(elements.withdrawForm, "submit", createWithdrawal, "withdrawForm");
     bind(document.getElementById("trainingForm"), "submit", submitTrainingProduct, "trainingForm");
+    bind(trainingForm?.elements.product_type, "change", toggleAutomaticMaterialFields, "trainingProductType");
     bind(document.getElementById("trainingBuyButton"), "click", buyTrainingProduct, "trainingBuyButton");
     bind(document.getElementById("trainingMaterialForm"), "submit", saveTrainingMaterial, "trainingMaterialForm");
     bind(elements.supportForm, "submit", submitSupportTicket, "supportForm");
@@ -517,6 +518,8 @@ function handleClick(event) {
     if (target.closest("[data-new-offer]")) return void createOffer();
     const trainingOpen = target.closest("[data-open-training-product]");
     if (trainingOpen) return void openTrainingProduct(trainingOpen.dataset.openTrainingProduct);
+    const trainingBuy = target.closest("[data-buy-training]");
+    if (trainingBuy) return void buyTrainingProduct(trainingBuy.dataset.buyTraining);
     const trainingEdit = target.closest("[data-edit-training]");
     if (trainingEdit) return void openTrainingEditor(trainingEdit.dataset.editTraining);
     const trainingDelete = target.closest("[data-delete-training]");
@@ -909,8 +912,15 @@ function handleClick(event) {
       const type = document.createElement("span"); type.className = "training-type"; type.textContent = trainingTypeLabel(product.product_type);
       const title = document.createElement("h3"); title.textContent = product.title;
       const description = document.createElement("p"); description.textContent = product.short_description;
-      const footer = document.createElement("div"); footer.className = "training-card__footer"; const price = document.createElement("strong"); price.textContent = `${formatNumber(product.price_af_coins)} ⭐`; const arrow = document.createElement("span"); arrow.textContent = "Подробнее ›"; footer.append(price, arrow);
+      const footer = document.createElement("div"); footer.className = "training-card__footer"; const price = document.createElement("strong"); price.append(document.createTextNode(`${formatNumber(product.price_af_coins)} `), coin("af-coin--small")); const arrow = document.createElement("span"); arrow.textContent = "Подробнее ›"; footer.append(price, arrow);
       body.append(type, title, description, footer); open.append(media, body); card.append(open);
+      const purchase = state.trainingPurchases.find((item) => String(item.product_id) === String(product.id));
+      if (state.me?.user.id !== product.admin_id) {
+        const buy = document.createElement("button"); buy.type = "button"; buy.className = "training-card__buy"; buy.dataset.buyTraining = product.id;
+        buy.disabled = Boolean(purchase) || product.availability !== "available";
+        buy.textContent = purchase ? "Уже куплено" : product.availability === "available" ? "Купить" : trainingAvailabilityLabel(product.availability);
+        card.append(buy);
+      }
       if (state.me?.user.role === "admin") { const actions = document.createElement("div"); actions.className = "training-admin-actions"; const edit = document.createElement("button"); edit.dataset.editTraining = product.id; edit.textContent = "Изменить"; const remove = document.createElement("button"); remove.dataset.deleteTraining = product.id; remove.textContent = "Удалить"; actions.append(edit, remove); card.append(actions); }
       return card;
     }));
@@ -952,6 +962,10 @@ function handleClick(event) {
   async function runPurchaseFlowAction() {
     const flow = state.purchaseFlow;
     if (!flow || flow.busy) return;
+    if (flow.kind === "training") {
+      if (flow.stage === "confirm") return executeTrainingPurchase(flow);
+      if (flow.stage === "topup") return payTrainingShortfall(flow);
+    }
     if (flow.stage === "confirm") return executeSafeListingPurchase(flow);
     if (flow.stage === "topup") return payListingShortfall(flow);
     closePurchaseFlow();
@@ -1919,43 +1933,100 @@ async function hideCurrentConversation() {
     } catch (error) { notify(error.message); }
   }
 
-  async function buyTrainingProduct() {
-    const product = state.selectedTraining;
-    const button = document.getElementById("trainingBuyButton");
-    if (!product || button.disabled) return;
-    if (!(await confirmAction(`Купить «${product.title}» за ${formatNumber(product.price_af_coins)} Telegram Stars?`))) return;
-    if (!telegram?.initData || typeof telegram.openInvoice !== "function") return notify("Откройте AUTOFLOW MARKET внутри Telegram для оплаты");
-    button.disabled = true;
+  async function buyTrainingProduct(productId = null) {
+    const product = productId
+      ? state.training.find((item) => String(item.id) === String(productId))
+      : state.selectedTraining;
+    if (!product) return notify("Обучение не найдено");
+    if (state.trainingPurchases.some((item) => String(item.product_id) === String(product.id))) return notify("Вы уже приобрели это обучение");
+    const balance = Number(state.me?.wallet?.available_balance || 0);
+    state.purchaseFlow = { kind: "training", product, stage: "confirm", busy: false, intentId: null };
+    elements.purchaseModalTitle.textContent = `Купить «${product.title}»?`;
+    elements.purchaseModalText.textContent = `Стоимость: ${formatNumber(product.price_af_coins)} AF Coins. Ваш баланс: ${formatNumber(balance)} AF Coins.`;
+    elements.purchaseModalAmount.replaceChildren(document.createTextNode(`${formatNumber(product.price_af_coins)} `), coin("af-coin--small"));
+    elements.purchaseModalNote.textContent = product.product_type === "personal"
+      ? "Средства будут защищены до завершения обучения администратором."
+      : "После покупки бот автоматически отправит подготовленные материалы.";
+    elements.purchaseModalAction.textContent = `Оплатить ${formatNumber(product.price_af_coins)} AF Coins`;
+    elements.purchaseModalAction.disabled = false;
+    openDialog(elements.purchaseModal);
+  }
+
+  async function executeTrainingPurchase(flow) {
+    flow.busy = true; elements.purchaseModalAction.disabled = true; elements.purchaseModalAction.textContent = "Проверяем баланс…";
     try {
-      const intent = await api.request(`/training/${product.id}/purchase-intent`, { method: "POST" });
-      const invoiceStatus = await new Promise((resolve, reject) => {
-        try { telegram.openInvoice(intent.invoice_url, resolve); }
-        catch (error) { reject(error); }
-      });
-      if (invoiceStatus === "cancelled" || invoiceStatus === "failed") {
-        button.disabled = false;
-        return notify(invoiceStatus === "cancelled" ? "Оплата отменена" : "Telegram не завершил оплату");
-      }
-      const payment = await waitForTrainingPayment(intent.id);
-      if (payment.checkout_status !== "completed") throw new Error(payment.message || "Сервер ещё завершает оформление заказа");
+      const purchase = await api.request(`/training/${flow.product.id}/purchase`, { method: "POST" });
+      state.me = await api.request("/me");
       await loadOptionalData(["trainingPurchases", "profile"], { allowRecovery: false });
-      renderTrainingLibrary();
-      button.textContent = "Уже куплено";
-      notify(product.product_type === "automatic" ? "✅ Оплата получена. Материалы отправляются ботом" : "✅ Оплата прошла успешно. Ваш заказ на персональное обучение принят. Статус: Ожидает обучения");
+      if (elements.purchaseModal?.open) elements.purchaseModal.close();
+      state.purchaseFlow = null;
+      renderBalance(); renderTraining(); renderTrainingLibrary();
+      const button = document.getElementById("trainingBuyButton");
+      if (state.selectedTraining && String(state.selectedTraining.id) === String(flow.product.id)) { button.disabled = true; button.textContent = "Уже куплено"; }
+      notify(purchase.product_type === "automatic" ? "✅ Обучение куплено. Материалы отправляются ботом" : "✅ Заказ создан. Статус: Ожидает обучения");
     } catch (error) {
-      button.disabled = false;
-      notify(error.message);
+      if (Number(error.status) === 402 && error.detail?.code === "insufficient_af_coins") {
+        const missing = Number(error.detail.missing_af_coins || 0);
+        flow.stage = "topup"; flow.busy = false; flow.missing = missing; flow.intentId = null;
+        elements.purchaseModalTitle.textContent = "Недостаточно AF Coins";
+        elements.purchaseModalText.textContent = `Недостаточно ${formatNumber(missing)} AF Coins`;
+        elements.purchaseModalAmount.replaceChildren(document.createTextNode(`${formatNumber(missing)} `), coin("af-coin--small"));
+        elements.purchaseModalNote.textContent = "Пополните недостающие AF Coins через Telegram Stars. После серверного подтверждения покупка продолжится.";
+        elements.purchaseModalAction.textContent = `Пополнить ${Math.ceil(missing)} AF Coins`;
+        elements.purchaseModalAction.disabled = false;
+        return;
+      }
+      flow.busy = false; elements.purchaseModalAction.disabled = false; elements.purchaseModalAction.textContent = "Повторить"; elements.purchaseModalText.textContent = error.message;
     }
   }
 
-  async function waitForTrainingPayment(intentId) {
-    let payment = null;
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      payment = await api.request(`/wallet/star-payments/intents/${intentId}`);
-      if (payment.checkout_status === "completed" || payment.checkout_status === "failed") return payment;
-      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+  async function payTrainingShortfall(flow) {
+    if (!telegram?.initData || typeof telegram.openInvoice !== "function") {
+      elements.purchaseModalNote.textContent = "Откройте AUTOFLOW MARKET внутри Telegram, чтобы пополнить баланс.";
+      return;
     }
-    return payment;
+    flow.busy = true; elements.purchaseModalAction.disabled = true;
+    try {
+      if (!flow.intentId) {
+        elements.purchaseModalAction.textContent = "Создаём счёт…";
+        const amount = Math.ceil(flow.missing);
+        const intent = await api.request("/wallet/star-payments/intent", { method: "POST", body: JSON.stringify({ amount, purpose: "training_topup", training_product_id: flow.product.id }) });
+        flow.intentId = intent.id;
+        const invoiceStatus = await new Promise((resolve, reject) => {
+          try { telegram.openInvoice(intent.invoice_url, resolve); }
+          catch (error) { reject(error); }
+        });
+        if (["cancelled", "failed"].includes(invoiceStatus)) {
+          flow.busy = false; flow.intentId = null; elements.purchaseModalAction.disabled = false;
+          elements.purchaseModalAction.textContent = `Пополнить ${amount} AF Coins`;
+          elements.purchaseModalNote.textContent = "Оплата не завершена. Баланс не изменён.";
+          return;
+        }
+      }
+      elements.purchaseModalTitle.textContent = "⏳ Платёж подтверждается";
+      elements.purchaseModalText.textContent = "Не закрывайте приложение. Обычно это занимает несколько секунд.";
+      elements.purchaseModalAction.textContent = "Проверяем…";
+      const payment = await waitForStarPayment(flow.intentId);
+      if (["cancelled", "failed", "expired"].includes(payment?.status)) {
+        flow.busy = false; flow.intentId = null; elements.purchaseModalAction.disabled = false;
+        elements.purchaseModalTitle.textContent = "Оплата не завершена";
+        elements.purchaseModalAction.textContent = `Пополнить ${Math.ceil(flow.missing)} AF Coins`;
+        elements.purchaseModalNote.textContent = "Баланс не изменён. Можно открыть новый счёт.";
+        return;
+      }
+      if (payment?.status !== "paid") {
+        flow.busy = false; elements.purchaseModalAction.disabled = false; elements.purchaseModalAction.textContent = "Проверить снова";
+        elements.purchaseModalNote.textContent = "Баланс изменится только после подтверждения backend.";
+        return;
+      }
+      state.me.wallet = payment.wallet; renderBalance(); flow.intentId = null; flow.stage = "confirm"; flow.busy = false;
+      elements.purchaseModalTitle.textContent = "✅ AF Coins зачислены";
+      elements.purchaseModalText.textContent = "Баланс подтверждён сервером. Завершаем покупку обучения…";
+      return executeTrainingPurchase(flow);
+    } catch (error) {
+      flow.busy = false; elements.purchaseModalAction.disabled = false; elements.purchaseModalAction.textContent = "Проверить снова";
+      elements.purchaseModalNote.textContent = "Платёж получен, но баланс пока не обновился. Проверьте снова.";
+    }
   }
 
   async function redeliverTrainingMaterials(button) {
@@ -1981,7 +2052,39 @@ async function hideCurrentConversation() {
       for (const field of ["title", "short_description", "full_description", "product_type", "availability", "price_af_coins", "promo_video_url"]) form.elements[field].value = product[field] ?? "";
       form.elements.published.checked = product.published; form.elements.pinned.checked = product.pinned;
     }
+    toggleAutomaticMaterialFields();
     openSecondary("training-editor");
+  }
+
+  function toggleAutomaticMaterialFields() {
+    const form = document.getElementById("trainingForm");
+    const fields = document.getElementById("automaticMaterialFields");
+    if (form && fields) fields.hidden = form.elements.product_type.value !== "automatic";
+  }
+
+  async function saveInitialAutomaticMaterials(productId, form) {
+    if (form.get("product_type") !== "automatic") return 0;
+    const materials = [];
+    const textReference = String(form.get("automatic_text") || "").trim();
+    if (textReference) materials.push({ title: "Инструкция", material_type: "text", delivery_reference: textReference, position: 0 });
+    for (const [field, type, fallbackTitle] of [["automatic_video", "video", "Видео"], ["automatic_file", "document", "Материал"]]) {
+      const file = form.get(field);
+      if (!file?.size) continue;
+      const upload = await api.upload(file, `/admin/training/materials/upload?material_type=${encodeURIComponent(type)}`);
+      materials.push({
+        title: file.name || fallbackTitle,
+        material_type: type,
+        delivery_reference: upload.delivery_reference,
+        mime_type: upload.mime_type || null,
+        file_size: upload.file_size || null,
+        metadata_json: upload.metadata_json || {},
+        position: materials.length,
+      });
+    }
+    for (const material of materials) {
+      await api.request(`/admin/training/${productId}/materials`, { method: "POST", body: JSON.stringify(material) });
+    }
+    return materials.length;
   }
 
   async function submitTrainingProduct(event) {
@@ -1992,12 +2095,14 @@ async function hideCurrentConversation() {
       if (!coverUrl) throw new Error("Добавьте одну основную обложку");
       const payload = { title: form.get("title"), short_description: form.get("short_description"), full_description: form.get("full_description"), cover_url: coverUrl, promo_video_url: form.get("promo_video_url") || null, product_type: form.get("product_type"), availability: form.get("availability"), price_af_coins: Number(form.get("price_af_coins")), published: form.get("published") === "on", pinned: form.get("pinned") === "on" };
       const saved = await api.request(id ? `/admin/training/${id}` : "/admin/training", { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) });
+      const materialCount = await saveInitialAutomaticMaterials(saved.id, form);
       const upsert = (items) => [saved, ...items.filter((item) => item.id !== saved.id)];
       state.training = saved.published ? upsert(state.training) : state.training.filter((item) => item.id !== saved.id);
       const previousAdmin = state.adminTraining.find((item) => item.id === saved.id);
       const savedAdmin = { purchase_count: 0, revenue_af_coins: 0, archived: false, ...previousAdmin, ...saved };
       state.adminTraining = [savedAdmin, ...state.adminTraining.filter((item) => item.id !== saved.id)];
-      formElement.reset(); renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training"); notify("Сохранено");
+      formElement.reset(); toggleAutomaticMaterialFields(); renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training");
+      if (materialCount) notify(`Сохранено. Материалов добавлено: ${materialCount}`); else notify("Сохранено");
       try {
         await loadAdminTraining(state.adminTrainingFilter);
       } catch (refreshError) {
@@ -2399,7 +2504,7 @@ async function hideCurrentConversation() {
     const course = document.createElement("small"); course.textContent = purchase.title_snapshot;
     const usernameValue = purchase.buyer_username || purchase.buyer.username;
     const username = document.createElement("small"); username.textContent = `${usernameValue ? `@${usernameValue} · ` : "Username не указан · "}Telegram ID ${purchase.buyer_telegram_id || purchase.buyer.telegram_id}`;
-    const meta = document.createElement("span"); meta.textContent = `Заказ #${purchase.id.slice(0, 8)} · ${formatDate(purchase.created_at)} · ${formatNumber(purchase.price_af_coins)} ⭐ · Статус: ${trainingAdminOrderStatusLabel(purchase.status)}`; copy.append(name, course, username, meta); card.append(avatar, copy);
+    const meta = document.createElement("span"); meta.textContent = `Заказ #${purchase.id.slice(0, 8)} · ${formatDate(purchase.created_at)} · ${formatNumber(purchase.price_af_coins)} AF Coins · Статус: ${trainingAdminOrderStatusLabel(purchase.status)}`; copy.append(name, course, username, meta); card.append(avatar, copy);
     if (purchase.buyer_username) { const chat = document.createElement("button"); chat.type = "button"; chat.className = "training-order-secondary"; chat.dataset.trainingBuyerUsername = purchase.buyer_username; chat.textContent = "💬 Написать"; card.append(chat); }
     if (purchase.product_type === "personal") {
       const notification = document.createElement("small"); notification.className = `training-notification-status is-${purchase.admin_notification_status}`;
@@ -2413,6 +2518,7 @@ async function hideCurrentConversation() {
   }
 
   async function updatePersonalTrainingStatus(button) {
+    if (button.dataset.trainingPurchaseAction === "completed" && !(await confirmAction(`Завершить заказ #${button.dataset.purchaseId.slice(0, 8)}? После подтверждения средства будут рассчитаны.`))) return;
     button.disabled = true;
     try {
       const purchase = await api.request(`/admin/training/purchases/${button.dataset.purchaseId}/status`, { method: "PATCH", body: JSON.stringify({ status: button.dataset.trainingPurchaseAction }) });
