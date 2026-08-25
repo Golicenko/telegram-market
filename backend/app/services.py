@@ -508,6 +508,18 @@ async def purchase_training_product(
             raise HTTPException(status_code=409, detail="Кошелёк пользователя не найден")
 
         price = money(product.price_af_coins)
+        if buyer_wallet.available_balance < price:
+            missing = money(price - buyer_wallet.available_balance)
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "code": "insufficient_af_coins",
+                    "missing_af_coins": str(missing),
+                    "price_af_coins": str(price),
+                    "available_af_coins": str(money(buyer_wallet.available_balance)),
+                    "training_product_id": str(product.id),
+                },
+            )
         payout, commission = settlement_amounts(price)
         buyer_available_before, buyer_frozen_before = wallet_snapshot(buyer_wallet)
         if product.product_type == "personal":
@@ -558,6 +570,7 @@ async def purchase_training_product(
             training_purchase_id=purchase.id,
             external_reference=f"training:{purchase.id}:buyer",
         ))
+        buyer_wallet.version += 1
 
         if product.product_type == "automatic":
             seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == product.admin_id).with_for_update())
@@ -565,6 +578,7 @@ async def purchase_training_product(
                 raise HTTPException(status_code=409, detail="Кошелёк продавца не найден")
             seller_available_before, seller_frozen_before = wallet_snapshot(seller_wallet)
             credit_training_seller(seller_wallet, payout)
+            seller_wallet.version += 1
             session.add(wallet_transaction(
                 seller_wallet,
                 "training_sale",
@@ -1790,10 +1804,36 @@ async def create_star_payment_intent(
     amount: int,
     invoice_factory: Callable[[int, str], Awaitable[str]],
     purpose: str = "topup",
+    *,
+    training_product_id: uuid.UUID | None = None,
 ) -> StarPaymentIntent:
     settings = get_settings()
     context: dict = {}
-    if purpose == "cart_checkout":
+    if purpose == "training_topup":
+        if not training_product_id:
+            raise HTTPException(status_code=400, detail="Не указано обучение для пополнения")
+        product = await session.scalar(select(TrainingProduct).where(
+            TrainingProduct.id == training_product_id,
+            TrainingProduct.published.is_(True),
+            TrainingProduct.deleted_at.is_(None),
+        ))
+        if not product or product.availability != "available":
+            raise HTTPException(status_code=404, detail="Обучение недоступно")
+        if product.admin_id == user.id:
+            raise HTTPException(status_code=409, detail="Нельзя купить собственное обучение")
+        if await session.scalar(select(TrainingPurchase.id).where(
+            TrainingPurchase.product_id == product.id,
+            TrainingPurchase.buyer_id == user.id,
+        )):
+            raise HTTPException(status_code=409, detail="Вы уже приобрели это обучение")
+        wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
+        missing = money(product.price_af_coins - (wallet.available_balance if wallet else Decimal("0")))
+        if missing <= 0:
+            raise HTTPException(status_code=409, detail="Средств уже достаточно, повторите покупку")
+        amount = int(missing.to_integral_value(rounding=ROUND_CEILING))
+        context = {"training_product_id": str(product.id), "required_af_coins": str(missing)}
+        await session.commit()
+    elif purpose == "cart_checkout":
         cart_listing_ids = list((await session.scalars(select(CartItem.listing_id).where(CartItem.user_id == user.id))).all())
         if not cart_listing_ids:
             raise HTTPException(status_code=400, detail="Корзина пуста")
@@ -1808,10 +1848,11 @@ async def create_star_payment_intent(
         amount = max(settings.star_topup_min, int(missing.to_integral_value(rounding=ROUND_CEILING)))
         context = {"listing_ids": [str(item) for item in cart_listing_ids], "required_af_coins": str(missing)}
         await session.commit()
-    if amount < settings.star_topup_min or amount > settings.star_topup_max:
+    minimum = 1 if purpose == "training_topup" else settings.star_topup_min
+    if amount < minimum or amount > settings.star_topup_max:
         raise HTTPException(
             status_code=400,
-            detail=f"Количество Stars должно быть от {settings.star_topup_min} до {settings.star_topup_max}",
+            detail=f"Количество Stars должно быть от {minimum} до {settings.star_topup_max}",
         )
     intent_id = uuid.uuid4()
     invoice_payload = f"autoflow_topup:{intent_id}"
@@ -1824,6 +1865,7 @@ async def create_star_payment_intent(
         xtr_amount=amount,
         purpose=purpose,
         context=context,
+        training_product_id=training_product_id if purpose == "training_topup" else None,
         status="pending",
         expires_at=datetime.now(UTC) + timedelta(minutes=30),
     )

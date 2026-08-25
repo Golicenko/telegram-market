@@ -24,23 +24,26 @@ test("training has list, details and an admin-only editor", () => {
   assert.match(app, /\/training\/\$\{id\}/);
 });
 
-test("training purchase and library use authenticated backend workflows", () => {
+test("training purchase uses AF Coins and library uses authenticated backend workflows", () => {
   assert.match(html, /data-profile-tab="training"/);
   assert.match(html, /id="adminTrainingProducts"/);
   assert.match(html, /id="trainingMaterialForm"/);
-  assert.match(app, /\/training\/\$\{product\.id\}\/purchase-intent/);
-  assert.match(app, /telegram\.openInvoice/);
-  assert.match(app, /waitForTrainingPayment/);
+  assert.match(app, /\/training\/\$\{flow\.product\.id\}\/purchase/);
+  assert.match(app, /insufficient_af_coins/);
+  assert.match(app, /\/wallet\/star-payments\/intent/);
+  assert.match(app, /purpose: "training_topup", training_product_id: flow\.product\.id/);
+  assert.doesNotMatch(app, /Math\.max\(10, Math\.ceil\(flow\.missing\)\)/);
+  assert.match(app, /\["cancelled", "failed", "expired"\]\.includes\(payment\?\.status\)/);
   assert.match(app, /\/training\/purchases\/\$\{button\.dataset\.trainingRedeliver\}\/redeliver/);
   assert.match(app, /\/admin\/training\/management\?filter=/);
   assert.match(app, /\/admin\/training\/purchases\?product_type=personal/);
   assert.match(app, /training_order/);
-  assert.doesNotMatch(app, /\/training\/\$\{product\.id\}\/purchase`/);
+  assert.doesNotMatch(app, /\/training\/\$\{product\.id\}\/purchase-intent/);
   assert.doesNotMatch(app, /Покупка обучения будет подключена на следующем этапе/);
 });
 
 test("personal training orders are managed without creating an internal conversation", () => {
-  assert.match(app, /Ваш заказ на персональное обучение принят\. Статус: Ожидает обучения/);
+  assert.match(app, /Заказ создан\. Статус: Ожидает обучения/);
   assert.match(app, /dataset\.trainingPurchaseAction = purchase\.status === "awaiting_start" \? "in_progress" : "completed"/);
   const purchaseFlow = app.slice(app.indexOf("async function buyTrainingProduct"), app.indexOf("async function redeliverTraining"));
   assert.doesNotMatch(purchaseFlow, /conversation|chat/i);
@@ -57,4 +60,12 @@ test("admin training orders expose durable notification state and filters", () =
   assert.match(app, /awaiting_start: "PAID"/);
   assert.match(app, /\["new", "PAID"\]/);
   assert.match(app, /"✅ Завершить"/);
+});
+
+test("training cards expose a real buy action and automatic editor has protected material inputs", () => {
+  assert.match(app, /dataset\.buyTraining = product\.id/);
+  assert.match(html, /id="automaticMaterialFields"/);
+  assert.match(html, /name="automatic_video"/);
+  assert.match(html, /name="automatic_file"/);
+  assert.match(app, /saveInitialAutomaticMaterials/);
 });

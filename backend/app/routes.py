@@ -18,7 +18,6 @@ from .bot import (
     answer_bot_callback,
     answer_pre_checkout_query,
     create_star_invoice_link,
-    create_training_invoice_link,
     send_deal_support_case_notification,
     send_personal_training_order_notification,
     send_bot_notification,
@@ -97,7 +96,6 @@ from .services import (
     create_star_payment_intent,
     create_training_product,
     create_training_material,
-    create_training_payment_intent,
     create_listing_payment_intent,
     create_withdrawal,
     decide_withdrawal,
@@ -365,9 +363,6 @@ async def notify_personal_training_admin(purchase_id: uuid.UUID) -> None:
         purchase.admin_notification_error = None
         purchase.admin_notification_last_attempt_at = datetime.now(UTC)
         seller = await session.get(User, purchase.seller_id)
-        intent = await session.scalar(
-            select(StarPaymentIntent).where(StarPaymentIntent.training_purchase_id == purchase.id)
-        )
         await session.commit()
 
     error: str | None = None
@@ -383,7 +378,7 @@ async def notify_personal_training_admin(purchase_id: uuid.UUID) -> None:
                 buyer_name=purchase.buyer_display_name,
                 buyer_username=purchase.buyer_username,
                 buyer_telegram_id=purchase.buyer_telegram_id,
-                price_xtr=int(intent.xtr_amount) if intent else int(purchase.price_af_coins),
+                price_af_coins=int(purchase.price_af_coins),
             )
         except HTTPException as exc:
             logger.warning(
@@ -814,29 +809,33 @@ async def get_training_product(product_id: uuid.UUID, session: AsyncSession = De
     return product
 
 
-@router.post("/training/{product_id}/purchase-intent", response_model=StarPaymentIntentOut, status_code=201)
-async def create_training_purchase_intent(
+@router.post("/training/{product_id}/purchase-intent", status_code=409)
+async def reject_direct_training_stars_purchase(
     product_id: uuid.UUID,
     user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
 ):
-    intent = await create_training_payment_intent(session, user, product_id, create_training_invoice_link)
-    return StarPaymentIntentOut(
-        id=intent.id,
-        invoice_url=intent.invoice_link,
-        amount=intent.xtr_amount,
-        status=intent.status,
-        purpose=intent.purpose,
-        training_product_id=intent.training_product_id,
-        training_purchase_id=intent.training_purchase_id,
-        checkout_status=intent.checkout_status,
+    del product_id, user
+    raise HTTPException(
+        status_code=409,
+        detail="Обучение оплачивается AF Coins. Telegram Stars используются только для пополнения внутреннего баланса.",
     )
 
 
-@router.post("/training/{product_id}/purchase", status_code=409)
-async def legacy_training_purchase(product_id: uuid.UUID, user: User = Depends(get_current_user)):
-    del product_id, user
-    raise HTTPException(status_code=409, detail="Создайте защищённый Telegram Stars invoice через purchase-intent")
+@router.post("/training/{product_id}/purchase", response_model=TrainingPurchaseOut, status_code=201)
+async def purchase_training_with_af_coins(
+    product_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Buy training from the server-authoritative AF Coins wallet."""
+    purchase, created = await purchase_training_product(session, user, product_id)
+    if created and purchase.product_type == "automatic":
+        purchase = await begin_training_delivery(session, user.id, purchase.id, cooldown_seconds=0)
+        background_tasks.add_task(deliver_training_materials, purchase.id)
+    elif created:
+        background_tasks.add_task(notify_personal_training_admin, purchase.id)
+    return await training_purchase_out(session, purchase)
 
 
 @router.post("/training/purchases/{purchase_id}/redeliver", response_model=TrainingPurchaseOut)
@@ -1584,7 +1583,14 @@ async def add_star_payment_intent(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    intent = await create_star_payment_intent(session, user, payload.amount, create_star_invoice_link, payload.purpose)
+    intent = await create_star_payment_intent(
+        session,
+        user,
+        payload.amount,
+        create_star_invoice_link,
+        payload.purpose,
+        training_product_id=payload.training_product_id,
+    )
     return StarPaymentIntentOut(
         id=intent.id,
         invoice_url=intent.invoice_link,

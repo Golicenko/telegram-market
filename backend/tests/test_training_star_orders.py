@@ -76,7 +76,7 @@ def test_admin_notification_links_to_real_username_and_persisted_order():
         buyer_name="Иван Иванов",
         buyer_username="buyer_name",
         buyer_telegram_id=123456,
-        price_xtr=100,
+        price_af_coins=100,
         public_url="https://autoflow.example",
     )
 
@@ -84,8 +84,9 @@ def test_admin_notification_links_to_real_username_and_persisted_order():
     assert payload["chat_id"] == 10
     assert "Telegram ID: 123456" in payload["text"]
     assert "Username: @buyer_name" in payload["text"]
-    assert "Оплачено: 100 ⭐" in payload["text"]
-    assert "Статус: Оплачено / ожидает обучения" in payload["text"]
+    assert "Стоимость: 100 AF Coins" in payload["text"]
+    assert "Статус: Оплачено" in payload["text"]
+    assert "Заказ: #order-12" in payload["text"]
     assert button_rows[0][0]["url"] == "https://t.me/buyer_name"
     assert button_rows[1][0]["web_app"]["url"] == "https://autoflow.example/?training_order=order-123"
 
@@ -109,7 +110,7 @@ def test_admin_notification_omits_broken_chat_link_without_username():
         buyer_name="Покупатель",
         buyer_username=None,
         buyer_telegram_id=654321,
-        price_xtr=150,
+        price_af_coins=150,
         public_url="https://autoflow.example/",
     )
 
@@ -139,12 +140,12 @@ async def test_personal_training_admin_notification_is_really_sent(monkeypatch):
         buyer_name="Иван",
         buyer_username="buyer",
         buyer_telegram_id=20,
-        price_xtr=100,
+        price_af_coins=100,
     )
 
     assert sent is True
     assert calls[0][0] == "sendMessage"
-    assert "Новый заказ на персональное обучение" in calls[0][1]["text"]
+    assert "Новое персональное обучение" in calls[0][1]["text"]
 
 
 @pytest.mark.asyncio
@@ -165,7 +166,7 @@ async def test_personal_training_notification_still_sends_without_public_url(mon
         buyer_name="Иван",
         buyer_username=None,
         buyer_telegram_id=20,
-        price_xtr=100,
+        price_af_coins=100,
     ) is True
     assert calls[0][1]["chat_id"] == 10
     assert "reply_markup" not in calls[0][1]
@@ -271,6 +272,59 @@ async def test_personal_purchase_persists_telegram_snapshot_and_never_creates_in
     assert buyer_wallet.available_balance == Decimal("0.00")
     assert buyer_wallet.frozen_balance == Decimal("100.00")
     assert not any(isinstance(item, Conversation) for item in session.added)
+
+
+@pytest.mark.asyncio
+async def test_af_coin_purchase_endpoint_creates_personal_order_and_notifies_admin(monkeypatch):
+    buyer = User(id=uuid.uuid4(), telegram_id=20, first_name="Иван", role="user")
+    purchase = TrainingPurchase(
+        id=uuid.uuid4(), product_id=uuid.uuid4(), buyer_id=buyer.id, seller_id=uuid.uuid4(),
+        buyer_telegram_id=buyer.telegram_id, buyer_display_name="Иван", product_type="personal",
+        title_snapshot="Курс", cover_url_snapshot="/cover.jpg", price_af_coins=Decimal("100"),
+        seller_payout=Decimal("70"), platform_commission=Decimal("30"), status="awaiting_start",
+        delivery_status="not_applicable", payment_status="paid", admin_notification_status="pending",
+        purchased_frozen_amount=Decimal("100"), earned_frozen_amount=Decimal("0"),
+    )
+
+    async def buy(*_args, **_kwargs): return purchase, True
+    async def output(_session, current): return current
+    monkeypatch.setattr(routes, "purchase_training_product", buy)
+    monkeypatch.setattr(routes, "training_purchase_out", output)
+    tasks = BackgroundTasks()
+
+    result = await routes.purchase_training_with_af_coins(purchase.product_id, tasks, buyer, object())
+
+    assert result is purchase
+    assert any(task.func is routes.notify_personal_training_admin and task.args == (purchase.id,) for task in tasks.tasks)
+
+
+@pytest.mark.asyncio
+async def test_af_coin_purchase_endpoint_starts_automatic_delivery_once(monkeypatch):
+    buyer = User(id=uuid.uuid4(), telegram_id=20, first_name="Иван", role="user")
+    purchase = TrainingPurchase(
+        id=uuid.uuid4(), product_id=uuid.uuid4(), buyer_id=buyer.id, seller_id=uuid.uuid4(),
+        buyer_telegram_id=buyer.telegram_id, buyer_display_name="Иван", product_type="automatic",
+        title_snapshot="Автокурс", cover_url_snapshot="/cover.jpg", price_af_coins=Decimal("100"),
+        seller_payout=Decimal("70"), platform_commission=Decimal("30"), status="completed",
+        delivery_status="pending", payment_status="paid", admin_notification_status="not_required",
+        purchased_frozen_amount=Decimal("0"), earned_frozen_amount=Decimal("0"),
+    )
+    delivery_calls = []
+
+    async def buy(*_args, **_kwargs): return purchase, True
+    async def begin(_session, buyer_id, purchase_id, cooldown_seconds):
+        delivery_calls.append((buyer_id, purchase_id, cooldown_seconds)); purchase.delivery_status = "sending"; return purchase
+    async def output(_session, current): return current
+    monkeypatch.setattr(routes, "purchase_training_product", buy)
+    monkeypatch.setattr(routes, "begin_training_delivery", begin)
+    monkeypatch.setattr(routes, "training_purchase_out", output)
+    tasks = BackgroundTasks()
+
+    result = await routes.purchase_training_with_af_coins(purchase.product_id, tasks, buyer, object())
+
+    assert result.delivery_status == "sending"
+    assert delivery_calls == [(buyer.id, purchase.id, 0)]
+    assert any(task.func is routes.deliver_training_materials and task.args == (purchase.id,) for task in tasks.tasks)
 
 
 @pytest.mark.asyncio

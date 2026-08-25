@@ -5,9 +5,9 @@ from decimal import Decimal
 import pytest
 from fastapi import HTTPException
 
-from app.models import TrainingMaterial, TrainingProduct, TrainingPurchase, User, Wallet, WalletTransaction
+from app.models import StarPaymentIntent, TrainingMaterial, TrainingProduct, TrainingPurchase, User, Wallet, WalletTransaction
 from app.schemas import TrainingMaterialPublicOut
-from app.services import begin_training_delivery, purchase_training_product, update_training_purchase_status
+from app.services import begin_training_delivery, create_star_payment_intent, purchase_training_product, update_training_purchase_status
 
 
 class FakeTransaction:
@@ -36,6 +36,9 @@ class FakeSession:
         for value in self.added:
             if hasattr(value, "id") and value.id is None:
                 value.id = uuid.uuid4()
+
+    async def commit(self):
+        return None
 
 
 def wallet(user_id, purchased="0", earned="0"):
@@ -115,6 +118,57 @@ async def test_automatic_course_cannot_charge_before_materials_exist():
     assert error.value.status_code == 409
     assert buyer_wallet.available_balance == Decimal("100.00")
     assert not any(isinstance(item, WalletTransaction) for item in session.added)
+
+
+@pytest.mark.asyncio
+async def test_training_purchase_reports_server_calculated_af_coin_shortfall_without_charging():
+    buyer = User(id=uuid.uuid4(), telegram_id=1, first_name="Покупатель", role="user")
+    course = product(uuid.uuid4(), "automatic", "100")
+    buyer_wallet = wallet(buyer.id, purchased="35")
+    session = FakeSession([course, None, uuid.uuid4(), buyer_wallet])
+
+    with pytest.raises(HTTPException) as error:
+        await purchase_training_product(session, buyer, course.id)
+
+    assert error.value.status_code == 402
+    assert error.value.detail == {
+        "code": "insufficient_af_coins",
+        "missing_af_coins": "65.00",
+        "price_af_coins": "100.00",
+        "available_af_coins": "35.00",
+        "training_product_id": str(course.id),
+    }
+    assert buyer_wallet.available_balance == Decimal("35")
+    assert not any(isinstance(item, WalletTransaction) for item in session.added)
+
+
+@pytest.mark.asyncio
+async def test_training_topup_intent_uses_exact_server_calculated_shortfall():
+    buyer = User(id=uuid.uuid4(), telegram_id=1, first_name="Покупатель", role="user")
+    course = product(uuid.uuid4(), "personal", "100")
+    buyer_wallet = wallet(buyer.id, purchased="95")
+    session = FakeSession([course, None, buyer_wallet])
+    invoices = []
+
+    async def invoice(amount, payload):
+        invoices.append((amount, payload))
+        return "https://t.me/invoice/test"
+
+    intent = await create_star_payment_intent(
+        session,
+        buyer,
+        999,
+        invoice,
+        "training_topup",
+        training_product_id=course.id,
+    )
+
+    assert isinstance(intent, StarPaymentIntent)
+    assert intent.xtr_amount == 5
+    assert intent.purpose == "training_topup"
+    assert intent.training_product_id == course.id
+    assert intent.context["required_af_coins"] == "5.00"
+    assert invoices == [(5, intent.invoice_payload)]
 
 
 @pytest.mark.asyncio
