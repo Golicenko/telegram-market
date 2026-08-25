@@ -25,6 +25,9 @@
     advertisement: null,
     supportTickets: [],
     adminSupportFilter: "active",
+    adminBroadcasts: [],
+    broadcastPollingId: null,
+    pendingBroadcastRequestId: null,
     profile: null,
     catalog: { brands: [] },
     photoFiles: [],
@@ -193,6 +196,7 @@
   }
 
   function bindEvents() {
+    ensureBroadcastAdminUi();
     const trainingForm = document.getElementById("trainingForm");
     ["title", "short_description", "full_description"].forEach((name) => {
       trainingForm?.elements[name]?.removeAttribute("maxlength");
@@ -229,6 +233,7 @@
     bind(document.getElementById("trainingMaterialForm"), "submit", saveTrainingMaterial, "trainingMaterialForm");
     bind(elements.supportForm, "submit", submitSupportTicket, "supportForm");
     bind(elements.advertisementForm, "submit", submitAdvertisement, "advertisementForm");
+    bind(document.getElementById("broadcastForm"), "submit", submitAdminBroadcast, "broadcastForm");
     bind(document.getElementById("deleteAdvertisementButton"), "click", deleteAdvertisement, "deleteAdvertisementButton");
     bind(document.getElementById("balanceAdjustmentForm"), "submit", createBalanceAdjustment, "balanceAdjustmentForm");
     bind(document.getElementById("adminBalanceLookupForm"), "submit", findAdminBalanceUser, "adminBalanceLookupForm");
@@ -765,7 +770,7 @@ function handleClick(event) {
   async function openAdminPanel() {
     if (state.me?.user.role !== "admin") return notify("Требуется роль администратора");
     openSecondary("admin");
-    const results = await Promise.allSettled([loadAdminUsers(), loadAdminListings(), loadAdminDeals(), loadAdminWithdrawals(), loadAdminSupport(), loadAdvertisementAdmin(), loadAdminTraining(state.adminTrainingFilter)]);
+    const results = await Promise.allSettled([loadAdminUsers(), loadAdminListings(), loadAdminDeals(), loadAdminWithdrawals(), loadAdminSupport(), loadAdvertisementAdmin(), loadAdminTraining(state.adminTrainingFilter), loadAdminBroadcasts()]);
     const rejected = results.filter((result) => result.status === "rejected");
     rejected.forEach((result) => reportClientError("admin_optional", result.reason));
     if (rejected.length) notify("Часть данных админ-панели временно недоступна");
@@ -2386,6 +2391,121 @@ async function hideCurrentConversation() {
       notify("Решение выполнено и записано в историю");
     } catch (error) { notify(error.message); }
     finally { button.disabled = false; }
+  }
+
+  function ensureBroadcastAdminUi() {
+    if (document.getElementById("broadcastForm")) return;
+    const tabs = document.querySelector(".admin-tabs");
+    const container = tabs?.parentElement;
+    if (!tabs || !container) return;
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.dataset.adminTab = "broadcasts";
+    tab.textContent = "Рассылки";
+    tabs.append(tab);
+    const panel = document.createElement("section");
+    panel.dataset.adminPanel = "broadcasts";
+    panel.hidden = true;
+    panel.innerHTML = `<div class="broadcast-admin">
+      <h2>Рассылка пользователям</h2>
+      <p>Каждое сообщение автоматически содержит кнопку «🚘 Открыть Market».</p>
+      <form id="broadcastForm">
+        <label>Текст сообщения<textarea name="text" rows="5" maxlength="4096" placeholder="Введите текст или caption"></textarea></label>
+        <label>Фотография (необязательно)<input name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif"></label>
+        <button class="publish-button" type="submit">Запустить рассылку</button>
+      </form>
+      <div class="broadcast-launch-status" id="broadcastLaunchStatus" role="status" aria-live="polite"></div>
+      <h3>Последние рассылки</h3>
+      <div class="broadcast-list" id="adminBroadcasts"></div>
+    </div>`;
+    container.append(panel);
+  }
+
+  async function submitAdminBroadcast(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const text = String(data.get("text") || "").trim();
+    const photo = data.get("photo");
+    const status = document.getElementById("broadcastLaunchStatus");
+    if (!text && !photo?.size) {
+      status.textContent = "Добавьте текст или фотографию";
+      status.classList.add("is-error");
+      return;
+    }
+    const button = form.querySelector("button[type=submit]");
+    if (button.disabled) return;
+    button.disabled = true;
+    status.classList.remove("is-error");
+    status.textContent = "Запускаем рассылку…";
+    state.pendingBroadcastRequestId ||= crypto.randomUUID();
+    try {
+      const photoUrl = photo?.size ? (await api.upload(photo)).url : null;
+      const broadcast = await api.request("/admin/broadcasts", {
+        method: "POST",
+        body: JSON.stringify({
+          client_request_id: state.pendingBroadcastRequestId,
+          text,
+          photo_url: photoUrl,
+        }),
+      });
+      state.pendingBroadcastRequestId = null;
+      form.reset();
+      status.textContent = `Рассылка запущена · #${broadcast.id.slice(0, 8)}`;
+      await loadAdminBroadcasts();
+    } catch (error) {
+      status.classList.add("is-error");
+      status.textContent = error.status === 409
+        ? "Другая рассылка ещё отправляется. Дождитесь её завершения."
+        : error.status === 422
+          ? `❌ Не удалось запустить рассылку. ${error.message}`
+          : "❌ Не удалось запустить рассылку. Проверьте соединение и попробуйте снова.";
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function loadAdminBroadcasts() {
+    const list = document.getElementById("adminBroadcasts");
+    if (!list) return;
+    state.adminBroadcasts = await api.request("/admin/broadcasts");
+    renderAdminBroadcasts();
+    const active = state.adminBroadcasts.some((item) => ["queued", "running"].includes(item.status));
+    if (active && !state.broadcastPollingId) {
+      state.broadcastPollingId = window.setInterval(() => {
+        loadAdminBroadcasts().catch((error) => reportClientError("broadcast_status_poll", error));
+      }, 2000);
+    } else if (!active && state.broadcastPollingId) {
+      window.clearInterval(state.broadcastPollingId);
+      state.broadcastPollingId = null;
+    }
+  }
+
+  function renderAdminBroadcasts() {
+    const list = document.getElementById("adminBroadcasts");
+    if (!list) return;
+    if (!state.adminBroadcasts.length) {
+      list.textContent = "Рассылок пока нет";
+      return;
+    }
+    const labels = { draft: "Черновик", queued: "В очереди", running: "Отправляется…", completed: "✅ Рассылка завершена", failed: "❌ Ошибка рассылки" };
+    list.replaceChildren(...state.adminBroadcasts.map((item) => {
+      const card = document.createElement("article");
+      card.className = `broadcast-card is-${item.status}`;
+      const heading = document.createElement("strong");
+      heading.textContent = `${labels[item.status] || item.status} · #${item.id.slice(0, 8)}`;
+      const counters = document.createElement("p");
+      counters.textContent = `Отправлено: ${item.sent_count}\nОшибок: ${item.failed_count}\nВсего: ${item.total_recipients}`;
+      const content = document.createElement("small");
+      content.textContent = `${item.content_type === "photo" ? "Фото + текст" : "Текст"} · ${new Date(item.created_at).toLocaleString("ru-RU")}`;
+      card.append(heading, counters, content);
+      if (item.status === "failed") {
+        const error = document.createElement("span");
+        error.textContent = "Рассылка остановлена из-за системной ошибки";
+        card.append(error);
+      }
+      return card;
+    }));
   }
 
   async function loadAdvertisementAdmin() {

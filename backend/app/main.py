@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .bot import configure_telegram_webhook
+from .broadcasts import recover_admin_broadcasts
 from .database import engine
 from .frontend import FRONTEND_BUILD, WEBAPP_DIR, versioned_webapp_url
 from .routes import UPLOAD_DIR, recover_deal_purchase_notifications, recover_training_background_jobs, router
@@ -44,6 +45,7 @@ async def lifespan(_app: FastAPI):
     recovery_tasks = [
         asyncio.create_task(recover_training_background_jobs()),
         asyncio.create_task(recover_deal_purchase_notifications()),
+        asyncio.create_task(recover_admin_broadcasts()),
     ]
     try:
         yield

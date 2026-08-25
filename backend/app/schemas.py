@@ -541,6 +541,37 @@ class AdvertisementOut(ORMModel):
     updated_at: datetime
 
 
+class AdminBroadcastCreate(BaseModel):
+    client_request_id: uuid.UUID
+    text: str = Field(default="", max_length=4096)
+    photo_url: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("text")
+    @classmethod
+    def normalize_broadcast_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("photo_url")
+    @classmethod
+    def normalize_broadcast_photo(cls, value: str | None) -> str | None:
+        return value.strip() if value and value.strip() else None
+
+
+class AdminBroadcastOut(ORMModel):
+    id: uuid.UUID
+    content_type: str
+    text: str
+    photo_file_id: str | None
+    status: str
+    total_recipients: int
+    sent_count: int
+    failed_count: int
+    started_at: datetime | None
+    completed_at: datetime | None
+    error: str | None
+    created_at: datetime
+
+
 class ProfileOut(BaseModel):
     user: UserOut
     wallet: WalletOut
