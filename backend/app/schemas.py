@@ -105,9 +105,30 @@ class DealOut(ORMModel):
     seller_id: uuid.UUID
     status: str
     price_af_coins: Decimal
+    buyer_game_id: str | None
+    preferred_delivery_time: str | None
     transfer_started_at: datetime | None
     completed_at: datetime | None
     created_at: datetime
+
+
+class DealDeliveryDetailsCreate(BaseModel):
+    buyer_game_id: str = Field(min_length=1, max_length=128)
+    delivery_window: str = Field(pattern="^(now|today|scheduled)$")
+    preferred_time: str | None = Field(default=None, pattern="^([01]\\d|2[0-3]):[0-5]\\d$")
+
+    @field_validator("buyer_game_id")
+    @classmethod
+    def normalize_game_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Укажите игровой ID")
+        return value
+
+    @field_validator("preferred_time")
+    @classmethod
+    def normalize_preferred_time(cls, value: str | None) -> str | None:
+        return value.strip() if value else None
 
 
 class MessageCreate(BaseModel):

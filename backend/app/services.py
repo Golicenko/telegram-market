@@ -952,6 +952,62 @@ async def get_or_create_deal_conversation(
     return conversation
 
 
+async def save_deal_delivery_details(
+    session: AsyncSession,
+    buyer: User,
+    deal_id: uuid.UUID,
+    buyer_game_id: str,
+    delivery_window: str,
+    preferred_time: str | None,
+) -> Deal:
+    labels = {"now": "Сейчас", "today": "Сегодня"}
+    if delivery_window == "scheduled":
+        if not preferred_time:
+            raise HTTPException(status_code=422, detail="Выберите удобное время")
+        delivery_label = f"Сегодня, {preferred_time}"
+    else:
+        delivery_label = labels.get(delivery_window)
+        if not delivery_label:
+            raise HTTPException(status_code=422, detail="Выберите удобное время передачи")
+
+    clean_game_id = buyer_game_id.strip()
+    if not clean_game_id:
+        raise HTTPException(status_code=422, detail="Укажите игровой ID")
+
+    async with session.begin():
+        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+        if not deal or deal.buyer_id != buyer.id:
+            raise HTTPException(status_code=404, detail="Сделка не найдена")
+        if deal.status not in {"paid", "seller_contacted", "transfer_in_progress"}:
+            raise HTTPException(status_code=409, detail="Для этой сделки данные передачи уже нельзя изменить")
+        listing = await session.get(Listing, deal.listing_id)
+        if not listing:
+            raise HTTPException(status_code=409, detail="Объявление сделки не найдено")
+
+        changed = deal.buyer_game_id != clean_game_id or deal.preferred_delivery_time != delivery_label
+        conversation = await _ensure_deal_conversation_locked(
+            session, deal, listing, unhide_both=True, add_context_if_created=True
+        )
+        deal.buyer_game_id = clean_game_id
+        deal.preferred_delivery_time = delivery_label
+        if changed:
+            conversation.last_message_at = datetime.now(UTC)
+            session.add(
+                ConversationMessage(
+                    conversation_id=conversation.id,
+                    sender_id=buyer.id,
+                    body=(
+                        "🚗 Данные для передачи\n"
+                        f"ID покупателя: {clean_game_id}\n"
+                        f"Удобное время: {delivery_label}"
+                    ),
+                    message_type="system",
+                )
+            )
+        await session.flush()
+    return deal
+
+
 async def send_conversation_message(
     session: AsyncSession, sender: User, conversation_id: uuid.UUID, body: str, client_message_id: uuid.UUID
 ) -> tuple[ConversationMessage, User, bool]:
