@@ -46,6 +46,11 @@
     adminBalanceUser: null,
     adminBalanceDirection: "credit",
     purchaseFlow: null,
+    listingViewObserver: null,
+    listingViewTimers: new Map(),
+    listingViewRequests: new Set(),
+    listingLikeRequests: new Set(),
+    dealTimerId: null,
     pendingDealDeepLink: new URLSearchParams(window.location.search).get("deal_id"),
     openingDealDeepLink: false,
     serverAvailable: true,
@@ -482,6 +487,8 @@ function handleClick(event) {
     if (preset) return void selectPrice(preset);
     const cartToggle = target.closest("[data-cart-toggle]");
     if (cartToggle) return void toggleCart(cartToggle.dataset.cartToggle);
+    const listingLike = target.closest("[data-listing-like]");
+    if (listingLike) return void toggleListingLike(listingLike.dataset.listingLike);
     const buyNow = target.closest("[data-buy-now]");
     if (buyNow) return void buyNowFlow(buyNow.dataset.buyNow);
     const chatListing = target.closest("[data-chat-listing]");
@@ -833,6 +840,7 @@ function handleClick(event) {
     elements.uniqueCars.replaceChildren(...state.unique.map(createListingCard));
     elements.marketEmpty.hidden = regular.length > 0;
     elements.uniqueEmpty.hidden = state.unique.length > 0;
+    observeVisibleListingCards();
   }
 
   function createListingCard(listing) {
@@ -877,11 +885,30 @@ function handleClick(event) {
     }
     const stats = document.createElement("div");
     stats.className = "car-stats";
-    [`${listing.power_hp} л.с.`, `${listing.max_speed_kph} км/ч`, `Передача: ${deliveryTimeLabel(listing.delivery_time_estimate)}`, `Просмотров: ${listing.views_count || 0}`, statusLabel(listing.status)].forEach((value) => {
+    [`${listing.power_hp} л.с.`, `${listing.max_speed_kph} км/ч`, `Передача: ${deliveryTimeLabel(listing.delivery_time_estimate)}`, statusLabel(listing.status)].forEach((value) => {
       const chip = document.createElement("span");
       chip.textContent = value;
       stats.append(chip);
     });
+    const engagement = document.createElement("div");
+    engagement.className = "car-engagement";
+    engagement.dataset.listingEngagement = listing.id;
+    const views = document.createElement("span");
+    views.className = "car-engagement__views";
+    views.dataset.listingViews = listing.id;
+    views.textContent = `👁 ${Number(listing.views_count || 0)}`;
+    const like = document.createElement("button");
+    like.type = "button";
+    like.className = `car-engagement__like${listing.liked_by_me ? " is-liked" : ""}`;
+    like.dataset.listingLike = listing.id;
+    like.setAttribute("aria-pressed", listing.liked_by_me ? "true" : "false");
+    like.textContent = `${listing.liked_by_me ? "♥" : "♡"} ${Number(listing.likes_count || 0)}`;
+    const isOwner = state.me?.user.id === listing.seller_id;
+    if (isOwner) {
+      like.disabled = true;
+      like.title = "Нельзя поставить лайк собственному объявлению";
+    }
+    engagement.append(views, like);
     const actions = document.createElement("div");
     actions.className = "card-actions";
     const openButton = document.createElement("button");
@@ -889,7 +916,6 @@ function handleClick(event) {
     openButton.dataset.openListing = listing.id;
     openButton.textContent = "Открыть";
     actions.append(openButton);
-    const isOwner = state.me?.user.id === listing.seller_id;
     const inCart = state.cart.some((item) => item.id === listing.id);
     const cartButton = document.createElement("button");
     cartButton.className = `card-cart${inCart ? " is-added" : ""}`;
@@ -906,7 +932,7 @@ function handleClick(event) {
       const buy = document.createElement("button");
       buy.className = "card-buy";
       buy.dataset.buyNow = listing.id;
-      buy.textContent = "Купить";
+      buy.textContent = `Купить за ${formatNumber(effectivePrice)} AF Coins`;
       buy.disabled = listing.status !== "active";
       actions.append(buy);
     }
@@ -917,9 +943,80 @@ function handleClick(event) {
       const remove = document.createElement("button"); remove.dataset.deleteListing = listing.id; remove.textContent = "Удалить"; remove.className = "is-danger";
       ownerActions.append(edit, promote, remove); actions.append(ownerActions);
     }
-    body.append(title, price, stats, actions);
+    body.append(title, price, stats, engagement, actions);
     card.append(media, body);
+    card.dataset.listingCard = listing.id;
     return card;
+  }
+
+  function observeVisibleListingCards() {
+    state.listingViewObserver?.disconnect();
+    state.listingViewTimers.forEach((timer) => window.clearTimeout(timer));
+    state.listingViewTimers.clear();
+    if (!("IntersectionObserver" in window)) return;
+    state.listingViewObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        const id = entry.target.dataset.listingCard;
+        const visible = entry.isIntersecting && entry.intersectionRatio >= 0.5;
+        if (!visible) {
+          window.clearTimeout(state.listingViewTimers.get(id));
+          state.listingViewTimers.delete(id);
+          return;
+        }
+        if (state.listingViewRequests.has(id) || state.listingViewTimers.has(id)) return;
+        const timer = window.setTimeout(() => {
+          state.listingViewTimers.delete(id);
+          if (entry.target.isConnected) void recordListingView(id);
+        }, 750);
+        state.listingViewTimers.set(id, timer);
+      });
+    }, { threshold: [0.5] });
+    document.querySelectorAll("[data-listing-card]").forEach((card) => {
+      const listing = findListing(card.dataset.listingCard);
+      if (listing && listing.seller_id !== state.me?.user.id) state.listingViewObserver.observe(card);
+    });
+  }
+
+  async function recordListingView(id) {
+    if (state.listingViewRequests.has(id) || !state.serverAvailable) return;
+    state.listingViewRequests.add(id);
+    try {
+      const engagement = await api.request(`/listings/${id}/view`, { method: "POST" });
+      applyListingEngagement(id, engagement);
+    } catch (error) {
+      state.listingViewRequests.delete(id);
+      reportClientError("listing_view", error);
+    }
+  }
+
+  async function toggleListingLike(id) {
+    const listing = findListing(id);
+    if (!listing || state.listingLikeRequests.has(id)) return;
+    if (listing.seller_id === state.me?.user.id) return notify("Нельзя поставить лайк собственному объявлению");
+    state.listingLikeRequests.add(id);
+    try {
+      const engagement = await api.request(`/listings/${id}/like`, { method: listing.liked_by_me ? "DELETE" : "POST" });
+      applyListingEngagement(id, engagement);
+    } catch (error) { notify(error.message); }
+    finally { state.listingLikeRequests.delete(id); }
+  }
+
+  function applyListingEngagement(id, engagement) {
+    [state.regular, state.unique, state.profile?.active_listings, state.profile?.sold_listings, state.profile?.purchases]
+      .filter(Boolean)
+      .forEach((items) => items.forEach((item) => {
+        if (String(item.id) === String(id)) Object.assign(item, {
+          views_count: Number(engagement.views_count || 0),
+          likes_count: Number(engagement.likes_count || 0),
+          liked_by_me: Boolean(engagement.liked_by_me),
+        });
+      }));
+    document.querySelectorAll(`[data-listing-views="${CSS.escape(String(id))}"]`).forEach((node) => { node.textContent = `👁 ${Number(engagement.views_count || 0)}`; });
+    document.querySelectorAll(`[data-listing-like="${CSS.escape(String(id))}"]`).forEach((button) => {
+      button.classList.toggle("is-liked", Boolean(engagement.liked_by_me));
+      button.setAttribute("aria-pressed", engagement.liked_by_me ? "true" : "false");
+      button.textContent = `${engagement.liked_by_me ? "♥" : "♡"} ${Number(engagement.likes_count || 0)}`;
+    });
   }
 
   function renderTraining() {
@@ -964,11 +1061,11 @@ function handleClick(event) {
     if (state.me?.user.id === listing.seller_id) return notify("Нельзя купить собственное объявление");
     const price = Number(listing.effective_price_af_coins ?? listing.price_af_coins);
     state.purchaseFlow = { listing, stage: "confirm", busy: false, intentId: null };
-    elements.purchaseModalTitle.textContent = `Купить ${listingTitle(listing)}?`;
-    elements.purchaseModalText.textContent = "Вы оплачиваете, но продавец не получит деньги, пока вы не подтвердите, что всё получили.";
+    elements.purchaseModalTitle.textContent = "Покупка автомобиля";
+    elements.purchaseModalText.textContent = `Цена: ${formatNumber(price)} AF Coins`;
     elements.purchaseModalAmount.replaceChildren(document.createTextNode(`${formatNumber(price)} `), coin("af-coin--small"));
-    elements.purchaseModalNote.textContent = "Деньги будут находиться под защитой AutoFlow Market.";
-    elements.purchaseModalAction.textContent = "Оплатить безопасно";
+    elements.purchaseModalNote.textContent = "Деньги будут под защитой до получения автомобиля. Продавец получит их только после того, как вы подтвердите, что получили машину.";
+    elements.purchaseModalAction.textContent = "Подтвердить покупку";
     elements.purchaseModalAction.disabled = false;
     openDialog(elements.purchaseModal);
   }
@@ -1007,7 +1104,7 @@ function handleClick(event) {
         elements.purchaseModalAction.textContent = `Пополнить ${Math.ceil(missing)} ⭐ и купить`;
         elements.purchaseModalAction.disabled = false;
       } else {
-        flow.busy = false; elements.purchaseModalAction.disabled = false; elements.purchaseModalAction.textContent = "Оплатить безопасно";
+        flow.busy = false; elements.purchaseModalAction.disabled = false; elements.purchaseModalAction.textContent = "Подтвердить покупку";
         elements.purchaseModalText.textContent = error.message;
         await refreshMarketplace().catch((refreshError) => reportClientError("refresh_after_purchase", refreshError));
       }
@@ -1055,7 +1152,7 @@ function handleClick(event) {
     if (elements.purchaseModal?.open) elements.purchaseModal.close();
     state.purchaseFlow = null;
     await refreshMarketplace();
-    showPurchaseSuccess("✅ Покупка успешно оплачена", "Открываем чат этой сделки.");
+    showPurchaseSuccess("✅ Покупка оплачена", "Деньги находятся под защитой. Открываем чат сделки.");
     if (!deal?.id) return;
     await openDealConversation(deal.id);
   }
@@ -1226,18 +1323,22 @@ function handleClick(event) {
       const close = document.createElement("button"); close.type = "button"; close.textContent = "×"; close.addEventListener("click", () => dialog.close());
       head.append(heading, close);
       const description = document.createElement("p"); description.textContent = listing.description;
-      const stats = document.createElement("p"); stats.textContent = `${listing.power_hp} л.с. · ${listing.max_speed_kph} км/ч · передача ${deliveryTimeLabel(listing.delivery_time_estimate)} · ${listing.views_count} просмотров`;
+      const stats = document.createElement("p"); stats.textContent = `${listing.power_hp} л.с. · ${listing.max_speed_kph} км/ч · передача ${deliveryTimeLabel(listing.delivery_time_estimate)}`;
       const price = document.createElement("p"); price.append(document.createTextNode(`${formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins)} `), coin("af-coin--small"));
-      dialog.append(head, description, stats, price);
+      const engagement = document.createElement("p"); engagement.className = "listing-detail-engagement"; engagement.textContent = `👁 ${listing.views_count || 0}   ${listing.liked_by_me ? "♥" : "♡"} ${listing.likes_count || 0}`;
+      dialog.append(head, description, stats, price, engagement);
       if (listing.seller_id !== state.me?.user.id) {
         const message = document.createElement("button"); message.className = "publish-button"; message.type = "button"; message.textContent = "Написать продавцу";
         message.addEventListener("click", async () => { dialog.close(); await startConversation(listing.id); });
-        dialog.append(message);
+        const buy = document.createElement("button"); buy.className = "publish-button"; buy.type = "button"; buy.textContent = `Купить за ${formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins)} AF Coins`;
+        buy.disabled = listing.status !== "active";
+        buy.addEventListener("click", () => { dialog.close(); void buyNowFlow(listing.id); });
+        dialog.append(buy, message);
       }
       document.body.append(dialog);
       dialog.addEventListener("close", () => dialog.remove(), { once: true });
       openDialog(dialog);
-      const local = findListing(id); if (local) local.views_count = listing.views_count;
+      window.setTimeout(() => { if (dialog.open) void recordListingView(id); }, 750);
     } catch (error) { notify(error.message); }
   }
 
@@ -1660,15 +1761,29 @@ async function hideCurrentConversation() {
 
     const title = document.createElement("strong");
     const copy = document.createElement("p");
+    if (deal.status === "completed") {
+      title.textContent = isBuyer ? "✅ Покупка завершена" : "✅ Продажа завершена";
+      copy.textContent = isBuyer ? "Сделка успешно завершена." : "Деньги зачислены.";
+      panel.append(title, copy);
+      return;
+    }
+    if (deal.status === "transfer_in_progress") {
+      title.textContent = isBuyer ? "Продавец сообщил, что автомобиль передан" : "Ожидаем подтверждение покупателя";
+      copy.textContent = isBuyer
+        ? "Получили машину? Подтвердите получение только после того, как проверили автомобиль."
+        : "Как только покупатель подтвердит получение, деньги будут начислены вам.";
+      panel.append(title, copy);
+      return;
+    }
     if (isBuyer && hasDetails) {
-      title.textContent = "✅ Данные отправлены продавцу";
-      copy.textContent = `ID: ${deal.buyer_game_id}\nВремя: ${deal.preferred_delivery_time}\nОжидайте передачи автомобиля.`;
+      title.textContent = "Ожидается передача автомобиля";
+      copy.textContent = `Продавец получил уведомление о покупке.\nID: ${deal.buyer_game_id}\nУдобное время: ${deal.preferred_delivery_time}\nДоговоритесь с продавцом о передаче в чате.`;
       panel.append(title, copy);
       return;
     }
     if (!isBuyer && hasDetails) {
-      title.textContent = "🚗 Передайте автомобиль покупателю";
-      copy.textContent = `ID покупателя: ${deal.buyer_game_id}\nУдобное время: ${deal.preferred_delivery_time}\n\nПередайте автомобиль по указанному ID. После получения покупатель подтвердит передачу, и деньги будут начислены вам. Если возникла проблема — обратитесь в поддержку.`;
+      title.textContent = "Вашу машину купили";
+      copy.textContent = `Покупатель уже оплатил покупку.\nID покупателя: ${deal.buyer_game_id}\nУдобное время: ${deal.preferred_delivery_time}\n\nПередайте автомобиль покупателю. После подтверждения получения деньги будут начислены вам.`;
       panel.append(title, copy);
       return;
     }
@@ -1679,8 +1794,8 @@ async function hideCurrentConversation() {
       return;
     }
 
-    title.textContent = "🚗 Данные для передачи автомобиля";
-    copy.textContent = "Продавцу нужен ваш игровой ID, чтобы передать автомобиль.";
+    title.textContent = "Ожидается передача автомобиля";
+    copy.textContent = "Продавец получил уведомление о покупке. Отправьте ему игровой ID и договоритесь о времени передачи.";
     const form = document.createElement("form");
     form.className = "deal-delivery__form";
     form.innerHTML = `
@@ -1744,15 +1859,14 @@ async function hideCurrentConversation() {
 
   function renderDealControls() {
     const deal = state.currentConversation?.deal;
+    window.clearInterval(state.dealTimerId);
+    state.dealTimerId = null;
     elements.dealControls.replaceChildren();
     if (!deal || ["completed", "cancelled"].includes(deal.status)) return;
     const isBuyer = deal.buyer_id === state.me.user.id;
     const isSeller = deal.seller_id === state.me.user.id;
     if (isSeller && ["paid", "seller_contacted"].includes(deal.status)) {
-      if (deal.status === "paid") {
-        const contacted = document.createElement("button"); contacted.className = "deal-secondary"; contacted.dataset.dealAction = "seller-contacted"; contacted.textContent = "Я на связи"; elements.dealControls.append(contacted);
-      }
-      const transfer = document.createElement("button"); transfer.className = "deal-confirm"; transfer.dataset.dealAction = "transfer"; transfer.textContent = "Передали машину"; elements.dealControls.append(transfer);
+      const transfer = document.createElement("button"); transfer.className = "deal-confirm"; transfer.dataset.dealAction = "transfer"; transfer.textContent = "Автомобиль передан покупателю"; elements.dealControls.append(transfer);
     }
    if (isBuyer && deal.status === "transfer_in_progress") {
   const warning = document.createElement("p");
@@ -1787,15 +1901,16 @@ async function hideCurrentConversation() {
 
     timer.textContent = "Теперь можно подтвердить получение машины.";
     confirm.hidden = false;
-    clearInterval(timer.intervalId);
+    window.clearInterval(state.dealTimerId);
+    state.dealTimerId = null;
   };
 
   updateTimer();
-  timer.intervalId = window.setInterval(updateTimer, 1000);
+    state.dealTimerId = window.setInterval(updateTimer, 1000);
 
   elements.dealControls.append(warning, timer, confirm);
 }
-    const support = document.createElement("button"); support.className = "deal-support"; support.dataset.dealAction = "support"; support.textContent = "🛟 Написать в поддержку"; elements.dealControls.prepend(support);
+    const support = document.createElement("button"); support.className = "deal-support"; support.dataset.dealAction = "support"; support.textContent = "🛟 Написать в поддержку"; elements.dealControls.append(support);
     if (["paid", "seller_contacted"].includes(deal.status)) {
       const cancel = document.createElement("button"); cancel.className = "deal-secondary"; cancel.dataset.dealAction = "cancel"; cancel.textContent = "Отменить сделку"; elements.dealControls.append(cancel);
     }
@@ -3161,7 +3276,7 @@ async function hideCurrentConversation() {
   function formatFileSize(value) { const bytes = Number(value || 0); return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} МБ` : `${Math.max(1, Math.round(bytes / 1024))} КБ`; }
   function uniqueValues(values) { return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru")); }
   function statusLabel(status) { return ({ active: "Доступно", reserved: "Деньги под защитой", sold: "Уже продано", paused: "Снято с публикации", deleted: "Удалено" })[status] || status; }
-  function dealStatusLabel(status) { return ({ pending_payment: "Ожидает оплаты", paid: "Оплачено", seller_contacted: "Продавец на связи", transfer_in_progress: "Передача", buyer_confirmed: "Получение подтверждено", completed: "Завершена", disputed: "Спор", cancelled: "Отменена" })[status] || status; }
+  function dealStatusLabel(status) { return ({ pending_payment: "Ожидается оплата", paid: "Ожидается передача автомобиля", seller_contacted: "Продавец готов передать автомобиль", transfer_in_progress: "Продавец сообщил о передаче", buyer_confirmed: "Получение подтверждено", completed: "Покупка завершена", disputed: "На рассмотрении поддержки", cancelled: "Отменена" })[status] || status; }
   function withdrawalStatusLabel(status) { return ({ pending: "Ожидает проверки", approved: "Одобрена", paid: "Выплачена", rejected: "Отклонена", cancelled: "Отменена" })[status] || status; }
   function supportStatusLabel(status) { return ({ new: "Новое", open: "Открыто", in_progress: "В работе", resolved: "Решено", closed: "Закрыто" })[status] || status; }
 })();
