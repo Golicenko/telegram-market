@@ -765,6 +765,8 @@ function handleClick(event) {
   async function openSupport() {
     elements.supportForm.elements.deal_id.value = "";
     elements.supportForm.elements.topic.closest("label").hidden = false;
+    elements.supportForm.elements.screenshot.required = false;
+    document.getElementById("supportScreenshotLabel").textContent = "Скриншот, не более одного";
     document.getElementById("supportDealContext").hidden = true;
     openSecondary("support");
     if (!state.serverAvailable) return;
@@ -1152,7 +1154,10 @@ function handleClick(event) {
     if (elements.purchaseModal?.open) elements.purchaseModal.close();
     state.purchaseFlow = null;
     await refreshMarketplace();
-    showPurchaseSuccess("✅ Покупка оплачена", "Деньги находятся под защитой. Открываем чат сделки.");
+    showPurchaseSuccess(
+      "✅ Машина оплачена",
+      "Деньги находятся под защитой и будут переданы продавцу только после подтверждения получения автомобиля.",
+    );
     if (!deal?.id) return;
     await openDealConversation(deal.id);
   }
@@ -1763,27 +1768,27 @@ async function hideCurrentConversation() {
     const copy = document.createElement("p");
     if (deal.status === "completed") {
       title.textContent = isBuyer ? "✅ Покупка завершена" : "✅ Продажа завершена";
-      copy.textContent = isBuyer ? "Сделка успешно завершена." : "Деньги зачислены.";
+      copy.textContent = isBuyer ? "Автомобиль успешно получен." : "Деньги зачислены.";
       panel.append(title, copy);
       return;
     }
     if (deal.status === "transfer_in_progress") {
-      title.textContent = isBuyer ? "Продавец сообщил, что автомобиль передан" : "Ожидаем подтверждение покупателя";
+      title.textContent = isBuyer ? "🚗 Продавец сообщил о передаче" : "⏳ Ожидаем подтверждение покупателя";
       copy.textContent = isBuyer
-        ? "Получили машину? Подтвердите получение только после того, как проверили автомобиль."
-        : "Как только покупатель подтвердит получение, деньги будут начислены вам.";
+        ? "Вы получили автомобиль?"
+        : "Вы сообщили, что автомобиль передан.\nДеньги будут начислены после подтверждения покупателя.";
       panel.append(title, copy);
       return;
     }
     if (isBuyer && hasDetails) {
-      title.textContent = "Ожидается передача автомобиля";
-      copy.textContent = `Продавец получил уведомление о покупке.\nID: ${deal.buyer_game_id}\nУдобное время: ${deal.preferred_delivery_time}\nДоговоритесь с продавцом о передаче в чате.`;
+      title.textContent = "⏳ Ожидается передача автомобиля";
+      copy.textContent = `Продавец получил ваши данные.\nID: ${deal.buyer_game_id}\nВремя: ${deal.preferred_delivery_time}\nЕсли необходимо что-то уточнить, используйте чат ниже.`;
       panel.append(title, copy);
       return;
     }
     if (!isBuyer && hasDetails) {
-      title.textContent = "Вашу машину купили";
-      copy.textContent = `Покупатель уже оплатил покупку.\nID покупателя: ${deal.buyer_game_id}\nУдобное время: ${deal.preferred_delivery_time}\n\nПередайте автомобиль покупателю. После подтверждения получения деньги будут начислены вам.`;
+      title.textContent = "🚗 Передайте автомобиль покупателю";
+      copy.textContent = `ID покупателя: ${deal.buyer_game_id}\nУдобное время: ${deal.preferred_delivery_time}\n\nПередайте автомобиль по указанному ID. После передачи нажмите «Машина передана».`;
       panel.append(title, copy);
       return;
     }
@@ -1794,8 +1799,8 @@ async function hideCurrentConversation() {
       return;
     }
 
-    title.textContent = "Ожидается передача автомобиля";
-    copy.textContent = "Продавец получил уведомление о покупке. Отправьте ему игровой ID и договоритесь о времени передачи.";
+    title.textContent = "🚗 Получение автомобиля";
+    copy.textContent = "Чтобы продавец смог передать вам машину, укажите игровой ID и удобное время.";
     const form = document.createElement("form");
     form.className = "deal-delivery__form";
     form.innerHTML = `
@@ -1865,52 +1870,45 @@ async function hideCurrentConversation() {
     if (!deal || ["completed", "cancelled"].includes(deal.status)) return;
     const isBuyer = deal.buyer_id === state.me.user.id;
     const isSeller = deal.seller_id === state.me.user.id;
-    if (isSeller && ["paid", "seller_contacted"].includes(deal.status)) {
-      const transfer = document.createElement("button"); transfer.className = "deal-confirm"; transfer.dataset.dealAction = "transfer"; transfer.textContent = "Автомобиль передан покупателю"; elements.dealControls.append(transfer);
+    const hasDeliveryDetails = Boolean(deal.buyer_game_id && deal.preferred_delivery_time);
+    if (isSeller && hasDeliveryDetails && ["paid", "seller_contacted"].includes(deal.status)) {
+      const transfer = document.createElement("button");
+      transfer.className = "deal-confirm";
+      transfer.dataset.dealAction = "transfer";
+      transfer.textContent = "✅ Машина передана";
+      elements.dealControls.append(transfer);
     }
-   if (isBuyer && deal.status === "transfer_in_progress") {
-  const warning = document.createElement("p");
-  warning.textContent =
-    "Подтверждайте получение только после того, как действительно получили машину.";
-
-  const timer = document.createElement("p");
-  timer.className = "deal-timer";
-
-  const confirm = document.createElement("button");
-  confirm.className = "deal-confirm";
-  confirm.dataset.dealAction = "confirm";
-  confirm.textContent = "Машина передана мне";
-  confirm.hidden = true;
-
-  const availableAt =
-    new Date(deal.transfer_started_at).getTime() + 60 * 1000;
-
-  const updateTimer = () => {
-    const remainingMs = availableAt - Date.now();
-    const remainingSeconds = Math.max(
-      0,
-      Math.ceil(remainingMs / 1000)
-    );
-
-    if (remainingSeconds > 0) {
-      timer.textContent =
-        `Подтвердить получение можно через ${remainingSeconds} сек.`;
+    if (isBuyer && deal.status === "transfer_in_progress") {
+      const warning = document.createElement("p");
+      warning.textContent = "Подтверждайте получение только после того, как действительно получили машину.";
+      const timer = document.createElement("p");
+      timer.className = "deal-timer";
+      const confirm = document.createElement("button");
+      confirm.className = "deal-confirm";
+      confirm.dataset.dealAction = "confirm";
+      confirm.textContent = "✅ Да, машина у меня";
       confirm.hidden = true;
-      return;
+      const availableAt = new Date(deal.transfer_started_at).getTime() + 60 * 1000;
+      const updateTimer = () => {
+        const remainingSeconds = Math.max(0, Math.ceil((availableAt - Date.now()) / 1000));
+        if (remainingSeconds > 0) {
+          timer.textContent = `Подтвердить получение можно через ${remainingSeconds} сек.`;
+          confirm.hidden = true;
+          return;
+        }
+        timer.textContent = "Теперь можно подтвердить получение машины.";
+        confirm.hidden = false;
+        window.clearInterval(state.dealTimerId);
+        state.dealTimerId = null;
+      };
+      updateTimer();
+      state.dealTimerId = window.setInterval(updateTimer, 1000);
+      const support = document.createElement("button");
+      support.className = "deal-support";
+      support.dataset.dealAction = "support";
+      support.textContent = "Написать в поддержку";
+      elements.dealControls.append(warning, timer, confirm, support);
     }
-
-    timer.textContent = "Теперь можно подтвердить получение машины.";
-    confirm.hidden = false;
-    window.clearInterval(state.dealTimerId);
-    state.dealTimerId = null;
-  };
-
-  updateTimer();
-    state.dealTimerId = window.setInterval(updateTimer, 1000);
-
-  elements.dealControls.append(warning, timer, confirm);
-}
-    const support = document.createElement("button"); support.className = "deal-support"; support.dataset.dealAction = "support"; support.textContent = "🛟 Написать в поддержку"; elements.dealControls.append(support);
     if (["paid", "seller_contacted"].includes(deal.status)) {
       const cancel = document.createElement("button"); cancel.className = "deal-secondary"; cancel.dataset.dealAction = "cancel"; cancel.textContent = "Отменить сделку"; elements.dealControls.append(cancel);
     }
@@ -1927,13 +1925,26 @@ async function hideCurrentConversation() {
 
   function openDealSupport(dealId) {
     const form = elements.supportForm;
+    const details = state.currentConversation;
+    const deal = details?.deal;
+    const isBuyer = deal?.buyer_id === state.me?.user.id;
+    const currentName = [state.me?.user.first_name, state.me?.user.last_name].filter(Boolean).join(" ") || "Вы";
+    const otherName = details?.counterparty?.name || (details?.counterparty?.username ? `@${details.counterparty.username}` : "Пользователь Telegram");
     form.reset();
     form.elements.deal_id.value = dealId;
     form.elements.topic.value = "deal";
     form.elements.topic.closest("label").hidden = true;
+    form.elements.screenshot.required = true;
+    document.getElementById("supportScreenshotLabel").textContent = "Скриншот (обязательно, не более одного)";
     const context = document.getElementById("supportDealContext");
     context.hidden = false;
-    context.textContent = `Обращение по сделке #${dealId.slice(0, 8)}. Деньги останутся под защитой до решения.`;
+    context.textContent = [
+      `Обращение по сделке #${dealId.slice(0, 8)}`,
+      `Автомобиль: ${listingTitle(details?.listing)}`,
+      `Продавец: ${isBuyer ? otherName : currentName}`,
+      `Покупатель: ${isBuyer ? currentName : otherName}`,
+      "Деньги останутся под защитой до решения.",
+    ].join("\n");
     openSecondary("support");
     window.setTimeout(() => form.elements.message.focus({ preventScroll: true }), 50);
   }
@@ -2398,7 +2409,19 @@ async function hideCurrentConversation() {
     try {
       const dealId = String(data.get("deal_id") || "").trim();
       if (dealId) {
-        await api.request(`/deals/${dealId}/support`, { method: "POST", body: JSON.stringify({ message: data.get("message"), client_request_id: crypto.randomUUID() }) });
+        const screenshot = data.get("screenshot");
+        if (!screenshot?.size) {
+          throw new Error("Прикрепите хотя бы один скриншот, чтобы мы могли разобраться в ситуации.");
+        }
+        const screenshotUrl = (await api.upload(screenshot)).url;
+        await api.request(`/deals/${dealId}/support`, {
+          method: "POST",
+          body: JSON.stringify({
+            message: data.get("message"),
+            screenshot_url: screenshotUrl,
+            client_request_id: crypto.randomUUID(),
+          }),
+        });
       } else {
         const screenshot = data.get("screenshot");
         let screenshotUrl = null;
@@ -2410,6 +2433,8 @@ async function hideCurrentConversation() {
       }
       formElement.reset();
       formElement.elements.topic.closest("label").hidden = false;
+      formElement.elements.screenshot.required = false;
+      document.getElementById("supportScreenshotLabel").textContent = "Скриншот, не более одного";
       document.getElementById("supportDealContext").hidden = true;
       state.supportTickets = await api.request("/support/tickets");
       renderSupportTickets();

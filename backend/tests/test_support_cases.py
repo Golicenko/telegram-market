@@ -3,6 +3,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 from app import routes
 from app.bot import deal_support_case_payload
@@ -94,7 +95,7 @@ async def test_deal_support_case_links_context_and_freezes_deal_for_admin_review
     session = Session(deal, listing, buyer, seller, admin)
 
     ticket, _, _, _, administrators = await create_deal_support_case(
-        session, buyer, deal.id, "Продавец не передаёт машину", request_id
+        session, buyer, deal.id, "Продавец не передаёт машину", "/api/media/evidence", request_id
     )
 
     assert ticket.case_type == "deal"
@@ -103,11 +104,28 @@ async def test_deal_support_case_links_context_and_freezes_deal_for_admin_review
     assert ticket.buyer_id == buyer.id and ticket.seller_id == seller.id
     assert ticket.author_id == buyer.id
     assert ticket.status == "new"
+    assert ticket.screenshot_url == "/api/media/evidence"
     assert deal.status == "disputed"
     assert administrators == [admin]
     assert any(isinstance(item, SupportMessage) and item.client_request_id == request_id for item in session.added)
     assert any(isinstance(item, SupportCaseEvent) and item.event_type == "case_created" for item in session.added)
     assert any(isinstance(item, Notification) and item.user_id == admin.id for item in session.added)
+
+
+@pytest.mark.asyncio
+async def test_deal_support_rejects_request_without_screenshot():
+    buyer, seller, admin, listing, deal = support_fixture()
+    with pytest.raises(HTTPException) as error:
+        await create_deal_support_case(
+            Session(deal, listing, buyer, seller, admin),
+            buyer,
+            deal.id,
+            "Продавец не передаёт машину",
+            "   ",
+            uuid.uuid4(),
+        )
+    assert error.value.status_code == 422
+    assert "скриншот" in error.value.detail
 
 
 def test_support_message_idempotency_is_enforced_by_database():
@@ -193,7 +211,7 @@ def test_frontend_training_success_and_support_workflows_are_explicit():
     assert 'materialResult.failures.length' in app
     assert 'training_refresh_after_save' in app
     assert "Возникла проблема" not in app
-    assert "🛟 Написать в поддержку" in app
+    assert "Написать в поддержку" in app
     assert "/deals/${dealId}/support" in app
     assert "--chat-viewport-width" in app
     assert "width:var(--chat-viewport-width,100%)" in css

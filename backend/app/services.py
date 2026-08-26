@@ -1507,6 +1507,10 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
             raise HTTPException(status_code=409, detail=f"Cannot change {deal.status} to {next_status}")
         if next_status in {"seller_contacted", "transfer_in_progress"} and actor.id != deal.seller_id:
             raise HTTPException(status_code=403, detail="Only the seller can change this status")
+        if next_status == "transfer_in_progress" and not (
+            deal.buyer_game_id and deal.preferred_delivery_time
+        ):
+            raise HTTPException(status_code=409, detail="Покупатель ещё не указал игровой ID и время получения")
         deal.status = next_status
         if next_status == "transfer_in_progress":
             deal.transfer_started_at = datetime.now(UTC)
@@ -1520,6 +1524,7 @@ async def create_deal_support_case(
     author: User,
     deal_id: uuid.UUID,
     message: str,
+    screenshot_url: str,
     client_request_id: uuid.UUID,
 ) -> tuple[SupportTicket, Listing, User, User, list[User]]:
     """Open (or reuse) one active support case and freeze the deal for review."""
@@ -1534,6 +1539,12 @@ async def create_deal_support_case(
         seller = await session.get(User, deal.seller_id)
         if not listing or not buyer or not seller:
             raise HTTPException(status_code=409, detail="Контекст сделки повреждён")
+        clean_screenshot_url = screenshot_url.strip()
+        if not clean_screenshot_url:
+            raise HTTPException(
+                status_code=422,
+                detail="Прикрепите хотя бы один скриншот, чтобы мы могли разобраться в ситуации.",
+            )
         ticket = await session.scalar(
             select(SupportTicket).where(
                 SupportTicket.deal_id == deal.id,
@@ -1560,6 +1571,7 @@ async def create_deal_support_case(
                 seller_id=deal.seller_id,
                 topic="Проблема по сделке",
                 status="new",
+                screenshot_url=clean_screenshot_url,
                 unread_by_admin=True,
             )
             session.add(ticket)
@@ -1571,6 +1583,8 @@ async def create_deal_support_case(
                 to_status="new",
                 details={"deal_id": str(deal.id)},
             ))
+        elif not ticket.screenshot_url:
+            ticket.screenshot_url = clean_screenshot_url
         ticket.unread_by_admin = True
         session.add(SupportMessage(
             ticket_id=ticket.id,

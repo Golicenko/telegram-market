@@ -11,7 +11,7 @@ const css = fs.readFileSync(path.join(root, "css", "style.css"), "utf8");
 test("successful purchase opens the exact backend deal id", () => {
   assert.match(app, /finishListingPurchase\(deal\)/);
   assert.match(app, /openDealConversation\(deal\.id\)/);
-  assert.match(app, /✅ Покупка оплачена/);
+  assert.match(app, /✅ Машина оплачена/);
   assert.doesNotMatch(app.slice(app.indexOf("async function checkout"), app.indexOf("async function submitListing")), /deals\[0\]/);
 });
 
@@ -21,6 +21,9 @@ test("deal delivery form persists via the backend and has a mobile-safe layout",
   assert.match(app, /buyer_game_id: gameId/);
   assert.match(app, /preferred_time: form\.elements\.preferred_time\.value/);
   assert.match(css, /\.deal-delivery__form input\[type="time"\].*font-size:16px/);
+  assert.match(app, /hasDeliveryDetails && \["paid", "seller_contacted"\]/);
+  assert.match(app, /✅ Машина передана/);
+  assert.match(app, /✅ Да, машина у меня/);
 });
 
 test("deep link is retained through bootstrap and authorized before exact chat opens", () => {

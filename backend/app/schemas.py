@@ -464,6 +464,7 @@ class SupportTicketCreate(BaseModel):
 
 class DealSupportCaseCreate(BaseModel):
     message: str = Field(min_length=2, max_length=4000)
+    screenshot_url: str = Field(min_length=1, max_length=2000)
     client_request_id: uuid.UUID
 
 
