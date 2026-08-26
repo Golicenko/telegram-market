@@ -90,11 +90,20 @@ class ListingOut(ORMModel):
     price_af_coins: Decimal
     delivery_time_estimate: str
     views_count: int
+    likes_count: int = 0
+    liked_by_me: bool = False
     pinned: bool
     pinned_until: datetime | None
     effective_price_af_coins: Decimal | None = None
     created_at: datetime
     images: list[str] = Field(default_factory=list)
+
+
+class ListingEngagementOut(BaseModel):
+    views_count: int
+    likes_count: int
+    liked_by_me: bool
+    view_recorded: bool = False
 
 
 class DealOut(ORMModel):

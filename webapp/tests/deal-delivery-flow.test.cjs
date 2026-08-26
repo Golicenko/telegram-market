@@ -11,7 +11,7 @@ const css = fs.readFileSync(path.join(root, "css", "style.css"), "utf8");
 test("successful purchase opens the exact backend deal id", () => {
   assert.match(app, /finishListingPurchase\(deal\)/);
   assert.match(app, /openDealConversation\(deal\.id\)/);
-  assert.match(app, /✅ Покупка успешно оплачена/);
+  assert.match(app, /✅ Покупка оплачена/);
   assert.doesNotMatch(app.slice(app.indexOf("async function checkout"), app.indexOf("async function submitListing")), /deals\[0\]/);
 });
 

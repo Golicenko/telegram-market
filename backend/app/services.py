@@ -1396,7 +1396,7 @@ async def create_listing_payment_intent(
         available = money(wallet.available_balance if wallet else Decimal("0"))
         missing = money(price - available)
         if missing <= 0:
-            raise HTTPException(status_code=409, detail="Средств уже достаточно. Нажмите «Оплатить безопасно» ещё раз")
+            raise HTTPException(status_code=409, detail="Средств уже достаточно. Нажмите «Подтвердить покупку» ещё раз")
         xtr_amount = int(missing.to_integral_value(rounding=ROUND_CEILING))
         intent_id = uuid.uuid4()
         intent = StarPaymentIntent(

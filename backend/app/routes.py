@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPExcep
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .auth import get_current_user, require_admin
@@ -28,7 +29,7 @@ from .bot import (
 )
 from .config import Settings, get_settings
 from .database import SessionLocal, get_session
-from .models import AccountListing, AdminAction, AdminBroadcast, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportCaseEvent, SupportMessage, SupportTicket, TrainingMaterial, TrainingProduct, TrainingPurchase, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
+from .models import AccountListing, AdminAction, AdminBroadcast, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, ListingLike, ListingView, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportCaseEvent, SupportMessage, SupportTicket, TrainingMaterial, TrainingProduct, TrainingPurchase, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
 from .schemas import (
     AccountListingCreate,
     AccountListingOut,
@@ -46,6 +47,7 @@ from .schemas import (
     DealDeliveryDetailsCreate,
     DealOut,
     ListingCreate,
+    ListingEngagementOut,
     ListingOut,
     ListingUpdate,
     MeOut,
@@ -166,8 +168,32 @@ async def listing_out(session: AsyncSession, listing: Listing, buyer_id: uuid.UU
             )
         )
     is_pinned = bool(listing.pinned and listing.pinned_until and listing.pinned_until > datetime.now(UTC))
+    likes_count = int(await session.scalar(select(func.count(ListingLike.id)).where(ListingLike.listing_id == listing.id)) or 0)
+    liked_by_me = bool(
+        buyer_id
+        and await session.scalar(
+            select(ListingLike.id).where(ListingLike.listing_id == listing.id, ListingLike.user_id == buyer_id)
+        )
+    )
     return ListingOut.model_validate(listing).model_copy(
-        update={"images": images, "pinned": is_pinned, "effective_price_af_coins": effective_price}
+        update={
+            "images": images,
+            "pinned": is_pinned,
+            "effective_price_af_coins": effective_price,
+            "likes_count": likes_count,
+            "liked_by_me": liked_by_me,
+        }
+    )
+
+
+async def listing_engagement(session: AsyncSession, listing: Listing, user_id: uuid.UUID, *, view_recorded: bool = False) -> ListingEngagementOut:
+    likes_count = int(await session.scalar(select(func.count(ListingLike.id)).where(ListingLike.listing_id == listing.id)) or 0)
+    liked_by_me = bool(await session.scalar(select(ListingLike.id).where(ListingLike.listing_id == listing.id, ListingLike.user_id == user_id)))
+    return ListingEngagementOut(
+        views_count=listing.views_count,
+        likes_count=likes_count,
+        liked_by_me=liked_by_me,
+        view_recorded=view_recorded,
     )
 
 
@@ -748,6 +774,7 @@ async def list_listings(
     max_price: Decimal | None = Query(default=None, ge=0),
     min_power: int | None = Query(default=None, gt=0),
     min_speed: int | None = Query(default=None, gt=0),
+    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     if min_price is not None and max_price is not None and min_price > max_price:
@@ -765,7 +792,7 @@ async def list_listings(
     if min_speed:
         query = query.where(Listing.max_speed_kph >= min_speed)
     listings = list((await session.scalars(query.order_by(Listing.pinned.desc(), Listing.created_at.desc()))).all())
-    return [await listing_out(session, item) for item in listings]
+    return [await listing_out(session, item, user.id) for item in listings]
 
 
 @router.post("/listings", response_model=ListingOut, status_code=201)
@@ -787,11 +814,79 @@ async def get_listing_details(
     listing = await session.get(Listing, listing_id)
     if not listing or listing.status == "deleted":
         raise HTTPException(status_code=404, detail="Объявление не найдено")
-    if listing.seller_id != user.id:
-        listing.views_count += 1
-        await session.commit()
-        await session.refresh(listing)
     return await listing_out(session, listing, user.id)
+
+
+@router.post("/listings/{listing_id}/view", response_model=ListingEngagementOut)
+async def record_listing_view(
+    listing_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
+    if not listing or listing.status == "deleted":
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if listing.seller_id == user.id:
+        return await listing_engagement(session, listing, user.id)
+
+    now = datetime.now(UTC)
+    inserted_id = await session.scalar(
+        pg_insert(ListingView)
+        .values(listing_id=listing.id, user_id=user.id, viewed_at=now)
+        .on_conflict_do_nothing(index_elements=[ListingView.listing_id, ListingView.user_id])
+        .returning(ListingView.id)
+    )
+    recorded = inserted_id is not None
+    if not recorded:
+        previous = await session.scalar(
+            select(ListingView)
+            .where(ListingView.listing_id == listing.id, ListingView.user_id == user.id)
+            .with_for_update()
+        )
+        if previous and previous.viewed_at <= now - timedelta(hours=24):
+            previous.viewed_at = now
+            recorded = True
+    if recorded:
+        listing.views_count += 1
+    await session.commit()
+    await session.refresh(listing)
+    return await listing_engagement(session, listing, user.id, view_recorded=recorded)
+
+
+@router.post("/listings/{listing_id}/like", response_model=ListingEngagementOut)
+async def like_listing(
+    listing_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    listing = await session.get(Listing, listing_id)
+    if not listing or listing.status == "deleted":
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if listing.seller_id == user.id:
+        raise HTTPException(status_code=403, detail="Нельзя поставить лайк собственному объявлению")
+    await session.execute(
+        pg_insert(ListingLike)
+        .values(listing_id=listing.id, user_id=user.id)
+        .on_conflict_do_nothing(index_elements=[ListingLike.listing_id, ListingLike.user_id])
+    )
+    await session.commit()
+    return await listing_engagement(session, listing, user.id)
+
+
+@router.delete("/listings/{listing_id}/like", response_model=ListingEngagementOut)
+async def unlike_listing(
+    listing_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    listing = await session.get(Listing, listing_id)
+    if not listing or listing.status == "deleted":
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if listing.seller_id == user.id:
+        raise HTTPException(status_code=403, detail="Нельзя менять лайк собственного объявления")
+    await session.execute(delete(ListingLike).where(ListingLike.listing_id == listing.id, ListingLike.user_id == user.id))
+    await session.commit()
+    return await listing_engagement(session, listing, user.id)
 
 
 @router.post("/listings/{listing_id}/purchase", response_model=DealOut)

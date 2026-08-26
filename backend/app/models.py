@@ -74,6 +74,24 @@ class ListingImage(Base):
     __table_args__ = (UniqueConstraint("listing_id", "position", name="uq_listing_image_position"),)
 
 
+class ListingView(Base):
+    __tablename__ = "listing_views"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    viewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    __table_args__ = (UniqueConstraint("listing_id", "user_id", name="uq_listing_view_listing_user"),)
+
+
+class ListingLike(Base):
+    __tablename__ = "listing_likes"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (UniqueConstraint("listing_id", "user_id", name="uq_listing_like_listing_user"),)
+
+
 class UploadedImage(Base):
     """A normalized image kept in PostgreSQL so Railway restarts cannot lose it."""
 
