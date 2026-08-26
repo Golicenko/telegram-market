@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from app.bot import deal_purchase_notification_payload
 from app.models import Conversation, ConversationMessage, Deal, Listing, User
-from app.services import save_deal_delivery_details
+from app.services import save_deal_delivery_details, set_deal_status
 from app import routes
 
 
@@ -102,6 +102,18 @@ async def test_only_exact_deal_buyer_can_store_delivery_details():
             Session(deal, listing, conversation), outsider, deal.id, "123", "now", None
         )
     assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_seller_cannot_mark_transfer_before_buyer_sends_delivery_details():
+    _buyer, seller, listing, conversation, deal = fixture()
+    with pytest.raises(HTTPException) as error:
+        await set_deal_status(
+            Session(deal, listing, conversation), seller, deal.id, "transfer_in_progress"
+        )
+    assert error.value.status_code == 409
+    assert deal.status == "paid"
+    assert "игровой ID" in error.value.detail
 
 
 def test_seller_notification_opens_the_exact_deal():

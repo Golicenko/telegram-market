@@ -475,7 +475,7 @@ body.chat-open{height:var(--chat-viewport-height,100dvh);overflow:hidden}.chat-o
 body.chat-open .app-shell{width:100vw;max-width:none;margin:0;padding:0;border:0}
 .deal-controls button:not(.deal-confirm):not(.deal-support):not(.deal-secondary){display:none}
 .deal-support,.deal-secondary{display:block}
-.deal-support{order:-1;min-height:34px;border:1px solid rgba(118,151,183,.25);border-radius:9px;color:#aebdca;background:#0b1520;font-size:9px}
+.deal-support{order:2;min-height:34px;border:1px solid rgba(118,151,183,.25);border-radius:9px;color:#aebdca;background:#0b1520;font-size:9px}
 .support-deal-context{padding:10px;border:1px solid rgba(255,166,27,.35);border-radius:10px;color:#e8c987;background:rgba(255,149,0,.07);font-size:10px;line-height:1.45}
 .support-admin-filters{display:flex;gap:6px;overflow-x:auto;margin:0 0 10px;padding-bottom:3px}.support-admin-filters button{flex:none;min-height:32px;padding:0 10px;border:1px solid var(--line);border-radius:9px;color:var(--muted);background:var(--panel)}.support-admin-filters button.is-active{border-color:var(--line-bright);color:#231605;background:linear-gradient(135deg,#ffc128,#ff8500)}
 @media(max-width:619px){.chat-view{top:var(--chat-viewport-top,0px);right:auto;bottom:auto;left:var(--chat-viewport-left,0px);width:var(--chat-viewport-width,100%);max-width:none;height:var(--chat-viewport-height,100dvh);transform:none;border:0}}

@@ -1749,7 +1749,7 @@ async def create_deal_support(
     session: AsyncSession = Depends(get_session),
 ):
     ticket, listing, buyer, seller, administrators = await create_deal_support_case(
-        session, user, deal_id, payload.message, payload.client_request_id
+        session, user, deal_id, payload.message, payload.screenshot_url, payload.client_request_id
     )
 
     def label(person: User) -> str:
