@@ -253,10 +253,12 @@ async def test_second_buyer_cannot_buy_listing_locked_by_first_buyer():
 
 def test_start_and_how_it_works_menus_have_web_app_and_back_buttons():
     method, start = bot_menu_payload(False, "https://market.example", chat_id=1)
-    assert method == "sendMessage"
+    assert method == "sendPhoto"
     assert "Добро пожаловать" in START_MENU_TEXT
     assert start["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"] == "https://market.example"
-    assert start["reply_markup"]["inline_keyboard"][1][0]["callback_data"] == "autoflow:how"
+    assert len(start["reply_markup"]["inline_keyboard"]) == 1
+    assert start["photo"] == "https://market.example/images/autoflow-start.png"
+    assert start["caption"] == START_MENU_TEXT
 
     method, details = bot_menu_payload(True, "https://market.example", chat_id=1, message_id=5)
     assert method == "editMessageText"
