@@ -35,6 +35,7 @@ class Listing(Base, TimestampMixin):
     __tablename__ = "listings"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     seller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    client_request_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     listing_type: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", index=True)
     brand: Mapped[str] = mapped_column(Text, nullable=False)
@@ -60,6 +61,7 @@ class Listing(Base, TimestampMixin):
             name="ck_listings_delivery_time",
         ),
         CheckConstraint("views_count >= 0", name="ck_listings_views_nonnegative"),
+        UniqueConstraint("seller_id", "client_request_id", name="uq_listing_seller_client_request"),
         Index("ix_listings_type_status_created", "listing_type", "status", "created_at"),
     )
 

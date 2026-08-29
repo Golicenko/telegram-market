@@ -1,4 +1,6 @@
 from io import BytesIO
+from pathlib import Path
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -57,3 +59,18 @@ async def test_upload_save_and_read_image_flow():
     response = await uploaded_image(session.image.id, session)
     assert response.media_type == "image/jpeg"
     assert response.body.startswith(b"\xff\xd8\xff")
+
+
+@pytest.mark.asyncio
+async def test_oversized_upload_returns_413_before_image_processing(monkeypatch):
+    monkeypatch.setattr("app.routes.get_settings", lambda: SimpleNamespace(upload_max_bytes=10))
+    user = User(id=uuid.uuid4(), telegram_id=101, first_name="Mobile", role="user")
+    upload = UploadFile(filename="large.jpg", file=BytesIO(b"x" * 11), headers={"content-type": "image/jpeg"})
+    with pytest.raises(HTTPException) as error:
+        await upload_image(upload, user, FakeImageSession())
+    assert error.value.status_code == 413
+
+
+def test_upload_normalization_runs_outside_the_async_event_loop():
+    source = (Path(__file__).parents[1] / "app" / "routes.py").read_text(encoding="utf-8")
+    assert "await run_in_threadpool(normalize_image_content, content)" in source

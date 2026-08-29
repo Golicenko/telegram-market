@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="source-20260826-dealflow1" />
-    <link rel="stylesheet" href="css/style.css?v=source-20260826-dealflow1" />
+    <meta name="autoflow-build" content="af-91ee69159db0" />
+    <link rel="stylesheet" href="css/style.css?v=af-91ee69159db0" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=source-20260826-dealflow1" defer></script>
-    <script src="js/app.js?v=source-20260826-dealflow1" defer></script>
+    <script src="js/api.js?v=af-91ee69159db0" defer></script>
+    <script src="js/app.js?v=af-91ee69159db0" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -92,7 +92,7 @@
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="addTitle">Добавить автомобиль</h1></div>
           <form class="car-form" id="carForm">
             <input id="listingType" type="hidden" value="regular" />
-            <label class="photo-upload" for="carPhotos"><input id="carPhotos" name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple /><span class="camera-icon" aria-hidden="true">▣</span><span><strong>Загрузить фото</strong><small>До 10 фотографий, каждая до 20 МБ</small></span></label><div class="photo-preview" id="photoPreview"></div>
+            <label class="photo-upload" for="carPhotos"><input id="carPhotos" name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple /><span class="camera-icon" aria-hidden="true">▣</span><span><strong>Загрузить фото</strong><small>До 10 фотографий, каждая до 30 МБ</small></span></label><div class="photo-preview" id="photoPreview"></div>
             <label class="form-row"><span>Автомобиль</span><input id="brandInput" name="brand" required autocomplete="off" list="brandSuggestions" placeholder="Начните вводить автомобиль" /><datalist id="brandSuggestions"></datalist></label>
             <label class="form-row"><span>Мощность (л.с.)</span><input name="power_hp" required type="number" min="1" inputmode="numeric" placeholder="Введите мощность" /></label>
             <label class="form-row"><span>Макс. скорость</span><input name="max_speed_kph" required type="number" min="1" inputmode="numeric" placeholder="км/ч" /></label>

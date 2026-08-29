@@ -22,6 +22,16 @@ settings = get_settings()
 logger = logging.getLogger("autoflow.api")
 
 
+async def run_startup_job(name: str, job) -> None:
+    """Keep optional recovery work observable without blocking HTTP startup."""
+    try:
+        await job()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.error("startup_job_failed name=%s error_type=%s", name, type(exc).__name__)
+
+
 def set_frontend_cache_headers(request: Request, response) -> None:
     path = request.url.path
     if path == "/" or path.endswith("/index.html") or path.endswith(".html"):
@@ -41,11 +51,11 @@ def set_frontend_cache_headers(request: Request, response) -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    await configure_telegram_webhook()
     recovery_tasks = [
-        asyncio.create_task(recover_training_background_jobs()),
-        asyncio.create_task(recover_deal_purchase_notifications()),
-        asyncio.create_task(recover_admin_broadcasts()),
+        asyncio.create_task(run_startup_job("telegram_webhook", configure_telegram_webhook)),
+        asyncio.create_task(run_startup_job("training_recovery", recover_training_background_jobs)),
+        asyncio.create_task(run_startup_job("deal_notification_recovery", recover_deal_purchase_notifications)),
+        asyncio.create_task(run_startup_job("broadcast_recovery", recover_admin_broadcasts)),
     ]
     try:
         yield
@@ -53,6 +63,7 @@ async def lifespan(_app: FastAPI):
         for recovery_task in recovery_tasks:
             if not recovery_task.done():
                 recovery_task.cancel()
+        await asyncio.gather(*recovery_tasks, return_exceptions=True)
         await engine.dispose()
 
 
@@ -85,6 +96,7 @@ async def diagnostic_request_log(request: Request, call_next):
                         "status": status_code,
                         "duration_ms": round((perf_counter() - started_at) * 1000),
                         "error_type": error_type,
+                        "error_id": request.headers.get("X-AutoFlow-Error-ID", "")[:16] or None,
                         "telegram_user_id": getattr(request.state, "telegram_user_id", None),
                         "platform": request.headers.get("X-Telegram-Platform", "unknown")[:32],
                         "startup_stage": request.headers.get("X-AutoFlow-Startup-Stage", "unknown")[:48],

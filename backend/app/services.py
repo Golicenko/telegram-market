@@ -139,29 +139,53 @@ async def create_listing(
     if listing_type == "unique" and seller.role != "admin":
         raise HTTPException(status_code=403, detail="Only administrators can create unique listings")
 
-    async with session.begin():
-        now = datetime.now(UTC)
-        admin_pinned = seller.role == "admin" and listing_type == "unique" and pinned
-        listing = Listing(
-            seller_id=seller.id,
-            listing_type=listing_type,
-            status="active",
-            brand=payload.brand,
-            model=payload.model or "",
-            power_hp=payload.power_hp,
-            max_speed_kph=payload.max_speed_kph,
-            description=payload.description.strip(),
-            price_af_coins=money(payload.price_af_coins),
-            delivery_time_estimate=payload.delivery_time_estimate,
-            pinned=admin_pinned,
-            pinned_until=now + timedelta(hours=settings.listing_promotion_hours) if admin_pinned else None,
+    request_id = getattr(payload, "client_request_id", None)
+    try:
+        async with session.begin():
+            listing = None
+            if request_id:
+                listing = await session.scalar(
+                    select(Listing).where(
+                        Listing.seller_id == seller.id,
+                        Listing.client_request_id == request_id,
+                    )
+                )
+            if listing is None:
+                now = datetime.now(UTC)
+                admin_pinned = seller.role == "admin" and listing_type == "unique" and pinned
+                listing = Listing(
+                    seller_id=seller.id,
+                    client_request_id=request_id,
+                    listing_type=listing_type,
+                    status="active",
+                    brand=payload.brand,
+                    model=payload.model or "",
+                    power_hp=payload.power_hp,
+                    max_speed_kph=payload.max_speed_kph,
+                    description=payload.description.strip(),
+                    price_af_coins=money(payload.price_af_coins),
+                    delivery_time_estimate=payload.delivery_time_estimate,
+                    pinned=admin_pinned,
+                    pinned_until=now + timedelta(hours=settings.listing_promotion_hours) if admin_pinned else None,
+                )
+                session.add(listing)
+                await session.flush()
+                for position, url in enumerate(payload.image_urls):
+                    session.add(ListingImage(listing_id=listing.id, url=url, position=position))
+                if listing_type == "unique":
+                    session.add(AdminAction(admin_id=seller.id, action="create_unique_listing", target_type="listing", target_id=listing.id))
+    except IntegrityError:
+        await session.rollback()
+        if request_id is None:
+            raise
+        listing = await session.scalar(
+            select(Listing).where(
+                Listing.seller_id == seller.id,
+                Listing.client_request_id == request_id,
+            )
         )
-        session.add(listing)
-        await session.flush()
-        for position, url in enumerate(payload.image_urls):
-            session.add(ListingImage(listing_id=listing.id, url=url, position=position))
-        if listing_type == "unique":
-            session.add(AdminAction(admin_id=seller.id, action="create_unique_listing", target_type="listing", target_id=listing.id))
+        if listing is None:
+            raise
     await session.refresh(listing)
     return listing
 

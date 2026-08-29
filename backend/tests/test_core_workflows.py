@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 from decimal import Decimal
+from pathlib import Path
 from urllib.parse import urlencode
 
 import pytest
@@ -148,6 +149,35 @@ async def test_creating_multiple_regular_listings_is_free():
     assert first.status == second.status == "active"
     assert not any(isinstance(item, WalletTransaction) for item in session.added)
     assert len([item for item in session.added if isinstance(item, ListingImage)]) == 4
+
+
+@pytest.mark.asyncio
+async def test_listing_creation_retry_returns_the_original_listing():
+    seller = User(id=uuid.uuid4(), telegram_id=70, first_name="Seller", role="user")
+    request_id = uuid.uuid4()
+    payload = ListingCreate(
+        client_request_id=request_id,
+        brand="Retry car",
+        power_hp=100,
+        max_speed_kph=200,
+        description="Описание",
+        price_af_coins=1,
+        image_urls=["/api/media/one"],
+    )
+    first_session = FakeSession([None])
+    first = await create_listing(first_session, seller, payload, listing_type="regular")
+    retry_session = FakeSession([first])
+    retry = await create_listing(retry_session, seller, payload, listing_type="regular")
+    assert retry is first
+    assert retry.client_request_id == request_id
+    assert not [item for item in retry_session.added if isinstance(item, ListingImage)]
+
+
+def test_listing_idempotency_migration_is_additive():
+    source = (Path(__file__).parents[1] / "migrations" / "versions" / "0023_listing_creation_idempotency.py").read_text(encoding="utf-8")
+    assert "client_request_id" in source
+    assert "uq_listing_seller_client_request" in source
+    assert "drop_table" not in source
 
 
 @pytest.mark.asyncio

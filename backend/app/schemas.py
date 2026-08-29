@@ -35,7 +35,26 @@ class MeOut(BaseModel):
     wallet: WalletOut
 
 
+class ClientDiagnosticCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    error_id: str = Field(pattern="^AF-[A-Z0-9]{5,10}$")
+    context: str = Field(min_length=1, max_length=64)
+    build: str = Field(default="unknown", max_length=64)
+    platform: str = Field(default="unknown", max_length=32)
+    telegram_version: str | None = Field(default=None, max_length=32)
+    endpoint: str | None = Field(default=None, max_length=256)
+    status: int = Field(default=0, ge=0, le=599)
+    duration_ms: int | None = Field(default=None, ge=0, le=300000)
+    error_type: str = Field(default="Error", max_length=64)
+    startup_stage: str = Field(default="unknown", max_length=64)
+    user_agent: str = Field(default="unknown", max_length=200)
+    online: bool | None = None
+    related_id: str | None = Field(default=None, max_length=128)
+
+
 class ListingCreate(BaseModel):
+    client_request_id: uuid.UUID | None = None
     brand: str = Field(min_length=1)
     model: str | None = Field(default=None, min_length=1)
     power_hp: int = Field(gt=0)

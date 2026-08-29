@@ -25,7 +25,19 @@ test("browser launch and global JavaScript failures have explicit handling", () 
   assert.match(source, /Откройте AutoFlow Market через Telegram/);
   assert.match(source, /unhandledrejection/);
   assert.match(source, /window\.addEventListener\("online"/);
+  assert.match(source, /window\.addEventListener\("offline"/);
+  assert.match(source, /visibilitychange/);
+  assert.match(source, /\/diagnostics\/client/);
+  assert.match(source, /function createRequestId/);
+  assert.match(source, /typeof window\.crypto\?\.randomUUID === "function"/);
   assert.doesNotMatch(source, /Запустите PostgreSQL|localhost|Сервер API не подключён/);
+});
+
+test("listing publication reuses one backend idempotency key after a lost response", () => {
+  const submit = source.slice(source.indexOf("async function submitListing"), source.indexOf("function findListing"));
+  assert.match(submit, /state\.pendingListingRequestId \|\|= createRequestId\(\)/);
+  assert.match(submit, /payload\.client_request_id = state\.pendingListingRequestId/);
+  assert.match(submit, /state\.pendingListingRequestId = null/);
 });
 
 test("market shell is immediate and startup feedback stays inline", () => {

@@ -6,7 +6,7 @@ const path = require("node:path");
 
 const source = fs.readFileSync(path.join(__dirname, "..", "js", "api.js"), "utf8");
 
-function loadApi(fetchImpl, initData = "") {
+function loadApi(fetchImpl, initData = "", options = {}) {
   const warnings = [];
   const window = {
     AUTO_FLOW_API_BASE: undefined,
@@ -25,7 +25,6 @@ function loadApi(fetchImpl, initData = "") {
     performance,
     URL,
     URLSearchParams,
-    AbortController,
     FormData,
     CustomEvent: class CustomEvent { constructor(type, options) { this.type = type; this.detail = options?.detail; } },
     console: { warn: (...args) => warnings.push(args), error() {}, log() {} },
@@ -34,6 +33,7 @@ function loadApi(fetchImpl, initData = "") {
     Promise,
     Error,
   };
+  if (options.abortController !== false) context.AbortController = AbortController;
   vm.runInNewContext(source, context, { filename: "api.js" });
   return { api: window.AutoFlowApi, warnings };
 }
@@ -107,4 +107,62 @@ test("a cart timeout is bounded and reported without exposing secrets", async ()
   await assert.rejects(api.request("/cart", { timeoutMs: 8, retries: 0 }), (error) => error.errorType === "timeout");
   assert.equal(warnings.length, 1);
   assert.equal(JSON.stringify(warnings).includes("private-value"), false);
+});
+
+test("works in an older Android WebView without AbortController", async () => {
+  const { api } = loadApi(async () => jsonResponse({ ok: true }), "", { abortController: false });
+  assert.deepEqual(await api.request("/health", { retries: 0, timeoutMs: 50 }), { ok: true });
+});
+
+test("timeout remains bounded without AbortController", async () => {
+  const { api } = loadApi(() => new Promise(() => {}), "", { abortController: false });
+  await assert.rejects(
+    api.request("/health", { retries: 0, timeoutMs: 8 }),
+    (error) => error.errorType === "timeout",
+  );
+});
+
+test("429 is retried once and respects a bounded Retry-After", async () => {
+  let calls = 0;
+  const { api } = loadApi(async () => {
+    calls += 1;
+    if (calls > 1) return jsonResponse({ ok: true });
+    return {
+      ...jsonResponse({ detail: "slow down" }, 429),
+      headers: { get: (name) => name === "Retry-After" ? "0.001" : null },
+    };
+  });
+  assert.deepEqual(await api.request("/health", { retries: 1, retryDelayMs: 1 }), { ok: true });
+  assert.equal(calls, 2);
+});
+
+test("invalid JSON is reported once and is not retried", async () => {
+  let calls = 0;
+  const { api } = loadApi(async () => {
+    calls += 1;
+    return { ok: true, status: 200, json: async () => { throw new Error("html response"); } };
+  });
+  await assert.rejects(api.request("/health", { retries: 2, retryDelayMs: 1 }), (error) => error.errorType === "invalid_json");
+  assert.equal(calls, 1);
+});
+
+test("every request carries a short diagnostic id without exposing auth", async () => {
+  let captured;
+  const { api } = loadApi(async (_url, options) => { captured = options; return jsonResponse({ ok: true }); });
+  await api.request("/health", { retries: 0 });
+  assert.match(captured.headers["X-AutoFlow-Error-ID"], /^AF-[A-Z0-9]{5,10}$/);
+});
+
+test("photo upload distinguishes network, size, format, auth, rate and timeout failures", () => {
+  for (const message of [
+    "Нет соединения с сервером. Проверьте интернет.",
+    "Фотография слишком большая.",
+    "Формат фотографии не поддерживается.",
+    "Сессия Telegram истекла. Откройте Market заново.",
+    "Слишком много запросов. Попробуйте через несколько секунд.",
+    "Загрузка фотографии заняла слишком много времени. Попробуйте снова.",
+  ]) assert.match(source, new RegExp(message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(source, /prepareImage/);
+  assert.match(source, /2560/);
+  assert.match(source, /retries: 0/);
 });

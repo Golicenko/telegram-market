@@ -40,6 +40,16 @@ def test_invalid_signature_is_rejected():
         validate_init_data(payload.replace("hash=", "hash=broken"), "test-token")
 
 
+def test_init_data_survives_normal_background_time_but_rejects_stale_or_future_payloads():
+    now = int(time.time())
+    user = {"id": 77, "first_name": "Return user"}
+    assert validate_init_data(signed_init_data(user, auth_date=now - 23 * 3600), "test-token") == user
+    with pytest.raises(ValueError, match="expired"):
+        validate_init_data(signed_init_data(user, auth_date=now - 25 * 3600), "test-token")
+    with pytest.raises(ValueError, match="expired"):
+        validate_init_data(signed_init_data(user, auth_date=now + 600), "test-token")
+
+
 def test_auth_limits_fake_user_to_debug_and_creates_wallet_with_new_user():
     source = (Path(__file__).parents[1] / "app" / "auth.py").read_text(encoding="utf-8")
     assert "session.add(Wallet(user_id=user.id))" in source
