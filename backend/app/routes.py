@@ -25,6 +25,7 @@ from .bot import (
     create_star_invoice_link,
     send_deal_support_case_notification,
     send_deal_purchase_notification,
+    send_deal_transfer_reminder,
     send_personal_training_order_notification,
     send_bot_notification,
     send_bot_menu,
@@ -145,6 +146,7 @@ from .services import (
 router = APIRouter(prefix="/api")
 logger = logging.getLogger("autoflow.training")
 diagnostic_logger = logging.getLogger("autoflow.client")
+deal_notification_logger = logging.getLogger("autoflow.deal_notifications")
 register_heif_opener()
 Image.MAX_IMAGE_PIXELS = 40_000_000
 UPLOAD_DIR = Path(get_settings().upload_dir) if get_settings().upload_dir else Path(__file__).resolve().parents[1] / "uploads"
@@ -542,6 +544,119 @@ async def recover_deal_purchase_notifications() -> None:
         )).all())
     for deal_id in pending_ids:
         await notify_deal_purchase_seller(deal_id)
+
+
+def deal_transfer_reminder_is_relevant(deal: Deal) -> bool:
+    return (
+        deal.status == "transfer_in_progress"
+        and deal.transfer_started_at is not None
+        and deal.buyer_confirmed_at is None
+        and deal.completed_at is None
+        and deal.cancelled_at is None
+    )
+
+
+async def notify_deal_transfer_buyer(deal_id: uuid.UUID, *, now: datetime | None = None) -> None:
+    """Claim and deliver one durable reminder without creating a payout path."""
+    current_time = now or datetime.now(UTC)
+    telegram_id: int | None = None
+    async with SessionLocal() as session:
+        async with session.begin():
+            deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+            if (
+                not deal
+                or deal.buyer_transfer_reminder_status != "pending"
+                or not deal.buyer_transfer_reminder_scheduled_at
+                or deal.buyer_transfer_reminder_scheduled_at > current_time
+            ):
+                return
+            if not deal_transfer_reminder_is_relevant(deal):
+                deal.buyer_transfer_reminder_status = "skipped"
+                deal.buyer_transfer_reminder_error = "deal_state_changed_before_delivery"
+                return
+            buyer = await session.get(User, deal.buyer_id)
+            if not buyer or not buyer.bot_started:
+                deal.buyer_transfer_reminder_status = "failed"
+                deal.buyer_transfer_reminder_error = "buyer_has_not_started_bot"
+                return
+            deal.buyer_transfer_reminder_status = "sending"
+            deal.buyer_transfer_reminder_claimed_at = current_time
+            deal.buyer_transfer_reminder_attempts += 1
+            deal.buyer_transfer_reminder_error = None
+            telegram_id = buyer.telegram_id
+
+    if telegram_id is None:
+        return
+
+    # Lock the exact Deal again while checking the current state and sending.
+    # Buyer confirmation uses the same row lock, so it cannot race settlement
+    # through this final eligibility check.
+    async with SessionLocal() as session:
+        async with session.begin():
+            deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+            if not deal or deal.buyer_transfer_reminder_status != "sending":
+                return
+            if not deal_transfer_reminder_is_relevant(deal):
+                deal.buyer_transfer_reminder_status = "skipped"
+                deal.buyer_transfer_reminder_error = "deal_state_changed_before_send"
+                return
+            result = await send_deal_transfer_reminder(telegram_id, deal_id=str(deal.id))
+            if result.success:
+                deal.buyer_transfer_reminder_status = "sent"
+                deal.buyer_transfer_reminder_sent_at = datetime.now(UTC)
+                deal.buyer_transfer_reminder_error = None
+            elif (
+                result.error_type == "rate_limited"
+                and result.retry_after is not None
+                and 0 < result.retry_after <= 30
+                and deal.buyer_transfer_reminder_attempts < 2
+            ):
+                # Telegram explicitly rejected this attempt before delivery, so
+                # one bounded retry cannot duplicate a previously sent message.
+                deal.buyer_transfer_reminder_status = "pending"
+                deal.buyer_transfer_reminder_scheduled_at = datetime.now(UTC) + timedelta(seconds=result.retry_after)
+                deal.buyer_transfer_reminder_error = "rate_limited"
+            else:
+                deal.buyer_transfer_reminder_status = "failed"
+                deal.buyer_transfer_reminder_error = result.error_type or "telegram_delivery_failed"
+                deal_notification_logger.warning(
+                    "deal_transfer_reminder_failed deal_id=%s error_type=%s",
+                    deal.id,
+                    result.error_type or "unknown",
+                )
+
+
+async def recover_deal_transfer_reminders() -> None:
+    """Process reminders that are due; PostgreSQL remains the queue source of truth."""
+    now = datetime.now(UTC)
+    async with SessionLocal() as session:
+        due_ids = list((await session.scalars(
+            select(Deal.id)
+            .where(
+                Deal.buyer_transfer_reminder_status == "pending",
+                Deal.buyer_transfer_reminder_scheduled_at <= now,
+            )
+            .order_by(Deal.buyer_transfer_reminder_scheduled_at)
+            .limit(100)
+        )).all())
+    for deal_id in due_ids:
+        await notify_deal_transfer_buyer(deal_id, now=now)
+
+
+async def run_deal_transfer_reminder_worker() -> None:
+    """Continuously resume persisted reminders, including after Railway restarts."""
+    poll_seconds = get_settings().deal_notification_poll_seconds
+    while True:
+        try:
+            await recover_deal_transfer_reminders()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            deal_notification_logger.error(
+                "deal_transfer_reminder_worker_failed error_type=%s",
+                type(exc).__name__,
+            )
+        await asyncio.sleep(poll_seconds)
 
 
 async def recover_training_background_jobs() -> None:
@@ -1767,6 +1882,18 @@ async def get_deal(deal_id: uuid.UUID, user: User = Depends(get_current_user), s
         "buyer_confirmation_available_at": deal.transfer_started_at,
         "conversation_id": str(conversation_id) if conversation_id else None,
     }
+
+
+@router.get("/deals/{deal_id}/buyer-entry")
+async def get_deal_buyer_entry(
+    deal_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    deal = await session.get(Deal, deal_id)
+    if not deal or deal.buyer_id != user.id:
+        raise HTTPException(status_code=404, detail="Сделка не найдена")
+    return await get_deal(deal_id, user, session)
 
 
 @router.post("/deals/{deal_id}/conversation", status_code=200)

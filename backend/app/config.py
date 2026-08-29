@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     db_pool_timeout_seconds: int = Field(default=10, ge=1, le=60)
     db_pool_recycle_seconds: int = Field(default=300, ge=30, le=3600)
     db_connect_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    deal_transfer_reminder_seconds: int = Field(default=120, ge=1, le=86400)
+    deal_notification_poll_seconds: int = Field(default=5, ge=1, le=60)
     debug: bool = False
     dev_telegram_id: int | None = None
     dev_telegram_name: str = "Local User"

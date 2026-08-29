@@ -3,6 +3,7 @@
 
   const api = window.AutoFlowApi;
   let telegram = window.Telegram?.WebApp || null;
+  const launchParams = new URLSearchParams(window.location.search);
   const state = {
     currentView: "market",
     previousView: "market",
@@ -54,7 +55,9 @@
     dealTimerId: null,
     pendingListingRequestId: null,
     hiddenAt: null,
-    pendingDealDeepLink: new URLSearchParams(window.location.search).get("deal_id"),
+    pendingDealDeepLink: launchParams.get("deal_id"),
+    pendingDealBuyerEntry: launchParams.get("buyer_entry") === "1",
+    pendingSupportDealDeepLink: launchParams.get("support_deal_id"),
     openingDealDeepLink: false,
     serverAvailable: true,
   };
@@ -331,6 +334,7 @@
     void loadOptionalData();
     void openTrainingOrderDeepLink();
     void openSupportCaseDeepLink();
+    void openDealSupportDeepLink();
     void openDealDeepLink();
   }
 
@@ -3083,15 +3087,36 @@ async function hideCurrentConversation() {
     } catch (error) { notify(error.message); }
   }
 
+  async function openDealSupportDeepLink() {
+    const dealId = state.pendingSupportDealDeepLink;
+    if (!dealId || !state.me) return;
+    try {
+      await api.request(`/deals/${encodeURIComponent(dealId)}/buyer-entry`);
+      const conversation = await api.request(`/deals/${encodeURIComponent(dealId)}/conversation`, { method: "POST" });
+      state.currentConversation = conversation;
+      state.messages = [];
+      openDealSupport(dealId);
+      state.pendingSupportDealDeepLink = null;
+    } catch (error) {
+      notify(error.message);
+    }
+  }
+
   async function openDealDeepLink() {
     const dealId = state.pendingDealDeepLink;
     if (!dealId || state.openingDealDeepLink || !state.me) return;
     state.openingDealDeepLink = true;
     try {
-      const details = await api.request(`/deals/${encodeURIComponent(dealId)}`);
+      const endpoint = state.pendingDealBuyerEntry
+        ? `/deals/${encodeURIComponent(dealId)}/buyer-entry`
+        : `/deals/${encodeURIComponent(dealId)}`;
+      const details = await api.request(endpoint);
       if (!details?.deal?.id) throw new Error("Сделка не найдена");
       const opened = await openDealConversation(details.deal.id);
-      if (opened) state.pendingDealDeepLink = null;
+      if (opened) {
+        state.pendingDealDeepLink = null;
+        state.pendingDealBuyerEntry = false;
+      }
     } catch (error) {
       notify(error.message);
     } finally {
