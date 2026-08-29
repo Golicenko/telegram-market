@@ -1537,7 +1537,14 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
             raise HTTPException(status_code=409, detail="Покупатель ещё не указал игровой ID и время получения")
         deal.status = next_status
         if next_status == "transfer_in_progress":
-            deal.transfer_started_at = datetime.now(UTC)
+            now = datetime.now(UTC)
+            deal.transfer_started_at = now
+            if deal.buyer_transfer_reminder_status in {None, "not_scheduled"}:
+                deal.buyer_transfer_reminder_status = "pending"
+                deal.buyer_transfer_reminder_scheduled_at = now + timedelta(
+                    seconds=get_settings().deal_transfer_reminder_seconds
+                )
+                deal.buyer_transfer_reminder_error = None
         other_id = deal.seller_id if actor.id == deal.buyer_id else deal.buyer_id
         await create_notification(session, other_id, "deal_status", "Статус сделки изменён", f"Новый статус: {next_status}", {"deal_id": str(deal.id)})
     return deal

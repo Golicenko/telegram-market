@@ -27,8 +27,18 @@ test("deal delivery form persists via the backend and has a mobile-safe layout",
 });
 
 test("deep link is retained through bootstrap and authorized before exact chat opens", () => {
-  assert.match(app, /pendingDealDeepLink: new URLSearchParams\(window\.location\.search\)\.get\("deal_id"\)/);
-  assert.match(app, /api\.request\(`\/deals\/\$\{encodeURIComponent\(dealId\)\}`\)/);
+  assert.match(app, /const launchParams = new URLSearchParams\(window\.location\.search\)/);
+  assert.match(app, /pendingDealDeepLink: launchParams\.get\("deal_id"\)/);
+  assert.match(app, /: `\/deals\/\$\{encodeURIComponent\(dealId\)\}`/);
+  assert.match(app, /api\.request\(endpoint\)/);
   assert.match(app, /openDealConversation\(details\.deal\.id\)/);
   assert.match(app, /void openDealDeepLink\(\)/);
+});
+
+test("buyer reminder deep links open one authorized deal or its existing support flow", () => {
+  assert.match(app, /pendingDealBuyerEntry: launchParams\.get\("buyer_entry"\) === "1"/);
+  assert.match(app, /pendingSupportDealDeepLink: launchParams\.get\("support_deal_id"\)/);
+  assert.match(app, /`\/deals\/\$\{encodeURIComponent\(dealId\)\}\/buyer-entry`/);
+  assert.match(app, /openDealSupport\(dealId\)/);
+  assert.match(app, /void openDealSupportDeepLink\(\)/);
 });

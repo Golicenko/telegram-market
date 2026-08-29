@@ -320,6 +320,69 @@ async def send_deal_purchase_notification(telegram_id: int, *, deal_id: str) -> 
         return False
 
 
+def deal_transfer_reminder_payload(
+    telegram_id: int,
+    *,
+    deal_id: str,
+    public_url: str,
+) -> dict:
+    base_url = public_url.rstrip("/") + "/"
+    confirm_url = versioned_webapp_url(
+        f"{base_url}?{urlencode({'deal_id': deal_id, 'buyer_entry': '1'})}"
+    )
+    support_url = versioned_webapp_url(
+        f"{base_url}?{urlencode({'support_deal_id': deal_id})}"
+    )
+    return {
+        "chat_id": telegram_id,
+        "text": (
+            "🚗 Вам передали автомобиль?\n\n"
+            "Продавец сообщил, что автомобиль передан.\n\n"
+            "Если вы получили машину — подтвердите получение, чтобы завершить сделку.\n\n"
+            "Если возникла проблема — обратитесь в поддержку."
+        ),
+        "reply_markup": {
+            "inline_keyboard": [
+                [{"text": "✅ Подтвердить получение", "web_app": {"url": confirm_url}}],
+                [{"text": "Поддержка", "web_app": {"url": support_url}}],
+            ]
+        },
+    }
+
+
+async def send_deal_transfer_reminder(telegram_id: int, *, deal_id: str) -> BroadcastSendResult:
+    settings = get_settings()
+    public_url = settings.externally_reachable_url
+    if not settings.bot_token or not public_url:
+        return BroadcastSendResult(False, "configuration", "BOT_TOKEN или публичный URL не настроен")
+    payload = deal_transfer_reminder_payload(
+        telegram_id,
+        deal_id=deal_id,
+        public_url=public_url,
+    )
+    url = f"https://api.telegram.org/bot{settings.bot_token}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(url, json=payload)
+        data = response.json()
+    except httpx.HTTPError:
+        return BroadcastSendResult(False, "network", "Telegram Bot API временно недоступен")
+    except ValueError:
+        return BroadcastSendResult(False, "invalid_response", "Telegram вернул некорректный ответ")
+    if not isinstance(data, dict):
+        return BroadcastSendResult(False, "invalid_response", "Telegram вернул некорректный ответ")
+    if response.is_success and data.get("ok"):
+        return BroadcastSendResult(True)
+    raw_retry_after = data.get("parameters", {}).get("retry_after") if isinstance(data.get("parameters"), dict) else None
+    try:
+        retry_after = int(raw_retry_after) if raw_retry_after is not None else None
+    except (TypeError, ValueError):
+        retry_after = None
+    description = str(data.get("description") or "Telegram отклонил отправку")[:500]
+    error_type = "rate_limited" if response.status_code == 429 else "recipient_unavailable" if response.status_code in {400, 403} else "telegram_api"
+    return BroadcastSendResult(False, error_type, description, retry_after)
+
+
 def deal_support_case_payload(
     telegram_id: int,
     *,

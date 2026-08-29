@@ -262,6 +262,14 @@ class Deal(Base, TimestampMixin):
     seller_purchase_notification_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     seller_purchase_notification_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     seller_purchase_notification_error: Mapped[str | None] = mapped_column(Text)
+    buyer_transfer_reminder_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="not_scheduled", server_default="not_scheduled", index=True
+    )
+    buyer_transfer_reminder_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    buyer_transfer_reminder_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    buyer_transfer_reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    buyer_transfer_reminder_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    buyer_transfer_reminder_error: Mapped[str | None] = mapped_column(Text)
     transfer_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     buyer_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -271,6 +279,14 @@ class Deal(Base, TimestampMixin):
         CheckConstraint(
             "seller_purchase_notification_status IN ('pending','sending','sent','failed')",
             name="ck_deals_seller_purchase_notification_status",
+        ),
+        CheckConstraint(
+            "buyer_transfer_reminder_status IN ('not_scheduled','pending','sending','sent','skipped','failed')",
+            name="ck_deals_buyer_transfer_reminder_status",
+        ),
+        CheckConstraint(
+            "buyer_transfer_reminder_attempts >= 0",
+            name="ck_deals_buyer_transfer_reminder_attempts",
         ),
         Index(
             "uq_deals_open_listing",

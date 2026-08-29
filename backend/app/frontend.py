@@ -9,9 +9,9 @@ WEBAPP_DIR = Path(__file__).resolve().parents[2] / "webapp"
 def read_frontend_build() -> str:
     try:
         value = json.loads((WEBAPP_DIR / "build-info.json").read_text(encoding="utf-8")).get("build")
-        return str(value).strip() or "af-91ee69159db0"
+        return str(value).strip() or "af-a519989d2341"
     except (OSError, ValueError, TypeError, AttributeError):
-        return "af-91ee69159db0"
+        return "af-a519989d2341"
 
 
 FRONTEND_BUILD = read_frontend_build()
