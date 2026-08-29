@@ -2,7 +2,7 @@ import httpx
 import logging
 from dataclasses import dataclass
 from fastapi import HTTPException
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 from .config import get_settings
 from .frontend import versioned_webapp_url
@@ -19,15 +19,16 @@ class BroadcastSendResult:
     retry_after: int | None = None
 
 
-START_MENU_TEXT = """👋 Добро пожаловать в AutoFlow Market
+START_MENU_PHOTO_PATH = "/images/autoflow-start.png"
 
-AutoFlow Market создан для удобной покупки и продажи игровых автомобилей.
 
-Оплата остаётся под защитой до подтверждения получения, а за проектом стоит команда с многолетним опытом работы с сообществом.
+START_MENU_TEXT = """Добро пожаловать в AutoFlow Market!👋
 
-Наша аудитория на разных площадках — более 10 000 подписчиков.
+Покупайте и продавайте машины из Car Parking. 🚙 Также у нас есть профессиональное обучение по Game Guardian — всё объясним, покажем и поможем разобраться.
 
-Нажмите кнопку ниже, чтобы открыть маркет."""
+Аудитория — более 10 000 подписчиков, опыт — 4 года. 🩷
+
+Присоединяйся к нам 👇"""
 
 
 HOW_IT_WORKS_TEXT = """ℹ️ Как работает AutoFlow Market
@@ -107,16 +108,26 @@ def bot_menu_payload(
     if start_payload:
         separator = "&" if "?" in target_url else "?"
         target_url = f"{target_url}{separator}{urlencode({'start': start_payload})}"
-    keyboard = [[{"text": "🚘 Открыть AutoFlow Market", "web_app": {"url": target_url}}]]
-    keyboard.append([{"text": "⬅️ Назад" if detailed else "❓ Как это работает", "callback_data": "autoflow:start" if detailed else "autoflow:how"}])
-    payload: dict = {
+    keyboard = [[{"text": "🚘 Открыть маркетплейс", "web_app": {"url": target_url}}]]
+    if detailed:
+        keyboard.append([{"text": "⬅️ Назад", "callback_data": "autoflow:start"}])
+    if detailed or message_id is not None:
+        payload: dict = {
+            "chat_id": chat_id,
+            "text": HOW_IT_WORKS_TEXT if detailed else START_MENU_TEXT,
+            "reply_markup": {"inline_keyboard": keyboard},
+        }
+        if message_id is not None:
+            payload["message_id"] = message_id
+        return ("editMessageText" if message_id is not None else "sendMessage"), payload
+    parts = urlsplit(public_url)
+    photo_url = urlunsplit((parts.scheme, parts.netloc, START_MENU_PHOTO_PATH, parts.query, ""))
+    return "sendPhoto", {
         "chat_id": chat_id,
-        "text": HOW_IT_WORKS_TEXT if detailed else START_MENU_TEXT,
+        "photo": photo_url,
+        "caption": START_MENU_TEXT,
         "reply_markup": {"inline_keyboard": keyboard},
     }
-    if message_id is not None:
-        payload["message_id"] = message_id
-    return ("editMessageText" if message_id is not None else "sendMessage"), payload
 
 
 async def send_bot_menu(
