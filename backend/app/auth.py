@@ -15,7 +15,7 @@ from .database import get_session
 from .models import User, Wallet
 
 
-def validate_init_data(init_data: str, bot_token: str, max_age_seconds: int = 3600) -> dict:
+def validate_init_data(init_data: str, bot_token: str, max_age_seconds: int = 86400) -> dict:
     if not init_data or not bot_token:
         raise ValueError("Telegram initData or BOT_TOKEN is missing")
     parsed = dict(parse_qsl(init_data, strict_parsing=True))
@@ -28,9 +28,13 @@ def validate_init_data(init_data: str, bot_token: str, max_age_seconds: int = 36
     if not hmac.compare_digest(calculated_hash, received_hash):
         raise ValueError("Telegram initData signature is invalid")
     auth_date = int(parsed.get("auth_date", "0"))
-    if auth_date <= 0 or time.time() - auth_date > max_age_seconds:
+    age_seconds = time.time() - auth_date
+    if auth_date <= 0 or age_seconds > max_age_seconds or age_seconds < -300:
         raise ValueError("Telegram initData has expired")
-    return json.loads(parsed["user"])
+    user = json.loads(parsed["user"])
+    if not isinstance(user, dict) or not isinstance(user.get("id"), int):
+        raise ValueError("Telegram initData user is invalid")
+    return user
 
 
 async def get_current_user(
@@ -42,7 +46,11 @@ async def get_current_user(
 ) -> User:
     try:
         if x_telegram_init_data:
-            telegram_user = validate_init_data(x_telegram_init_data, settings.bot_token)
+            telegram_user = validate_init_data(
+                x_telegram_init_data,
+                settings.bot_token,
+                settings.telegram_init_data_max_age_seconds,
+            )
         elif settings.debug and (x_dev_telegram_id or settings.dev_telegram_id):
             dev_id = x_dev_telegram_id or settings.dev_telegram_id
             telegram_user = {"id": dev_id, "first_name": settings.dev_telegram_name, "username": "local_dev"}

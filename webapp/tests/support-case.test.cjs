@@ -23,7 +23,7 @@ test("deal support replaces the accidental dispute action and is idempotent", ()
   assert.match(app, /`\/deals\/\$\{dealId\}\/support`/);
   assert.match(app, /Прикрепите хотя бы один скриншот/);
   assert.match(app, /screenshot_url: screenshotUrl/);
-  assert.match(app, /client_request_id: crypto\.randomUUID\(\)/);
+  assert.match(app, /client_request_id: createRequestId\(\)/);
   assert.match(html, /name="deal_id"/);
 });
 

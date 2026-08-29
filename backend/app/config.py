@@ -55,7 +55,13 @@ class Settings(BaseSettings):
     seller_payout_percent: int = Field(default=70, ge=1, le=100)
     star_topup_min: int = Field(default=10, ge=1)
     star_topup_max: int = Field(default=1000, ge=1)
-    upload_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
+    upload_max_bytes: int = Field(default=30 * 1024 * 1024, ge=1024)
+    telegram_init_data_max_age_seconds: int = Field(default=86400, ge=300, le=604800)
+    db_pool_size: int = Field(default=5, ge=1, le=20)
+    db_max_overflow: int = Field(default=5, ge=0, le=20)
+    db_pool_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    db_pool_recycle_seconds: int = Field(default=300, ge=30, le=3600)
+    db_connect_timeout_seconds: int = Field(default=10, ge=1, le=60)
     debug: bool = False
     dev_telegram_id: int | None = None
     dev_telegram_name: str = "Local User"

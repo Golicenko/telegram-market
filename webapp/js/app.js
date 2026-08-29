@@ -40,6 +40,7 @@
     unreadConversations: [],
     totalUnread: 0,
     messagePollingId: null,
+    messagePollingFailureReported: false,
     pendingCheckoutTopup: false,
     activeTopupIntentId: null,
     confirmedTopupPayments: new Set(),
@@ -51,6 +52,8 @@
     listingViewRequests: new Set(),
     listingLikeRequests: new Set(),
     dealTimerId: null,
+    pendingListingRequestId: null,
+    hiddenAt: null,
     pendingDealDeepLink: new URLSearchParams(window.location.search).get("deal_id"),
     openingDealDeepLink: false,
     serverAvailable: true,
@@ -150,6 +153,25 @@
   let startupRecoveryTimer = null;
   let initializedTelegram = null;
 
+  function createRequestId() {
+    if (typeof window.crypto?.randomUUID === "function") return window.crypto.randomUUID();
+    const bytes = new Uint8Array(16);
+    if (typeof window.crypto?.getRandomValues === "function") window.crypto.getRandomValues(bytes);
+    else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    const hex = [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
+  function createErrorId() {
+    return `AF-${createRequestId().replace(/-/g, "").slice(0, 7).toUpperCase()}`;
+  }
+
+  function safeArray(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
   installGlobalErrorHandlers();
   startApplication();
 
@@ -169,8 +191,8 @@
       renderAll();
       void bootstrap();
     } catch (error) {
-      reportClientError("startup", error);
-      showStartupError("Не удалось запустить интерфейс. Попробуйте ещё раз.", true);
+      const errorId = reportClientError("startup", error);
+      showStartupError(`Не удалось запустить интерфейс. Код: ${errorId}`, true);
     }
   }
 
@@ -275,7 +297,7 @@
       state.me = await authenticateCurrentUser();
     } catch (error) {
       state.serverAvailable = false;
-      reportClientError("bootstrap_me", error);
+      const errorId = reportClientError("bootstrap_me", error);
       const unauthorized = error.status === 401;
       const forbidden = error.status === 403;
       const retryable = !unauthorized && !forbidden;
@@ -283,7 +305,7 @@
         ? "Не удалось подтвердить вход через Telegram. Закройте Mini App и откройте снова."
         : forbidden
           ? "Доступ к приложению ограничен."
-          : "Не удалось подключиться к серверу. Попробуйте ещё раз.";
+          : `Не удалось подключиться к серверу. Проверьте интернет и попробуйте снова. Код: ${errorId}`;
       showStartupError(message, retryable || unauthorized);
       if (retryable && !criticalRecoveryUsed && !options.manual) {
         criticalRecoveryUsed = true;
@@ -325,7 +347,7 @@
       } catch (error) {
         lastError = error;
         reportClientError(`bootstrap_me_attempt_${attempt + 1}`, error);
-        const retryable = error?.errorType === "timeout" || error?.errorType === "network" || Number(error?.status || 0) >= 500;
+        const retryable = error?.errorType === "timeout" || error?.errorType === "network" || [408, 429, 500, 502, 503, 504].includes(Number(error?.status || 0));
         if (!retryable) throw error;
       }
     }
@@ -333,15 +355,18 @@
   }
 
   const optionalLoaders = {
-    catalog: async () => { state.catalog = await api.resource("data/vehicle_catalog.json", { timeoutMs: 8000, retries: 1 }); },
-    regular: async () => { state.regular = await api.request("/listings?type=regular"); },
-    unique: async () => { state.unique = await api.request("/listings?type=unique"); },
-    training: async () => { state.training = await api.request(state.me?.user.role === "admin" ? "/admin/training" : "/training"); },
-    trainingPurchases: async () => { state.trainingPurchases = await api.request("/training/mine"); },
-    cart: async () => { state.cart = await api.request("/cart"); },
+    catalog: async () => {
+      const catalog = await api.resource("data/vehicle_catalog.json", { timeoutMs: 8000, retries: 1 });
+      state.catalog = { ...(catalog && typeof catalog === "object" ? catalog : {}), brands: safeArray(catalog?.brands) };
+    },
+    regular: async () => { state.regular = safeArray(await api.request("/listings?type=regular")); },
+    unique: async () => { state.unique = safeArray(await api.request("/listings?type=unique")); },
+    training: async () => { state.training = safeArray(await api.request(state.me?.user.role === "admin" ? "/admin/training" : "/training")); },
+    trainingPurchases: async () => { state.trainingPurchases = safeArray(await api.request("/training/mine")); },
+    cart: async () => { state.cart = safeArray(await api.request("/cart")); },
     profile: async () => { state.profile = await api.request("/profile"); },
     advertisement: async () => { state.advertisement = await api.request("/advertisement", { timeoutMs: 8000 }); },
-    notifications: async () => { state.notifications = await api.request("/notifications"); },
+    notifications: async () => { state.notifications = safeArray(await api.request("/notifications")); },
   };
 
   async function loadOptionalData(keys = Object.keys(optionalLoaders), options = {}) {
@@ -612,6 +637,7 @@ function handleClick(event) {
 
   try {
     const summary = await api.request("/conversations/unread-summary");
+    state.messagePollingFailureReported = false;
 
     const previousTotal = state.totalUnread;
 
@@ -631,7 +657,10 @@ function handleClick(event) {
       await refreshOpenConversation();
     }
   } catch (error) {
-    console.error("Не удалось обновить сообщения", error);
+    if (!state.messagePollingFailureReported) {
+      state.messagePollingFailureReported = true;
+      reportClientError("message_polling", error);
+    }
   }
 }
 
@@ -665,13 +694,16 @@ function handleClick(event) {
   if (!conversationId) return;
 
   const dealId = state.currentConversation?.deal?.id;
-  const [messages, dealDetails] = await Promise.all([
+  const [messagesResult, dealResult] = await Promise.allSettled([
     api.request(`/conversations/${conversationId}/messages`),
     dealId ? api.request(`/deals/${dealId}`) : Promise.resolve(null),
   ]);
+  if (messagesResult.status === "rejected" && dealResult.status === "rejected") throw messagesResult.reason;
+  const messages = messagesResult.status === "fulfilled" ? safeArray(messagesResult.value) : safeArray(state.messages);
+  const dealDetails = dealResult.status === "fulfilled" ? dealResult.value : null;
 
-  const oldLastMessageId = state.messages.at(-1)?.id;
-  const newLastMessageId = messages.at(-1)?.id;
+  const oldLastMessageId = state.messages.length ? state.messages[state.messages.length - 1]?.id : null;
+  const newLastMessageId = messages.length ? messages[messages.length - 1]?.id : null;
 
   const previousDeal = state.currentConversation?.deal;
   const refreshedDeal = dealDetails?.deal || null;
@@ -718,7 +750,7 @@ function handleClick(event) {
 
   state.messagePollingId = window.setInterval(
     refreshUnreadMessages,
-    2000
+    4000
   );
   }
 
@@ -751,6 +783,7 @@ function handleClick(event) {
     if (mode === "unique" && state.me?.user.role !== "admin") return notify("Только администратор может создавать уникальные машины");
     state.listingMode = mode;
     state.editingListingId = null;
+    state.pendingListingRequestId = null;
     state.photoFiles = [];
     elements.carForm.reset();
     elements.photoPreview.replaceChildren();
@@ -1265,6 +1298,10 @@ function handleClick(event) {
         description: String(formData.get("description") || "").trim(),
         price_af_coins: Number(formData.get("price_af_coins")),
       };
+      if (!state.editingListingId) {
+        state.pendingListingRequestId ||= createRequestId();
+        payload.client_request_id = state.pendingListingRequestId;
+      }
       if (!payload.brand) throw new Error("Введите название автомобиля");
       if (!Number.isInteger(payload.power_hp) || payload.power_hp <= 0) throw new Error("Мощность должна быть положительным целым числом");
       if (!Number.isInteger(payload.max_speed_kph) || payload.max_speed_kph <= 0) throw new Error("Максимальная скорость должна быть положительным целым числом");
@@ -1301,6 +1338,7 @@ function handleClick(event) {
       state.photoFiles = [];
       const wasEditing = Boolean(state.editingListingId);
       state.editingListingId = null;
+      state.pendingListingRequestId = null;
       await refreshMarketplace();
       navigate(state.listingMode === "unique" ? "unique" : "market");
       if (promotionError) notify(`Объявление опубликовано бесплатно, но не закреплено: ${promotionError.message}`);
@@ -1351,6 +1389,7 @@ function handleClick(event) {
     const listing = findListing(id); if (!listing) return;
     state.listingMode = listing.listing_type;
     state.editingListingId = id;
+    state.pendingListingRequestId = null;
     state.photoFiles = [];
     elements.carForm.reset(); elements.photoPreview.replaceChildren();
     elements.brandInput.value = listing.brand;
@@ -1393,11 +1432,11 @@ function handleClick(event) {
       state.photoFiles = [];
       return notify(`Файл «${unsupported.name}» не является поддерживаемой фотографией`);
     }
-    const oversized = files.find((file) => file.size > 20 * 1024 * 1024);
+    const oversized = files.find((file) => file.size > 30 * 1024 * 1024);
     if (oversized) {
       event.target.value = "";
       state.photoFiles = [];
-      return notify(`Фотография «${oversized.name}» превышает 20 МБ`);
+      return notify(`Фотография «${oversized.name}» превышает 30 МБ`);
     }
     state.photoFiles = files;
     elements.photoPreview.replaceChildren(...state.photoFiles.map((file, index) => {
@@ -1405,6 +1444,7 @@ function handleClick(event) {
       image.src = URL.createObjectURL(file);
       image.alt = `Фотография ${index + 1}`;
       image.addEventListener("load", () => URL.revokeObjectURL(image.src), { once: true });
+      image.addEventListener("error", () => URL.revokeObjectURL(image.src), { once: true });
       return image;
     }));
   }
@@ -1701,15 +1741,26 @@ async function hideCurrentConversation() {
 
   async function openConversation(id, prefetched = null) {
     try {
-      const [conversation, messages] = await Promise.all([prefetched || api.request(`/conversations/${id}`), api.request(`/conversations/${id}/messages`)]);
+      const [conversationResult, messagesResult] = await Promise.allSettled([
+        prefetched ? Promise.resolve(prefetched) : api.request(`/conversations/${id}`),
+        api.request(`/conversations/${id}/messages`),
+      ]);
+      if (conversationResult.status === "rejected") throw conversationResult.reason;
+      const conversation = conversationResult.value;
+      const messages = messagesResult.status === "fulfilled" ? safeArray(messagesResult.value) : [];
+      if (messagesResult.status === "rejected") reportClientError("conversation_messages_initial", messagesResult.reason);
       state.currentConversation = conversation;
       state.messages = messages;
       state.previousView = state.currentView === "profile" ? "profile" : "market";
       renderConversation();
       await navigate("deal-chat");
-      await markConversationRead(id);
-      state.messages = await api.request(`/conversations/${id}/messages`);
-      renderConversation();
+      try {
+        await markConversationRead(id);
+        state.messages = safeArray(await api.request(`/conversations/${id}/messages`));
+        renderConversation();
+      } catch (error) {
+        reportClientError("conversation_read_refresh", error);
+      }
       return true;
     } catch (error) { notify(error.message); return false; }
   }
@@ -1956,7 +2007,7 @@ async function hideCurrentConversation() {
     const button = event.currentTarget.querySelector("button[type=submit]");
     if (button.disabled) return;
     const body = input.value.trim();
-    const clientMessageId = crypto.randomUUID();
+    const clientMessageId = createRequestId();
     button.disabled = true;
     try {
       const endpoint = state.currentConversation.id
@@ -2419,7 +2470,7 @@ async function hideCurrentConversation() {
           body: JSON.stringify({
             message: data.get("message"),
             screenshot_url: screenshotUrl,
-            client_request_id: crypto.randomUUID(),
+            client_request_id: createRequestId(),
           }),
         });
       } else {
@@ -2490,7 +2541,7 @@ async function hideCurrentConversation() {
     if (!message?.trim()) return;
     const path = adminMode ? `/admin/support/tickets/${ticketId}/messages` : `/support/tickets/${ticketId}/messages`;
     try {
-      await api.request(path, { method: "POST", body: JSON.stringify({ message: message.trim(), client_request_id: crypto.randomUUID() }) });
+      await api.request(path, { method: "POST", body: JSON.stringify({ message: message.trim(), client_request_id: createRequestId() }) });
       if (adminMode) await loadAdminSupport();
       else { state.supportTickets = await api.request("/support/tickets"); renderSupportTickets(); }
     } catch (error) { notify(error.message); }
@@ -2578,7 +2629,7 @@ async function hideCurrentConversation() {
     button.disabled = true;
     status.classList.remove("is-error");
     status.textContent = "Запускаем рассылку…";
-    state.pendingBroadcastRequestId ||= crypto.randomUUID();
+    state.pendingBroadcastRequestId ||= createRequestId();
     try {
       const photoUrl = photo?.size ? (await api.upload(photo)).url : null;
       const broadcast = await api.request("/admin/broadcasts", {
@@ -3196,11 +3247,39 @@ async function hideCurrentConversation() {
   }
 
   function installGlobalErrorHandlers() {
-    window.addEventListener("error", (event) => reportClientError("window_error", event.error || new Error(event.message)));
-    window.addEventListener("unhandledrejection", (event) => reportClientError("unhandled_rejection", event.reason));
+    window.addEventListener("error", (event) => {
+      const errorId = reportClientError("window_error", event.error || new Error(event.message));
+      notify(`Ошибка загрузки. Код: ${errorId}`);
+    });
+    window.addEventListener("unhandledrejection", (event) => {
+      const errorId = reportClientError("unhandled_rejection", event.reason);
+      notify(`Ошибка загрузки. Код: ${errorId}`);
+    });
+    window.addEventListener("offline", () => {
+      state.serverAvailable = false;
+      elements.syncStatus.hidden = false;
+      elements.syncStatusText.textContent = "Нет подключения к интернету. Данные обновятся после восстановления сети.";
+    });
     window.addEventListener("online", () => {
-      if (state.me) void retryFailedOptional();
-      else void bootstrap({ automatic: true });
+      state.serverAvailable = true;
+      void bootstrap({ automatic: true });
+    });
+    window.addEventListener("autoflow:api-error", (event) => {
+      if (Number(event.detail?.status || 0) !== 401 || !state.me) return;
+      state.serverAvailable = false;
+      showStartupError("Сессия Telegram истекла. Закройте Mini App и откройте Market заново.", false);
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        state.hiddenAt = Date.now();
+        return;
+      }
+      const inactiveFor = state.hiddenAt ? Date.now() - state.hiddenAt : 0;
+      state.hiddenAt = null;
+      if (inactiveFor >= 60000 && window.navigator.onLine !== false) void bootstrap({ automatic: true });
+    });
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted && window.navigator.onLine !== false) void bootstrap({ automatic: true });
     });
   }
 
@@ -3210,16 +3289,39 @@ async function hideCurrentConversation() {
   }
 
   function reportClientError(context, error) {
+    const errorId = error?.autoflowErrorId || createErrorId();
+    if (error && typeof error === "object") error.autoflowErrorId = errorId;
     const expectedDegradation = context.startsWith("optional_") || context === "admin_optional" || context === "catalog_suggestions" || context === "refresh_after_checkout";
-    console[expectedDegradation ? "warn" : "error"]("[AutoFlow Client]", {
+    const diagnostic = {
+      error_id: errorId,
       context,
+      build: document.querySelector('meta[name="autoflow-build"]')?.content || "unknown",
       endpoint: error?.endpoint || null,
       status: Number(error?.status || 0),
       error_type: error?.errorType || error?.name || typeof error,
-      telegram_user_id: state.me?.user?.telegram_id || null,
       platform: telegram?.platform || "browser",
-      time: new Date().toISOString(),
-    });
+      telegram_version: telegram?.version || null,
+      startup_stage: window.AutoFlowStartupStage || "unknown",
+      user_agent: String(window.navigator?.userAgent || "unknown").slice(0, 200),
+      online: window.navigator?.onLine !== false,
+      related_id: state.currentConversation?.deal?.id || state.currentConversation?.listing?.id || null,
+    };
+    console[expectedDegradation ? "warn" : "error"]("[AutoFlow Client]", diagnostic);
+    if (state.me && api) {
+      void api.request("/diagnostics/client", {
+        method: "POST",
+        body: JSON.stringify(diagnostic),
+        timeoutMs: 4000,
+        retries: 0,
+      }).catch((diagnosticError) => {
+        console.warn("[AutoFlow Client] diagnostic delivery failed", {
+          error_id: errorId,
+          status: Number(diagnosticError?.status || 0),
+          error_type: diagnosticError?.errorType || diagnosticError?.name || "Error",
+        });
+      });
+    }
+    return errorId;
   }
 
   function reportStartupStage(stage, metadata = {}) {

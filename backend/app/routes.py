@@ -1,4 +1,6 @@
+import asyncio
 import hmac
+import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -11,7 +13,9 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from .auth import get_current_user, require_admin
 from .broadcasts import create_admin_broadcast, parse_broadcast_command, run_admin_broadcast
@@ -40,6 +44,7 @@ from .schemas import (
     AdminBroadcastOut,
     AdminWithdrawalOut,
     BalanceAdjustmentCreate,
+    ClientDiagnosticCreate,
     ConversationMessageOut,
     ConversationMessageCreate,
     CounterOfferCreate,
@@ -139,10 +144,12 @@ from .services import (
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger("autoflow.training")
+diagnostic_logger = logging.getLogger("autoflow.client")
 register_heif_opener()
-Image.MAX_IMAGE_PIXELS = 100_000_000
+Image.MAX_IMAGE_PIXELS = 40_000_000
 UPLOAD_DIR = Path(get_settings().upload_dir) if get_settings().upload_dir else Path(__file__).resolve().parents[1] / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+IMAGE_PROCESSING_SLOTS = asyncio.Semaphore(2)
 
 
 def resolve_training_admin_telegram_id(seller: User | None) -> int | None:
@@ -184,6 +191,68 @@ async def listing_out(session: AsyncSession, listing: Listing, buyer_id: uuid.UU
             "liked_by_me": liked_by_me,
         }
     )
+
+
+async def listing_collection_out(
+    session: AsyncSession,
+    listings: list[Listing],
+    buyer_id: uuid.UUID,
+) -> list[ListingOut]:
+    """Serialize a market page with bounded queries instead of three queries per card."""
+    if not listings:
+        return []
+    listing_ids = [listing.id for listing in listings]
+    image_rows = (
+        await session.execute(
+            select(ListingImage.listing_id, ListingImage.url)
+            .where(ListingImage.listing_id.in_(listing_ids))
+            .order_by(ListingImage.listing_id, ListingImage.position)
+        )
+    ).all()
+    like_rows = (
+        await session.execute(
+            select(ListingLike.listing_id, func.count(ListingLike.id))
+            .where(ListingLike.listing_id.in_(listing_ids))
+            .group_by(ListingLike.listing_id)
+        )
+    ).all()
+    liked_ids = set(
+        (
+            await session.scalars(
+                select(ListingLike.listing_id).where(
+                    ListingLike.listing_id.in_(listing_ids),
+                    ListingLike.user_id == buyer_id,
+                )
+            )
+        ).all()
+    )
+    offer_rows = (
+        await session.execute(
+            select(Conversation.listing_id, Conversation.accepted_price_af_coins).where(
+                Conversation.listing_id.in_(listing_ids),
+                Conversation.buyer_id == buyer_id,
+                Conversation.accepted_price_af_coins.is_not(None),
+            )
+        )
+    ).all()
+    images: dict[uuid.UUID, list[str]] = {listing_id: [] for listing_id in listing_ids}
+    for listing_id, url in image_rows:
+        images[listing_id].append(url)
+    likes = {listing_id: int(count) for listing_id, count in like_rows}
+    offers = {listing_id: price for listing_id, price in offer_rows}
+    now = datetime.now(UTC)
+    return [
+        ListingOut.model_validate(listing).model_copy(
+            update={
+                "images": images[listing.id],
+                "pinned": bool(listing.pinned and listing.pinned_until and listing.pinned_until > now),
+                "effective_price_af_coins": offers.get(listing.id),
+                "likes_count": likes.get(listing.id, 0),
+                "liked_by_me": listing.id in liked_ids,
+            }
+        )
+        for listing in listings
+    ]
 
 
 async def listing_engagement(session: AsyncSession, listing: Listing, user_id: uuid.UUID, *, view_recorded: bool = False) -> ListingEngagementOut:
@@ -551,6 +620,11 @@ def normalize_image_content(content: bytes) -> tuple[bytes, str, str]:
             source_format = (source.format or "").upper()
             if source_format not in {"JPEG", "PNG", "WEBP", "HEIF", "HEIC"}:
                 raise HTTPException(status_code=415, detail="Разрешены фотографии JPG, PNG, WEBP, HEIC и HEIF")
+            width, height = source.size
+            if width <= 0 or height <= 0:
+                raise HTTPException(status_code=415, detail="Фотография имеет некорректный размер")
+            if width * height > Image.MAX_IMAGE_PIXELS:
+                raise HTTPException(status_code=413, detail="Разрешение фотографии слишком большое")
             source.load()
             image = ImageOps.exif_transpose(source)
             image.thumbnail((2560, 2560), Image.Resampling.LANCZOS)
@@ -574,7 +648,36 @@ def normalize_image_content(content: bytes) -> tuple[bytes, str, str]:
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "currency": "AF Coins", "stars_invoice_enabled": bool(get_settings().bot_token)}
+    return {"status": "ok"}
+
+
+@router.get("/health/db")
+async def database_health(session: AsyncSession = Depends(get_session)):
+    try:
+        await session.execute(select(1))
+    except (SQLAlchemyError, OSError) as exc:
+        diagnostic_logger.warning("database_health_failed error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="database unavailable") from exc
+    return {"status": "ok"}
+
+
+@router.post("/diagnostics/client", status_code=204, response_class=Response)
+async def client_diagnostic(
+    payload: ClientDiagnosticCreate,
+    user: User = Depends(get_current_user),
+):
+    diagnostic_logger.warning(
+        "client_error %s",
+        json.dumps(
+            {
+                **payload.model_dump(),
+                "telegram_user_id": user.telegram_id,
+                "recorded_at": datetime.now(UTC).isoformat(),
+            },
+            ensure_ascii=False,
+        ),
+    )
+    return Response(status_code=204)
 
 
 @router.get("/me", response_model=MeOut)
@@ -590,10 +693,11 @@ async def upload_image(
     session: AsyncSession = Depends(get_session),
 ):
     max_bytes = get_settings().upload_max_bytes
-    content = await file.read(max_bytes + 1)
-    if len(content) > max_bytes:
-        raise HTTPException(status_code=413, detail=f"Фотография превышает допустимый размер {max_bytes // (1024 * 1024)} МБ")
-    normalized, content_type, _extension = normalize_image_content(content)
+    async with IMAGE_PROCESSING_SLOTS:
+        content = await file.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"Фотография превышает допустимый размер {max_bytes // (1024 * 1024)} МБ")
+        normalized, content_type, _extension = await run_in_threadpool(normalize_image_content, content)
     image = UploadedImage(
         owner_id=user.id,
         content_type=content_type,
@@ -792,7 +896,9 @@ async def list_listings(
     if min_speed:
         query = query.where(Listing.max_speed_kph >= min_speed)
     listings = list((await session.scalars(query.order_by(Listing.pinned.desc(), Listing.created_at.desc()))).all())
-    return [await listing_out(session, item, user.id) for item in listings]
+    if not listings:
+        return []
+    return await listing_collection_out(session, listings, user.id)
 
 
 @router.post("/listings", response_model=ListingOut, status_code=201)

@@ -97,7 +97,8 @@ def test_training_jobs_are_recovered_after_process_restart():
     main_source = (root / "app" / "main.py").read_text(encoding="utf-8")
     migration = (root / "migrations" / "versions" / "0017_training_order_delivery.py").read_text(encoding="utf-8")
     assert "recover_training_background_jobs" in routes_source
-    assert "asyncio.create_task(recover_training_background_jobs())" in main_source
+    assert 'asyncio.create_task(run_startup_job("training_recovery", recover_training_background_jobs))' in main_source
+    assert "await asyncio.gather(*recovery_tasks, return_exceptions=True)" in main_source
     assert "Статус доставки уведомления до обновления неизвестен" in migration
     assert "title_snapshot" in migration
 
