@@ -58,6 +58,7 @@
     pendingDealDeepLink: launchParams.get("deal_id"),
     pendingDealBuyerEntry: launchParams.get("buyer_entry") === "1",
     pendingSupportDealDeepLink: launchParams.get("support_deal_id"),
+    pendingTrainingDeepLink: launchParams.get("training_id") || launchParams.get("startapp") || window.Telegram?.WebApp?.initDataUnsafe?.start_param || null,
     openingDealDeepLink: false,
     serverAvailable: true,
   };
@@ -202,6 +203,7 @@
   function initTelegram() {
     if (!telegram || initializedTelegram === telegram) return;
     initializedTelegram = telegram;
+    state.pendingTrainingDeepLink ||= telegram.initDataUnsafe?.start_param || null;
     safeTelegramCall("ready", () => telegram.ready());
     safeTelegramCall("expand", () => telegram.expand());
     safeTelegramCall("viewport", () => telegram.onEvent?.("viewportChanged", updateChatViewport));
@@ -332,6 +334,7 @@
     reportStartupStage("shell_rendered");
     reportStartupStage("market_loading");
     void loadOptionalData();
+    void openTrainingProductDeepLink();
     void openTrainingOrderDeepLink();
     void openSupportCaseDeepLink();
     void openDealSupportDeepLink();
@@ -1320,7 +1323,9 @@ function handleClick(event) {
           const uploaded = await api.upload(file);
           imageUrls.push(uploaded.url);
         } catch (error) {
-          throw new Error(`Не удалось загрузить фотографию ${index + 1}: ${error.message}`);
+          error.message = `Не удалось загрузить фотографию ${index + 1}: ${error.message}`;
+          error.photoIndex = index + 1;
+          throw error;
         }
       }
       if (!state.editingListingId || imageUrls.length) payload.image_urls = imageUrls;
@@ -1347,7 +1352,10 @@ function handleClick(event) {
       navigate(state.listingMode === "unique" ? "unique" : "market");
       if (promotionError) notify(`Объявление опубликовано бесплатно, но не закреплено: ${promotionError.message}`);
       else notify(wasEditing ? "Объявление обновлено бесплатно" : "Объявление опубликовано бесплатно");
-    } catch (error) { notify(error.message); }
+    } catch (error) {
+      const errorId = error?.photoIndex ? reportClientError("listing_photo_upload", error) : null;
+      notify(`${error.message}${errorId ? ` Код: ${errorId}` : ""}`);
+    }
     finally { button.disabled = false; button.textContent = originalButtonText; }
   }
 
@@ -2212,7 +2220,27 @@ async function hideCurrentConversation() {
       buyButton.disabled = Boolean(purchase) || product.availability !== "available" || state.me?.user.id === product.admin_id;
       buyButton.textContent = purchase ? "Уже куплено" : product.availability === "available" ? "Купить обучение" : trainingAvailabilityLabel(product.availability);
       state.previousView = "training"; await navigate("training-detail");
-    } catch (error) { notify(error.message); }
+      return true;
+    } catch (error) {
+      if (Number(error?.status) === 404) {
+        notify("Обучение недоступно");
+        await navigate("training");
+      } else notify(error.message);
+      return false;
+    }
+  }
+
+  function normalizedTrainingDeepLink(value) {
+    const raw = String(value || "").trim();
+    const productId = raw.startsWith("training_") ? raw.slice("training_".length) : raw;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(productId) ? productId : null;
+  }
+
+  async function openTrainingProductDeepLink() {
+    const productId = normalizedTrainingDeepLink(state.pendingTrainingDeepLink);
+    if (!productId || !state.me) return;
+    state.pendingTrainingDeepLink = null;
+    await openTrainingProduct(productId);
   }
 
   async function buyTrainingProduct(productId = null) {
@@ -2905,7 +2933,7 @@ async function hideCurrentConversation() {
       const actions = document.createElement("div"); actions.className = "admin-record__actions";
       const definitions = [
         ["edit", "Редактировать"], [product.published && !product.archived ? "hide" : "publish", product.published && !product.archived ? "Скрыть" : "Опубликовать"],
-        [product.pinned ? "unpin" : "pin", product.pinned ? "Снять закрепление" : "Закрепить"], ["buyers", "Покупатели"], ["delete", "Удалить"],
+        [product.pinned ? "unpin" : "pin", product.pinned ? "Снять закрепление" : "Закрепить"], ["share", "Скопировать ссылку"], ["buyers", "Покупатели"], ["delete", "Удалить"],
       ];
       if (product.product_type === "automatic") definitions.push(["materials", "Материалы"]);
       definitions.forEach(([action, label]) => { const button = document.createElement("button"); button.type = "button"; button.dataset.trainingAdminAction = action; button.dataset.productId = product.id; button.textContent = label; actions.append(button); });
@@ -2943,10 +2971,28 @@ async function hideCurrentConversation() {
     if (action === "edit") return openTrainingEditor(productId);
     if (action === "buyers") return openTrainingBuyers(productId);
     if (action === "materials") return openTrainingMaterials(productId);
+    if (action === "share") return copyTrainingShareLink(productId, button);
     if (action === "delete") return deleteTrainingProduct(productId);
     button.disabled = true;
     try { await api.request(`/admin/training/${productId}/state/${action}`, { method: "POST" }); await loadAdminTraining(state.adminTrainingFilter); notify("Изменения сохранены"); }
     catch (error) { notify(error.message); }
+    finally { button.disabled = false; }
+  }
+
+  async function copyTrainingShareLink(productId, button) {
+    button.disabled = true;
+    try {
+      const result = await api.request(`/admin/training/${productId}/share-link`);
+      if (window.navigator.clipboard?.writeText) await window.navigator.clipboard.writeText(result.url);
+      else {
+        const fallback = document.createElement("textarea");
+        fallback.value = result.url; fallback.setAttribute("readonly", ""); fallback.style.position = "fixed"; fallback.style.opacity = "0";
+        document.body.append(fallback); fallback.select();
+        if (!document.execCommand("copy")) throw new Error("Не удалось скопировать ссылку");
+        fallback.remove();
+      }
+      notify("Ссылка на обучение скопирована");
+    } catch (error) { notify(error.message); }
     finally { button.disabled = false; }
   }
 
@@ -3330,6 +3376,17 @@ async function hideCurrentConversation() {
       user_agent: String(window.navigator?.userAgent || "unknown").slice(0, 200),
       online: window.navigator?.onLine !== false,
       related_id: state.currentConversation?.deal?.id || state.currentConversation?.listing?.id || null,
+      duration_ms: Number.isFinite(error?.duration_ms) ? error.duration_ms : null,
+      upload_stage: error?.upload_stage || null,
+      file_mime: error?.file_mime || null,
+      file_size: Number.isFinite(error?.file_size) ? error.file_size : null,
+      prepared_mime: error?.prepared_mime || null,
+      prepared_size: Number.isFinite(error?.prepared_size) ? error.prepared_size : null,
+      image_width: Number.isFinite(error?.image_width) ? error.image_width : null,
+      image_height: Number.isFinite(error?.image_height) ? error.image_height : null,
+      compression_error_type: error?.compression_error_type || null,
+      photo_index: Number.isInteger(error?.photoIndex) ? error.photoIndex : null,
+      client_time: new Date().toISOString(),
     };
     console[expectedDegradation ? "warn" : "error"]("[AutoFlow Client]", diagnostic);
     if (state.me && api) {

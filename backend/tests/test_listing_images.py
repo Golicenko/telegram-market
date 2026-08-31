@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import uuid
 
 import pytest
-from fastapi import HTTPException, UploadFile
+from fastapi import HTTPException, Request, UploadFile
 from PIL import Image
 
 from app.models import UploadedImage, User
@@ -16,6 +16,10 @@ def make_image(image_format: str, *, mode: str = "RGB") -> bytes:
     output = BytesIO()
     image.save(output, format=image_format)
     return output.getvalue()
+
+
+def upload_request() -> Request:
+    return Request({"type": "http", "method": "POST", "path": "/api/uploads", "headers": [(b"x-autoflow-error-id", b"AF-TEST01")]})
 
 
 @pytest.mark.parametrize("image_format,mode", [("JPEG", "RGB"), ("PNG", "RGBA"), ("WEBP", "RGB"), ("HEIF", "RGB")])
@@ -52,7 +56,7 @@ async def test_upload_save_and_read_image_flow():
     session = FakeImageSession()
     user = User(id=uuid.uuid4(), telegram_id=100, first_name="Mobile", role="user")
     upload = UploadFile(filename="iphone.heic", file=BytesIO(make_image("HEIF")), headers={"content-type": "image/heic"})
-    result = await upload_image(upload, user, session)
+    result = await upload_image(upload_request(), upload, user, session)
     assert result["url"] == f"/api/media/{session.image.id}"
     assert session.image.owner_id == user.id
     assert session.image.content_type == "image/jpeg"
@@ -67,7 +71,7 @@ async def test_oversized_upload_returns_413_before_image_processing(monkeypatch)
     user = User(id=uuid.uuid4(), telegram_id=101, first_name="Mobile", role="user")
     upload = UploadFile(filename="large.jpg", file=BytesIO(b"x" * 11), headers={"content-type": "image/jpeg"})
     with pytest.raises(HTTPException) as error:
-        await upload_image(upload, user, FakeImageSession())
+        await upload_image(upload_request(), upload, user, FakeImageSession())
     assert error.value.status_code == 413
 
 

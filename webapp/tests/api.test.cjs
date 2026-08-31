@@ -60,7 +60,7 @@ test("uses the public same-origin API and sends Telegram auth without logging in
 });
 
 test("diagnostics include safe startup context but never full initData", async () => {
-  const { api, warnings } = loadApi(async () => { throw new Error("offline"); }, "user=%7B%22id%22%3A99%7D&hash=do-not-log");
+  const { api, warnings } = loadApi(async () => { throw new TypeError("offline"); }, "user=%7B%22id%22%3A99%7D&hash=do-not-log");
   await assert.rejects(api.request("/me", { retries: 0, timeoutMs: 20 }));
   const diagnostic = warnings[0][1];
   assert.equal(diagnostic.startup_stage, "auth_started");
@@ -95,7 +95,7 @@ test("aborts a hanging request after timeout and limits retries", async () => {
 
 test("does not automatically retry non-idempotent POST requests", async () => {
   let calls = 0;
-  const { api } = loadApi(async () => { calls += 1; throw new Error("offline"); });
+  const { api } = loadApi(async () => { calls += 1; throw new TypeError("offline"); });
   await assert.rejects(api.request("/listings", { method: "POST", body: "{}", timeoutMs: 20 }), (error) => error.errorType === "network");
   assert.equal(calls, 1);
 });
@@ -155,14 +155,39 @@ test("every request carries a short diagnostic id without exposing auth", async 
 
 test("photo upload distinguishes network, size, format, auth, rate and timeout failures", () => {
   for (const message of [
-    "Нет соединения с сервером. Проверьте интернет.",
+    "Не удалось установить соединение с сервером. Проверьте интернет.",
     "Фотография слишком большая.",
     "Формат фотографии не поддерживается.",
     "Сессия Telegram истекла. Откройте Market заново.",
     "Слишком много запросов. Попробуйте через несколько секунд.",
-    "Загрузка фотографии заняла слишком много времени. Попробуйте снова.",
+    "Сервер не ответил вовремя при загрузке фотографии. Попробуйте снова.",
   ]) assert.match(source, new RegExp(message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(source, /prepareImage/);
   assert.match(source, /2560/);
   assert.match(source, /retries: 0/);
+  assert.match(source, /upload_stage/);
+  assert.match(source, /prepared_size/);
+});
+
+test("non-network client failures are not mislabeled as offline", async () => {
+  const { api } = loadApi(async () => { throw new Error("formdata failed"); });
+  await assert.rejects(api.request("/uploads", { method: "POST", body: "{}", retries: 0 }), (error) => {
+    assert.equal(error.errorType, "client_request");
+    assert.notEqual(error.message, "Нет соединения с сервером");
+    return true;
+  });
+});
+
+test("upload preserves the AF error id, stage and HTTP status for support", async () => {
+  const { api } = loadApi(async () => jsonResponse({ detail: "temporarily unavailable" }, 503));
+  const file = new Blob(["image-bytes"], { type: "image/jpeg" });
+  Object.defineProperty(file, "name", { value: "mobile.jpg" });
+  await assert.rejects(api.upload(file), (error) => {
+    assert.equal(error.status, 503);
+    assert.match(error.message, /503/);
+    assert.match(error.autoflowErrorId, /^AF-/);
+    assert.equal(error.upload_stage, "fetch");
+    assert.equal(error.file_mime, "image/jpeg");
+    return true;
+  });
 });

@@ -172,3 +172,50 @@ async def test_deleted_training_is_soft_deleted_and_excluded_from_admin_manageme
     management_session = ManagementSession()
     assert await routes.manage_training_products("all", admin, management_session) == []
     assert "training_products.deleted_at IS NULL" in str(management_session.statement)
+
+
+@pytest.mark.asyncio
+async def test_admin_share_link_targets_exact_production_training_product(monkeypatch):
+    admin = User(id=uuid.uuid4(), telegram_id=2, first_name="Admin", role="admin")
+    product = TrainingProduct(
+        id=uuid.uuid4(), admin_id=admin.id, title="Курс", short_description="Кратко",
+        full_description="Полностью", cover_url="/cover.jpg", product_type="personal",
+        price_af_coins=Decimal("100"), availability="available", published=True, pinned=False,
+    )
+
+    class ShareSession:
+        async def get(self, model, product_id):
+            return product if model is TrainingProduct and product_id == product.id else None
+
+    async def link(product_id):
+        return f"https://t.me/autoflow_bot?startapp=training_{product_id}"
+
+    monkeypatch.setattr(routes, "training_mini_app_link", link)
+    result = await routes.training_product_share_link(
+        product.id,
+        admin,
+        ShareSession(),
+    )
+    assert result["url"] == f"https://t.me/autoflow_bot?startapp=training_{product.id}"
+
+
+@pytest.mark.asyncio
+async def test_training_share_link_never_exposes_another_admin_product():
+    admin = User(id=uuid.uuid4(), telegram_id=2, first_name="Admin", role="admin")
+    product = TrainingProduct(
+        id=uuid.uuid4(), admin_id=uuid.uuid4(), title="Курс", short_description="Кратко",
+        full_description="Полностью", cover_url="/cover.jpg", product_type="personal",
+        price_af_coins=Decimal("100"), availability="available", published=True, pinned=False,
+    )
+
+    class ShareSession:
+        async def get(self, _model, _product_id):
+            return product
+
+    with pytest.raises(HTTPException) as error:
+        await routes.training_product_share_link(
+            product.id,
+            admin,
+            ShareSession(),
+        )
+    assert error.value.status_code == 404

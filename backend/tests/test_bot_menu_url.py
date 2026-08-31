@@ -21,6 +21,21 @@ def test_default_and_private_menu_buttons_use_the_current_versioned_url():
 
 
 @pytest.mark.asyncio
+async def test_training_share_uses_main_mini_app_start_parameter(monkeypatch):
+    calls = []
+
+    async def fake_call(method, payload):
+        calls.append((method, payload))
+        return {"ok": True, "result": {"username": "AutoFlowMarketBot"}}
+
+    monkeypatch.setattr(bot, "call_bot_api", fake_call)
+    monkeypatch.setattr(bot, "_bot_username_cache", None)
+    product_id = str(uuid.uuid4())
+    assert await bot.training_mini_app_link(product_id) == f"https://t.me/AutoFlowMarketBot?startapp=training_{product_id}"
+    assert calls == [("getMe", {})]
+
+
+@pytest.mark.asyncio
 async def test_send_menu_refreshes_the_users_private_menu_button(monkeypatch):
     calls = []
 
