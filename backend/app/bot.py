@@ -9,6 +9,7 @@ from .frontend import versioned_webapp_url
 
 
 logger = logging.getLogger("autoflow.bot")
+_bot_username_cache: str | None = None
 
 
 @dataclass(frozen=True)
@@ -213,6 +214,19 @@ async def call_bot_api(method: str, payload: dict) -> dict:
         description = data.get("description") or "Telegram Bot API rejected the request"
         raise HTTPException(status_code=502, detail=description)
     return data
+
+
+async def training_mini_app_link(product_id: str) -> str:
+    """Build an authenticated Main Mini App deep link for one training product."""
+
+    global _bot_username_cache
+    if not _bot_username_cache:
+        data = await call_bot_api("getMe", {})
+        username = str(data.get("result", {}).get("username") or "").strip().lstrip("@")
+        if not username or not username.replace("_", "").isalnum():
+            raise HTTPException(status_code=502, detail="Telegram не вернул username бота")
+        _bot_username_cache = username
+    return f"https://t.me/{quote(_bot_username_cache)}?{urlencode({'startapp': f'training_{product_id}'})}"
 
 
 async def create_star_invoice_link(amount: int, invoice_payload: str) -> str:

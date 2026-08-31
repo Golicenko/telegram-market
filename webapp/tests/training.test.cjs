@@ -79,6 +79,16 @@ test("training purchase works from both the catalog card and the details screen"
   assert.doesNotMatch(app, /"click", buyTrainingProduct, "trainingBuyButton"/);
 });
 
+test("admin can copy an exact production training deep link and startup opens it", () => {
+  assert.match(app, /\["share", "Скопировать ссылку"\]/);
+  assert.match(app, /\/admin\/training\/\$\{productId\}\/share-link/);
+  assert.match(app, /navigator\.clipboard\?\.writeText/);
+  assert.match(app, /pendingTrainingDeepLink/);
+  assert.match(app, /openTrainingProductDeepLink/);
+  assert.match(app, /training_/);
+  assert.match(app, /Обучение недоступно/);
+});
+
 test("automatic materials are persisted one by one and publication waits for a saved material", () => {
   const materialFlow = app.slice(app.indexOf("async function saveInitialAutomaticMaterials"), app.indexOf("async function submitTrainingProduct"));
   assert.match(materialFlow, /await api\.request\(`\/admin\/training\/\$\{productId\}\/materials`/);

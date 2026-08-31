@@ -89,6 +89,7 @@
 
   function diagnostic(error, url, durationMs, attempt) {
     const entry = {
+      error_id: error?.autoflowErrorId || null,
       endpoint: safeEndpoint(url),
       status: Number(error?.status || 0),
       duration_ms: Math.round(durationMs),
@@ -166,14 +167,17 @@
         catch (error) { throw new ApiError(502, "Сервер вернул некорректный ответ", { endpoint: safeEndpoint(url), errorType: "invalid_json", cause: error, autoflowErrorId: errorId }); }
       } catch (rawError) {
         const durationMs = performance.now() - startedAt;
+        const aborted = !timedOut && (rawError?.name === "AbortError" || externalSignal?.aborted);
+        const isNetworkFailure = !timedOut && !aborted && rawError?.name === "TypeError";
         const error = rawError instanceof ApiError
           ? rawError
-          : new ApiError(0, timedOut ? "Сервер не ответил вовремя" : "Нет соединения с сервером", {
+          : new ApiError(0, timedOut ? "Сервер не ответил вовремя" : aborted ? "Загрузка отменена" : isNetworkFailure ? "Нет соединения с сервером" : "Ошибка подготовки запроса", {
               endpoint: safeEndpoint(url),
-              errorType: timedOut ? "timeout" : "network",
+              errorType: timedOut ? "timeout" : aborted ? "aborted" : isNetworkFailure ? "network" : "client_request",
               cause: rawError,
               autoflowErrorId: errorId,
             });
+        error.duration_ms = Math.round(durationMs);
         diagnostic(error, url, durationMs, attempt);
         if (attempt > maxRetries || !shouldRetry(error) || externalSignal?.aborted) throw error;
         const exponentialDelay = Math.min(5000, retryDelayMs * (2 ** (attempt - 1)));
@@ -194,10 +198,12 @@
     return perform(new URL(path, document.baseURI).toString(), options, false);
   }
 
-  function uploadError(error) {
-    const metadata = { endpoint: error?.endpoint || "/api/uploads", errorType: error?.errorType || "upload", cause: error };
-    if (error?.errorType === "timeout") return new ApiError(0, "Загрузка фотографии заняла слишком много времени. Попробуйте снова.", metadata);
-    if (error?.errorType === "network") return new ApiError(0, "Нет соединения с сервером. Проверьте интернет.", metadata);
+  function uploadError(error, metadata = {}) {
+    const details = { ...metadata, endpoint: error?.endpoint || metadata.endpoint || "/api/uploads", errorType: error?.errorType || metadata.errorType || "upload", cause: error, autoflowErrorId: error?.autoflowErrorId || metadata.autoflowErrorId };
+    if (error?.errorType === "timeout") return new ApiError(0, "Сервер не ответил вовремя при загрузке фотографии. Попробуйте снова.", details);
+    if (error?.errorType === "network") return new ApiError(0, "Не удалось установить соединение с сервером. Проверьте интернет.", details);
+    if (error?.errorType === "aborted") return new ApiError(0, "Загрузка фотографии была отменена.", details);
+    if (error?.errorType === "client_request") return new ApiError(0, "Не удалось подготовить фотографию к отправке.", details);
     const messages = {
       401: "Сессия Telegram истекла. Откройте Market заново.",
       413: "Фотография слишком большая.",
@@ -205,8 +211,11 @@
       422: "Не удалось обработать фотографию.",
       429: "Слишком много запросов. Попробуйте через несколько секунд.",
       500: "Ошибка сервера при обработке фотографии.",
+      502: "Сервер загрузки временно недоступен (502). Попробуйте снова.",
+      503: "Сервис загрузки временно недоступен (503). Попробуйте снова.",
+      504: "Сервер не успел обработать фотографию (504). Попробуйте снова.",
     };
-    return new ApiError(error?.status || 0, messages[error?.status] || error?.message || "Не удалось загрузить фотографию.", metadata);
+    return new ApiError(error?.status || 0, messages[error?.status] || error?.message || "Не удалось загрузить фотографию.", details);
   }
 
   function canvasBlob(canvas, type, quality) {
@@ -214,7 +223,8 @@
     return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
   }
 
-  async function prepareImage(file) {
+  async function prepareImage(file, diagnosticMetadata) {
+    diagnosticMetadata.upload_stage = "client_inspect";
     if (!file || file.size <= 8 * 1024 * 1024 || !/^image\/(jpeg|png|webp)$/i.test(file.type || "")) return file;
     let bitmap = null;
     let objectUrl = null;
@@ -232,7 +242,10 @@
       }
       const width = Number(bitmap.width || bitmap.naturalWidth || 0);
       const height = Number(bitmap.height || bitmap.naturalHeight || 0);
+      diagnosticMetadata.image_width = width || null;
+      diagnosticMetadata.image_height = height || null;
       if (!width || !height) return file;
+      diagnosticMetadata.upload_stage = "client_compress";
       const scale = Math.min(1, 2560 / Math.max(width, height));
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, Math.round(width * scale));
@@ -249,6 +262,7 @@
       return blob;
     } catch (error) {
       console.warn("[AutoFlow Image] client compression skipped", { error_type: error?.name || "Error" });
+      diagnosticMetadata.compression_error_type = error?.name || "Error";
       return file;
     } finally {
       bitmap?.close?.();
@@ -257,15 +271,30 @@
   }
 
   async function upload(file, path = "/uploads") {
-    if (!file?.size) throw new ApiError(422, "Не удалось обработать фотографию.", { errorType: "upload" });
-    if (file.size > 30 * 1024 * 1024) throw new ApiError(413, "Фотография слишком большая.", { errorType: "upload" });
-    const preparedFile = await prepareImage(file);
-    const body = new FormData();
-    body.append("file", preparedFile, preparedFile.name || "photo.jpg");
+    const metadata = {
+      endpoint: `/api${path.split("?")[0]}`,
+      upload_stage: "client_validate",
+      file_mime: String(file?.type || "unknown").slice(0, 80),
+      file_size: Number(file?.size || 0),
+      image_width: null,
+      image_height: null,
+    };
+    if (!file?.size) throw uploadError(new ApiError(422, "Не удалось обработать фотографию.", { errorType: "upload" }), metadata);
+    if (file.size > 30 * 1024 * 1024) throw uploadError(new ApiError(413, "Фотография слишком большая.", { errorType: "upload" }), metadata);
     try {
-      return await request(path, { method: "POST", body, timeoutMs: 60000, retries: 0 });
+      const preparedFile = await prepareImage(file, metadata);
+      metadata.prepared_mime = String(preparedFile?.type || "unknown").slice(0, 80);
+      metadata.prepared_size = Number(preparedFile?.size || 0);
+      metadata.upload_stage = "formdata";
+      const body = new FormData();
+      body.append("file", preparedFile, preparedFile.name || "photo.jpg");
+      metadata.upload_stage = "fetch";
+      const startedAt = performance.now();
+      const response = await request(path, { method: "POST", body, timeoutMs: 90000, retries: 0 });
+      metadata.duration_ms = Math.round(performance.now() - startedAt);
+      return response;
     } catch (error) {
-      throw uploadError(error);
+      throw uploadError(error, metadata);
     }
   }
 

@@ -51,6 +51,16 @@ class ClientDiagnosticCreate(BaseModel):
     user_agent: str = Field(default="unknown", max_length=200)
     online: bool | None = None
     related_id: str | None = Field(default=None, max_length=128)
+    upload_stage: str | None = Field(default=None, max_length=64)
+    file_mime: str | None = Field(default=None, max_length=80)
+    file_size: int | None = Field(default=None, ge=0, le=100 * 1024 * 1024)
+    prepared_mime: str | None = Field(default=None, max_length=80)
+    prepared_size: int | None = Field(default=None, ge=0, le=100 * 1024 * 1024)
+    image_width: int | None = Field(default=None, ge=0, le=100000)
+    image_height: int | None = Field(default=None, ge=0, le=100000)
+    compression_error_type: str | None = Field(default=None, max_length=64)
+    photo_index: int | None = Field(default=None, ge=1, le=10)
+    client_time: str | None = Field(default=None, max_length=40)
 
 
 class ListingCreate(BaseModel):

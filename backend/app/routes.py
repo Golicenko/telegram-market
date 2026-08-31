@@ -8,7 +8,7 @@ from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile, status
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 from sqlalchemy import and_, delete, func, or_, select, update
@@ -30,6 +30,7 @@ from .bot import (
     send_bot_notification,
     send_bot_menu,
     send_bot_material,
+    training_mini_app_link,
     upload_bot_material,
 )
 from .config import Settings, get_settings
@@ -761,6 +762,11 @@ def normalize_image_content(content: bytes) -> tuple[bytes, str, str]:
     return normalized, "image/jpeg", ".jpg"
 
 
+def image_dimensions(content: bytes) -> tuple[int, int]:
+    with Image.open(BytesIO(content)) as image:
+        return image.size
+
+
 @router.get("/health")
 async def health():
     return {"status": "ok"}
@@ -803,26 +809,48 @@ async def me(user: User = Depends(get_current_user), session: AsyncSession = Dep
 
 @router.post("/uploads", status_code=201)
 async def upload_image(
+    request: Request,
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     max_bytes = get_settings().upload_max_bytes
-    async with IMAGE_PROCESSING_SLOTS:
-        content = await file.read(max_bytes + 1)
-        if len(content) > max_bytes:
-            raise HTTPException(status_code=413, detail=f"Фотография превышает допустимый размер {max_bytes // (1024 * 1024)} МБ")
-        normalized, content_type, _extension = await run_in_threadpool(normalize_image_content, content)
-    image = UploadedImage(
-        owner_id=user.id,
-        content_type=content_type,
-        data=normalized,
-        size_bytes=len(normalized),
-        original_filename=(Path(file.filename or "photo").name[:255] or None),
-    )
-    session.add(image)
-    await session.commit()
-    return {"url": f"/api/media/{image.id}"}
+    error_id = request.headers.get("X-AutoFlow-Error-ID", "")[:16] or None
+    stage = "backend_read"
+    started_at = datetime.now(UTC)
+    try:
+        async with IMAGE_PROCESSING_SLOTS:
+            content = await file.read(max_bytes + 1)
+            diagnostic_logger.info(
+                "image_upload_stage %s",
+                json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "file_size": len(content)}, ensure_ascii=False),
+            )
+            if len(content) > max_bytes:
+                raise HTTPException(status_code=413, detail=f"Фотография превышает допустимый размер {max_bytes // (1024 * 1024)} МБ")
+            stage = "backend_decode"
+            normalized, content_type, _extension = await run_in_threadpool(normalize_image_content, content)
+            width, height = await run_in_threadpool(image_dimensions, normalized)
+        stage = "database_commit"
+        image = UploadedImage(
+            owner_id=user.id,
+            content_type=content_type,
+            data=normalized,
+            size_bytes=len(normalized),
+            original_filename=(Path(file.filename or "photo").name[:255] or None),
+        )
+        session.add(image)
+        await session.commit()
+        diagnostic_logger.info(
+            "image_upload_completed %s",
+            json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": "completed", "file_mime": (file.content_type or "unknown")[:80], "file_size": len(content), "prepared_size": len(normalized), "image_width": width, "image_height": height, "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
+        )
+        return {"url": f"/api/media/{image.id}"}
+    except Exception as exc:
+        diagnostic_logger.warning(
+            "image_upload_failed %s",
+            json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "status": getattr(exc, "status_code", 500), "exception_class": type(exc).__name__, "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
+        )
+        raise
 
 
 @router.get("/media/{image_id}", response_class=Response)
@@ -1347,6 +1375,19 @@ async def add_training_product(payload: TrainingProductCreate, admin: User = Dep
 @router.patch("/admin/training/{product_id}", response_model=TrainingProductOut)
 async def edit_training_product(product_id: uuid.UUID, payload: TrainingProductUpdate, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return await update_training_product(session, admin, product_id, payload)
+
+
+@router.get("/admin/training/{product_id}/share-link")
+async def training_product_share_link(
+    product_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    product = await session.get(TrainingProduct, product_id)
+    if not product or product.admin_id != admin.id or product.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Обучение не найдено")
+    url = await training_mini_app_link(str(product.id))
+    return {"url": url, "product_id": str(product.id)}
 
 
 @router.post("/admin/training/{product_id}/state/{action}", response_model=TrainingProductOut)
