@@ -1,4 +1,5 @@
 import tempfile
+import struct
 
 import pytest
 from fastapi import HTTPException, UploadFile
@@ -69,6 +70,28 @@ async def test_large_video_is_streamed_to_telegram_and_not_rejected_by_old_20mb_
 
 
 @pytest.mark.asyncio
+async def test_video_duration_over_ten_minutes_is_not_a_validation_limit(monkeypatch):
+    # mvhd timescale=1 and duration=660 represents eleven minutes. Upload validation
+    # deliberately checks transport size and format, never media duration.
+    ftyp = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 12
+    mvhd_payload = b"\x00\x00\x00\x00" + b"\x00" * 8 + struct.pack(">II", 1, 660)
+    mvhd = struct.pack(">I", len(mvhd_payload) + 8) + b"mvhd" + mvhd_payload
+    upload = upload_with_size("long-lesson.mp4", ftyp + mvhd, 1024 * 1024)
+    captured = {}
+
+    async def fake_upload(_telegram_id, material_type, _filename, _content, _content_type, file_size):
+        captured.update(material_type=material_type, file_size=file_size)
+        return {"delivery_reference": "long-video-file-id", "material_type": material_type}
+
+    monkeypatch.setattr(routes, "upload_bot_material", fake_upload)
+    admin = type("Admin", (), {"telegram_id": 123})()
+    result = await routes.upload_training_material(file=upload, admin=admin, settings=Settings())
+
+    assert result["delivery_reference"] == "long-video-file-id"
+    assert captured == {"material_type": "video", "file_size": 1024 * 1024}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("name", "header", "size", "expected_max_mb"),
     [
@@ -83,4 +106,3 @@ async def test_training_upload_enforces_real_telegram_transport_limits(name, hea
         await routes.upload_training_material(file=upload, admin=admin, settings=Settings())
     assert error.value.status_code == 413
     assert error.value.detail["max_bytes"] == expected_max_mb * 1024 * 1024
-
