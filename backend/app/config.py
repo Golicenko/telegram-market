@@ -56,7 +56,10 @@ class Settings(BaseSettings):
     star_topup_min: int = Field(default=10, ge=1)
     star_topup_max: int = Field(default=1000, ge=1)
     upload_max_bytes: int = Field(default=30 * 1024 * 1024, ge=1024)
+    # Direct uploads still pass through the cloud Bot API (50 MB). Large videos
+    # use the Telegram inbox/file_id flow and never transit Railway.
     training_file_upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
+    training_video_max_bytes: int = Field(default=2 * 1024 * 1024 * 1024, ge=1024, le=2 * 1024 * 1024 * 1024)
     training_photo_upload_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=10 * 1024 * 1024)
     telegram_init_data_max_age_seconds: int = Field(default=86400, ge=300, le=604800)
     db_pool_size: int = Field(default=5, ge=1, le=20)

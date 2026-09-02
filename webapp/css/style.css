@@ -539,3 +539,7 @@ body.chat-open .app-shell{width:100vw;max-width:none;margin:0;padding:0;border:0
 .training-upload-row progress{grid-column:1/-1;width:100%;accent-color:#efa718}
 .training-upload-row.is-success{border-color:rgba(80,190,125,.45)}
 .training-upload-row.is-error{border-color:rgba(255,92,92,.45)}
+.training-telegram-upload{display:grid;gap:8px;padding:10px;border:1px solid rgba(239,167,24,.32);border-radius:10px;background:rgba(239,167,24,.05)}
+.training-telegram-upload>strong{color:#efc65f;font-size:10px}.training-telegram-upload>small{color:var(--muted);font-size:9px;line-height:1.45}
+.training-telegram-upload>div:not(#trainingInboxUploads){display:grid;grid-template-columns:1fr 1fr;gap:7px}.training-telegram-upload button{min-width:0;padding:9px 7px;border:1px solid rgba(239,167,24,.35);border-radius:8px;color:var(--text);background:#121922;font-size:9px;font-weight:800}
+#trainingInboxUploads{display:grid;gap:6px}.training-inbox-upload{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;gap:2px 8px!important;text-align:left!important}.training-inbox-upload strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.training-inbox-upload small{color:var(--muted)}.training-inbox-upload span{grid-column:2;grid-row:1/3;align-self:center;color:#efc65f}

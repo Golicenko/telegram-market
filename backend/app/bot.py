@@ -220,9 +220,8 @@ async def call_bot_api(method: str, payload: dict) -> dict:
     return data
 
 
-async def training_mini_app_link(product_id: str) -> str:
-    """Build an authenticated Main Mini App deep link for one training product."""
-
+async def bot_private_chat_link() -> str:
+    """Return the canonical private-chat link for the configured bot."""
     global _bot_username_cache
     if not _bot_username_cache:
         data = await call_bot_api("getMe", {})
@@ -230,7 +229,14 @@ async def training_mini_app_link(product_id: str) -> str:
         if not username or not username.replace("_", "").isalnum():
             raise HTTPException(status_code=502, detail="Telegram не вернул username бота")
         _bot_username_cache = username
-    return f"https://t.me/{quote(_bot_username_cache)}?{urlencode({'startapp': f'training_{product_id}'})}"
+    return f"https://t.me/{quote(_bot_username_cache)}"
+
+
+async def training_mini_app_link(product_id: str) -> str:
+    """Build an authenticated Main Mini App deep link for one training product."""
+
+    base_url = await bot_private_chat_link()
+    return f"{base_url}?{urlencode({'startapp': f'training_{product_id}'})}"
 
 
 async def create_star_invoice_link(amount: int, invoice_payload: str) -> str:
