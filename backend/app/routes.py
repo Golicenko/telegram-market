@@ -32,12 +32,13 @@ from .bot import (
     send_price_offer_response_notification,
     send_bot_menu,
     send_bot_material,
+    bot_private_chat_link,
     training_mini_app_link,
     upload_bot_material,
 )
 from .config import Settings, get_settings
 from .database import SessionLocal, get_session
-from .models import AccountListing, AdminAction, AdminBroadcast, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, ListingLike, ListingView, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportCaseEvent, SupportMessage, SupportTicket, TrainingMaterial, TrainingProduct, TrainingPurchase, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
+from .models import AccountListing, AdminAction, AdminBroadcast, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, ListingLike, ListingView, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportCaseEvent, SupportMessage, SupportTicket, TrainingInboxUpload, TrainingMaterial, TrainingMaterialDelivery, TrainingProduct, TrainingPurchase, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
 from .schemas import (
     AccountListingCreate,
     AccountListingOut,
@@ -83,6 +84,8 @@ from .schemas import (
     TrainingBuyerOut,
     TrainingMaterialAdminOut,
     TrainingMaterialCreate,
+    TrainingInboxAttachCreate,
+    TrainingInboxUploadOut,
     TrainingMaterialPublicOut,
     TrainingMaterialUpdate,
     TrainingProductOut,
@@ -426,7 +429,7 @@ async def training_purchase_admin_out(
     })
 
 
-async def deliver_training_materials(purchase_id: uuid.UUID) -> None:
+async def deliver_training_materials(purchase_id: uuid.UUID, force_redelivery: bool = False) -> None:
     async with SessionLocal() as session:
         purchase = await session.get(TrainingPurchase, purchase_id)
         if not purchase or purchase.delivery_status != "sending":
@@ -442,13 +445,51 @@ async def deliver_training_materials(purchase_id: uuid.UUID) -> None:
     success = bool(telegram_id and materials)
     if success:
         for material in materials:
-            sent = False
-            for _attempt in range(2):
-                sent = await send_bot_material(telegram_id, material.material_type, material.delivery_reference, material.title)
-                if sent:
+            delivery_id = uuid.uuid4()
+            async with SessionLocal() as delivery_session:
+                await delivery_session.execute(
+                    pg_insert(TrainingMaterialDelivery).values(
+                        id=delivery_id,
+                        purchase_id=purchase_id,
+                        material_id=material.id,
+                        status="pending",
+                        attempts=0,
+                    ).on_conflict_do_nothing(constraint="uq_training_material_delivery_pair")
+                )
+                await delivery_session.commit()
+                delivery = await delivery_session.scalar(
+                    select(TrainingMaterialDelivery).where(
+                        TrainingMaterialDelivery.purchase_id == purchase_id,
+                        TrainingMaterialDelivery.material_id == material.id,
+                    ).with_for_update()
+                )
+                if not delivery:
+                    success = False
                     break
+                if delivery.status == "delivered" and not force_redelivery:
+                    await delivery_session.rollback()
+                    continue
+                if delivery.status == "sending" and delivery.updated_at and delivery.updated_at > datetime.now(UTC) - timedelta(minutes=10):
+                    await delivery_session.rollback()
+                    return
+                delivery.status = "sending"
+                delivery.attempts += 1
+                delivery.last_error = None
+                await delivery_session.commit()
+                delivery_id = delivery.id
+            sent = await send_bot_material(telegram_id, material.material_type, material.delivery_reference, material.title)
+            async with SessionLocal() as delivery_session:
+                delivery = await delivery_session.scalar(
+                    select(TrainingMaterialDelivery).where(TrainingMaterialDelivery.id == delivery_id).with_for_update()
+                )
+                if delivery:
+                    delivery.status = "delivered" if sent else "failed"
+                    delivery.sent_at = datetime.now(UTC) if sent else None
+                    delivery.last_error = None if sent else "Telegram не подтвердил отправку материала"
+                    await delivery_session.commit()
             if not sent:
                 success = False
+                break
     async with SessionLocal() as session:
         await finish_training_delivery(session, purchase_id, success)
 
@@ -770,6 +811,7 @@ def image_dimensions(content: bytes) -> tuple[int, int]:
 
 
 TRAINING_FILE_FORMATS = "MP4, MOV, WebM, JPG, PNG, WEBP, PDF, TXT и ZIP"
+TRAINING_VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
 
 
 def detect_training_material(header: bytes) -> tuple[str, str]:
@@ -810,6 +852,44 @@ def spooled_file_size(file: UploadFile) -> int:
     size = file.file.tell()
     file.file.seek(current)
     return size
+
+
+def extract_training_inbox_video(message: dict, max_bytes: int) -> dict | None:
+    """Extract safe metadata only; Telegram keeps the binary and returns file_id."""
+
+    video = message.get("video")
+    document = message.get("document")
+    source = video or document
+    if not isinstance(source, dict) or not source.get("file_id"):
+        return None
+    file_name = str(source.get("file_name") or "").strip()
+    mime_type = str(source.get("mime_type") or "").lower().strip()
+    extension = Path(file_name).suffix.lower()
+    if document and not (mime_type.startswith("video/") or extension in TRAINING_VIDEO_EXTENSIONS):
+        return None
+    if video and not mime_type:
+        mime_type = "video/mp4"
+    size = int(source.get("file_size") or 0)
+    if size <= 0 or size > max_bytes:
+        return None
+    unique_id = str(source.get("file_unique_id") or "").strip() or None
+    if not file_name:
+        file_name = f"video_{unique_id or source['file_id'][:12]}.mp4"
+    duration = source.get("duration")
+    return {
+        "telegram_file_id": str(source["file_id"]),
+        "telegram_file_unique_id": unique_id,
+        "file_name": file_name[:500],
+        "mime_type": (mime_type or "application/octet-stream")[:160],
+        "file_size": size,
+        "duration_seconds": max(0, int(duration)) if duration is not None else None,
+        "material_type": "video" if video else "document",
+        "metadata_json": {
+            "telegram_message_id": message.get("message_id"),
+            "width": source.get("width"),
+            "height": source.get("height"),
+        },
+    }
 
 
 @router.get("/health")
@@ -1337,7 +1417,7 @@ async def redeliver_training_purchase(
         purchase_id,
         cooldown_seconds=settings.training_delivery_cooldown_seconds,
     )
-    background_tasks.add_task(deliver_training_materials, purchase.id)
+    background_tasks.add_task(deliver_training_materials, purchase.id, True)
     return await training_purchase_out(session, purchase)
 
 
@@ -1484,6 +1564,15 @@ async def upload_training_material(
     header = await file.read(4096)
     await file.seek(0)
     detected_type, detected_mime = detect_training_material(header)
+    if detected_mime.startswith("video/") and size > settings.training_file_upload_max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": "use_telegram_training_inbox",
+                "message": "Большие видео отправляются боту один раз и затем выбираются в Mini App.",
+                "max_bytes": settings.training_video_max_bytes,
+            },
+        )
     max_bytes = settings.training_photo_upload_max_bytes if detected_type == "photo" else settings.training_file_upload_max_bytes
     if size > max_bytes:
         max_mb = max_bytes // (1024 * 1024)
@@ -1499,6 +1588,76 @@ async def upload_training_material(
         detected_mime,
         size,
     )
+
+
+@router.get("/admin/training/uploads", response_model=list[TrainingInboxUploadOut])
+async def list_training_inbox_uploads(
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    return list((await session.scalars(
+        select(TrainingInboxUpload).where(
+            TrainingInboxUpload.admin_id == admin.id,
+            TrainingInboxUpload.status == "available",
+        ).order_by(TrainingInboxUpload.created_at.desc()).limit(30)
+    )).all())
+
+
+@router.get("/admin/training/uploads/bot-link")
+async def training_upload_bot_link(admin: User = Depends(require_admin)):
+    del admin
+    return {"url": await bot_private_chat_link()}
+
+
+@router.post(
+    "/admin/training/{product_id}/materials/from-upload/{upload_id}",
+    response_model=TrainingMaterialAdminOut,
+    status_code=201,
+)
+async def attach_training_inbox_upload(
+    product_id: uuid.UUID,
+    upload_id: uuid.UUID,
+    payload: TrainingInboxAttachCreate,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    product = await session.scalar(select(TrainingProduct).where(TrainingProduct.id == product_id).with_for_update())
+    upload = await session.scalar(select(TrainingInboxUpload).where(TrainingInboxUpload.id == upload_id).with_for_update())
+    if not product or product.admin_id != admin.id or product.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Обучение не найдено")
+    if product.product_type != "automatic":
+        raise HTTPException(status_code=409, detail="Видео можно прикрепить только к автовыдаче")
+    if not upload or upload.admin_id != admin.id:
+        raise HTTPException(status_code=404, detail="Загруженное видео не найдено")
+    if upload.status == "attached":
+        if upload.material_id:
+            existing = await session.get(TrainingMaterial, upload.material_id)
+            if existing and existing.product_id == product.id:
+                return existing
+        raise HTTPException(status_code=409, detail="Видео уже прикреплено к другому обучению")
+    material = TrainingMaterial(
+        product_id=product.id,
+        title=payload.title.strip(),
+        material_type=upload.material_type,
+        delivery_reference=upload.telegram_file_id,
+        mime_type=upload.mime_type,
+        file_size=upload.file_size,
+        metadata_json={
+            **(upload.metadata_json or {}),
+            "source": "telegram_inbox",
+            "file_name": upload.file_name,
+            "file_unique_id": upload.telegram_file_unique_id,
+            "duration_seconds": upload.duration_seconds,
+        },
+        position=payload.position,
+    )
+    session.add(material)
+    await session.flush()
+    upload.status = "attached"
+    upload.material_id = material.id
+    session.add(AdminAction(admin_id=admin.id, action="attach_training_video", target_type="training_material", target_id=material.id))
+    await session.commit()
+    return material
 
 
 @router.patch("/admin/training/materials/{material_id}", response_model=TrainingMaterialAdminOut)
@@ -1631,7 +1790,7 @@ async def admin_redeliver_training_purchase(
         purchase.id,
         cooldown_seconds=settings.training_delivery_cooldown_seconds,
     )
-    background_tasks.add_task(deliver_training_materials, purchase.id)
+    background_tasks.add_task(deliver_training_materials, purchase.id, True)
     buyer = await session.get(User, purchase.buyer_id)
     return await training_purchase_admin_out(session, purchase, buyer)
 
@@ -2885,6 +3044,37 @@ async def telegram_webhook(
         return {"ok": True}
     message = update.get("message") or {}
     sender = message.get("from") or {}
+    if sender.get("id") in settings.admin_telegram_ids:
+        inbox_video = extract_training_inbox_video(message, settings.training_video_max_bytes)
+        if inbox_video:
+            admin = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
+            update_id = int(update.get("update_id") or 0)
+            if not admin or admin.role != "admin" or not update_id:
+                background_tasks.add_task(
+                    send_bot_notification,
+                    int(sender["id"]),
+                    "Сначала откройте AUTOFLOW MARKET, затем повторно отправьте видео.",
+                )
+                return {"ok": True, "accepted": False}
+            upload_id = uuid.uuid4()
+            inserted = await session.scalar(
+                pg_insert(TrainingInboxUpload).values(
+                    id=upload_id,
+                    admin_id=admin.id,
+                    telegram_update_id=update_id,
+                    status="available",
+                    material_id=None,
+                    **inbox_video,
+                ).on_conflict_do_nothing(index_elements=[TrainingInboxUpload.telegram_update_id]).returning(TrainingInboxUpload.id)
+            )
+            await session.commit()
+            if inserted:
+                background_tasks.add_task(
+                    send_bot_notification,
+                    int(sender["id"]),
+                    f"✅ Видео загружено\n{inbox_video['file_name']}\nВернитесь в Mini App и нажмите «Проверить загрузку».",
+                )
+            return {"ok": True, "accepted": inserted is not None}
     # Admin broadcasts are claimed by Telegram update_id and executed after the
     # webhook response. Telegram retries can therefore never start duplicates.
     if sender.get("id") in settings.admin_telegram_ids:

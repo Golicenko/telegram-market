@@ -93,16 +93,58 @@ async def test_video_duration_over_ten_minutes_is_not_a_validation_limit(monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("name", "header", "size", "expected_max_mb"),
+    ("name", "header", "size", "expected_max_bytes", "expected_code"),
     [
-        ("cover.jpg", b"\xff\xd8\xff\xe0", 10 * 1024 * 1024 + 1, 10),
-        ("lesson.mp4", b"\x00\x00\x00\x18ftypisom", 50 * 1024 * 1024 + 1, 50),
+        ("cover.jpg", b"\xff\xd8\xff\xe0", 10 * 1024 * 1024 + 1, 10 * 1024 * 1024, "training_file_too_large"),
+        ("lesson.mp4", b"\x00\x00\x00\x18ftypisom", 50 * 1024 * 1024 + 1, 2 * 1024 * 1024 * 1024, "use_telegram_training_inbox"),
     ],
 )
-async def test_training_upload_enforces_real_telegram_transport_limits(name, header, size, expected_max_mb):
+async def test_training_upload_enforces_real_telegram_transport_limits(name, header, size, expected_max_bytes, expected_code):
     upload = upload_with_size(name, header, size)
     admin = type("Admin", (), {"telegram_id": 123})()
     with pytest.raises(HTTPException) as error:
         await routes.upload_training_material(file=upload, admin=admin, settings=Settings())
     assert error.value.status_code == 413
-    assert error.value.detail["max_bytes"] == expected_max_mb * 1024 * 1024
+    assert error.value.detail["max_bytes"] == expected_max_bytes
+    assert error.value.detail["code"] == expected_code
+
+
+def test_telegram_inbox_accepts_500mb_video_without_duration_limit():
+    result = routes.extract_training_inbox_video(
+        {
+            "message_id": 77,
+            "video": {
+                "file_id": "telegram-file-id",
+                "file_unique_id": "stable-id",
+                "file_name": "lesson-75-minutes.mp4",
+                "mime_type": "video/mp4",
+                "file_size": 500 * 1024 * 1024,
+                "duration": 75 * 60,
+            },
+        },
+        2 * 1024 * 1024 * 1024,
+    )
+    assert result is not None
+    assert result["file_size"] == 500 * 1024 * 1024
+    assert result["duration_seconds"] == 75 * 60
+    assert result["telegram_file_id"] == "telegram-file-id"
+
+
+def test_telegram_inbox_accepts_mov_document_and_rejects_non_video_document():
+    mov = routes.extract_training_inbox_video(
+        {"document": {"file_id": "mov-id", "file_unique_id": "u", "file_name": "lesson.mov", "mime_type": "application/octet-stream", "file_size": 200_000_000}},
+        2 * 1024 * 1024 * 1024,
+    )
+    pdf = routes.extract_training_inbox_video(
+        {"document": {"file_id": "pdf-id", "file_name": "notes.pdf", "mime_type": "application/pdf", "file_size": 1000}},
+        2 * 1024 * 1024 * 1024,
+    )
+    assert mov is not None and mov["material_type"] == "document"
+    assert pdf is None
+
+
+def test_telegram_inbox_enforces_two_gib_metadata_boundary_without_reading_file():
+    message = {"video": {"file_id": "large-id", "file_unique_id": "large-u", "mime_type": "video/mp4", "file_size": 2 * 1024 * 1024 * 1024}}
+    assert routes.extract_training_inbox_video(message, 2 * 1024 * 1024 * 1024) is not None
+    message["video"]["file_size"] += 1
+    assert routes.extract_training_inbox_video(message, 2 * 1024 * 1024 * 1024) is None

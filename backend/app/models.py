@@ -177,6 +177,32 @@ class TrainingMaterial(Base, TimestampMixin):
     )
 
 
+class TrainingInboxUpload(Base, TimestampMixin):
+    """Telegram-hosted training file sent to the bot by an administrator."""
+
+    __tablename__ = "training_inbox_uploads"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    telegram_update_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    telegram_file_id: Mapped[str] = mapped_column(Text, nullable=False)
+    telegram_file_unique_id: Mapped[str | None] = mapped_column(Text, index=True)
+    file_name: Mapped[str] = mapped_column(Text, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(160), nullable=False)
+    file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    material_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="available", index=True)
+    material_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("training_materials.id", ondelete="SET NULL"), index=True)
+    __table_args__ = (
+        CheckConstraint("material_type IN ('video','document')", name="ck_training_inbox_type"),
+        CheckConstraint("status IN ('available','attached')", name="ck_training_inbox_status"),
+        CheckConstraint("file_size > 0 AND file_size <= 2147483648", name="ck_training_inbox_size"),
+        CheckConstraint("duration_seconds IS NULL OR duration_seconds >= 0", name="ck_training_inbox_duration"),
+        Index("ix_training_inbox_admin_status_created", "admin_id", "status", "created_at"),
+    )
+
+
 class TrainingPurchase(Base, TimestampMixin):
     __tablename__ = "training_purchases"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -221,6 +247,24 @@ class TrainingPurchase(Base, TimestampMixin):
         CheckConstraint("delivery_attempts >= 0", name="ck_training_purchases_delivery_attempts"),
         Index("ix_training_purchases_buyer_created", "buyer_id", "created_at"),
         Index("ix_training_purchases_product_status", "product_id", "status"),
+    )
+
+
+class TrainingMaterialDelivery(Base, TimestampMixin):
+    """Persistent idempotency record for one purchased material delivery."""
+
+    __tablename__ = "training_material_deliveries"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    purchase_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("training_purchases.id", ondelete="CASCADE"), nullable=False, index=True)
+    material_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("training_materials.id", ondelete="RESTRICT"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("purchase_id", "material_id", name="uq_training_material_delivery_pair"),
+        CheckConstraint("status IN ('pending','sending','delivered','failed')", name="ck_training_material_delivery_status"),
+        CheckConstraint("attempts >= 0", name="ck_training_material_delivery_attempts"),
     )
 
 

@@ -24,6 +24,8 @@
     selectedAdminTrainingId: null,
     trainingUploadCache: new Map(),
     trainingUploadRows: new Map(),
+    trainingInboxUploads: [],
+    selectedTrainingInboxUpload: null,
     pendingTrainingRequestId: null,
     pendingTrainingCoverUrl: null,
     trainingCoverObjectUrl: null,
@@ -259,6 +261,7 @@
     ensureBroadcastAdminUi();
     const trainingForm = document.getElementById("trainingForm");
     const trainingVideoInput = ensureTrainingVideoInput(trainingForm);
+    ensureTrainingTelegramUploadUi();
     ["title", "short_description", "full_description"].forEach((name) => {
       trainingForm?.elements[name]?.removeAttribute("maxlength");
       trainingForm?.elements[name]?.setAttribute("minlength", "1");
@@ -297,6 +300,8 @@
     bind(trainingForm?.elements.product_type, "change", toggleAutomaticMaterialFields, "trainingProductType");
     bind(trainingVideoInput, "change", previewTrainingMaterials, "trainingVideo");
     bind(trainingForm?.elements.automatic_material, "change", previewTrainingMaterials, "trainingMaterials");
+    bind(elements.trainingOpenUploadBot, "click", openTrainingUploadBot, "trainingOpenUploadBot");
+    bind(elements.trainingRefreshUploads, "click", refreshTrainingInboxUploads, "trainingRefreshUploads");
     bind(elements.trainingCoverInput, "change", previewTrainingCover, "trainingCover");
     bind(document.getElementById("trainingBuyButton"), "click", () => buyTrainingProduct(), "trainingBuyButton");
     bind(document.getElementById("trainingMaterialForm"), "submit", saveTrainingMaterial, "trainingMaterialForm");
@@ -304,7 +309,7 @@
     if (adminMaterialFile) {
       adminMaterialFile.accept = "video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp,application/pdf,text/plain,application/zip,.mp4,.mov,.webm,.jpg,.jpeg,.png,.webp,.pdf,.txt,.zip";
       const labelText = adminMaterialFile.parentElement?.firstChild;
-      if (labelText?.nodeType === Node.TEXT_NODE) labelText.textContent = "Добавить файл (до 50 МБ; фото до 10 МБ)";
+      if (labelText?.nodeType === Node.TEXT_NODE) labelText.textContent = "Добавить небольшой файл";
     }
     bind(elements.supportForm, "submit", submitSupportTicket, "supportForm");
     bind(elements.advertisementForm, "submit", submitAdvertisement, "advertisementForm");
@@ -646,6 +651,8 @@ function handleClick(event) {
     }
     const trainingMaterialAction = target.closest("[data-training-material-action]");
     if (trainingMaterialAction) return void runTrainingMaterialAction(trainingMaterialAction);
+    const inboxUpload = target.closest("[data-training-inbox-upload]");
+    if (inboxUpload) return void selectTrainingInboxUpload(inboxUpload.dataset.trainingInboxUpload);
     const redeliverTraining = target.closest("[data-training-redeliver]");
     if (redeliverTraining) return void redeliverTrainingMaterials(redeliverTraining);
     if (target.closest("[data-close-training-detail]")) return void closeAdminTrainingDetail();
@@ -2511,6 +2518,78 @@ async function hideCurrentConversation() {
     return input;
   }
 
+  function ensureTrainingTelegramUploadUi() {
+    const fieldset = document.getElementById("automaticMaterialFields");
+    if (!fieldset || document.getElementById("trainingTelegramUpload")) return;
+    const help = fieldset.querySelector(".training-file-help");
+    if (help) help.textContent = "Видео MP4, MOV или WebM — до 2 ГБ через Telegram, без ограничения длительности. Фото — до 10 МБ; остальные файлы — до 50 МБ.";
+    const panel = document.createElement("div"); panel.id = "trainingTelegramUpload"; panel.className = "training-telegram-upload";
+    const title = document.createElement("strong"); title.textContent = "Большое видео загружается через Telegram";
+    const copy = document.createElement("small"); copy.textContent = "Выберите видео здесь, отправьте этот же файл боту один раз и вернитесь в Mini App.";
+    const actions = document.createElement("div");
+    const open = document.createElement("button"); open.type = "button"; open.id = "trainingOpenUploadBot"; open.textContent = "Отправить видео боту";
+    const refresh = document.createElement("button"); refresh.type = "button"; refresh.id = "trainingRefreshUploads"; refresh.textContent = "Проверить загрузку";
+    actions.append(open, refresh);
+    const uploads = document.createElement("div"); uploads.id = "trainingInboxUploads";
+    panel.append(title, copy, actions, uploads);
+    fieldset.insertBefore(panel, document.getElementById("trainingUploadStatus"));
+    elements.trainingOpenUploadBot = open; elements.trainingRefreshUploads = refresh; elements.trainingInboxUploads = uploads;
+  }
+
+  async function openTrainingUploadBot() {
+    try {
+      const result = await api.request("/admin/training/uploads/bot-link");
+      automaticMaterialFiles(document.getElementById("trainingForm")).filter(isTrainingVideoFile)
+        .forEach((file) => setTrainingUploadStatus(file, "Загрузка видео...", "indeterminate", "uploading"));
+      if (telegram?.openTelegramLink) telegram.openTelegramLink(result.url);
+      else window.open(result.url, "_blank", "noopener");
+    } catch (error) { notify(error.message); }
+  }
+
+  async function refreshTrainingInboxUploads() {
+    if (elements.trainingRefreshUploads) { elements.trainingRefreshUploads.disabled = true; elements.trainingRefreshUploads.textContent = "Проверяем…"; }
+    try {
+      state.trainingInboxUploads = await api.request("/admin/training/uploads");
+      renderTrainingInboxUploads();
+      const form = document.getElementById("trainingForm");
+      const videos = automaticMaterialFiles(form).filter(isTrainingVideoFile);
+      videos.forEach((file) => {
+        const match = state.trainingInboxUploads.find((item) => item.file_size === file.size && (!item.file_name || item.file_name === file.name));
+        if (match) {
+          state.trainingUploadCache.set(trainingFileKey(file), { upload: { ...match, inbox_upload_id: match.id }, savedProductId: null });
+          setTrainingUploadStatus(file, "✅ Видео загружено", 100, "success");
+        }
+      });
+      if (!state.trainingInboxUploads.length) notify("Видео ещё не получено. Дождитесь сообщения бота и проверьте снова.");
+    } catch (error) { notify(error.message); }
+    finally { if (elements.trainingRefreshUploads) { elements.trainingRefreshUploads.disabled = false; elements.trainingRefreshUploads.textContent = "Проверить загрузку"; } }
+  }
+
+  function renderTrainingInboxUploads() {
+    if (!elements.trainingInboxUploads) return;
+    if (!state.trainingInboxUploads.length) { elements.trainingInboxUploads.replaceChildren(); return; }
+    elements.trainingInboxUploads.replaceChildren(...state.trainingInboxUploads.map((upload) => {
+      const row = document.createElement("button"); row.type = "button"; row.className = "training-inbox-upload"; row.dataset.trainingInboxUpload = upload.id;
+      const name = document.createElement("strong"); name.textContent = upload.file_name;
+      const meta = document.createElement("small"); meta.textContent = [formatFileSize(upload.file_size), upload.duration_seconds ? `${Math.floor(upload.duration_seconds / 60)} мин` : null].filter(Boolean).join(" · ");
+      const action = document.createElement("span"); action.textContent = "Использовать";
+      row.append(name, meta, action); return row;
+    }));
+  }
+
+  function selectTrainingInboxUpload(uploadId) {
+    const upload = state.trainingInboxUploads.find((item) => String(item.id) === String(uploadId));
+    if (!upload) return;
+    state.selectedTrainingInboxUpload = upload;
+    const videos = automaticMaterialFiles(document.getElementById("trainingForm")).filter(isTrainingVideoFile);
+    const target = videos.find((file) => file.size === upload.file_size) || videos[0];
+    if (target) {
+      state.trainingUploadCache.set(trainingFileKey(target), { upload: { ...upload, inbox_upload_id: upload.id }, savedProductId: null });
+      setTrainingUploadStatus(target, "✅ Видео загружено", 100, "success");
+    }
+    notify(`Выбрано: ${upload.file_name}`);
+  }
+
   function isTrainingVideoFile(file) {
     return String(file?.type || "").toLowerCase().startsWith("video/")
       || /\.(mp4|mov|webm)$/i.test(String(file?.name || ""));
@@ -2529,6 +2608,7 @@ async function hideCurrentConversation() {
     return Boolean(
       String(formElement.elements.automatic_text?.value || "").trim()
       || automaticMaterialFiles(formElement).length
+      || state.selectedTrainingInboxUpload
     );
   }
 
@@ -2551,13 +2631,15 @@ async function hideCurrentConversation() {
     }
     row.className = `training-upload-row${stateName ? ` is-${stateName}` : ""}`;
     row.querySelector("span").textContent = message;
-    const progress = row.querySelector("progress"); progress.hidden = percent === null; if (percent !== null) progress.value = percent;
+    const progress = row.querySelector("progress"); progress.hidden = percent === null;
+    if (typeof percent === "number") progress.value = percent;
+    else if (percent === "indeterminate") progress.removeAttribute("value");
   }
 
   function previewTrainingMaterials(event) {
-    state.trainingUploadCache.clear(); state.trainingUploadRows.clear(); elements.trainingUploadStatus?.replaceChildren();
+    state.trainingUploadCache.clear(); state.trainingUploadRows.clear(); state.selectedTrainingInboxUpload = null; elements.trainingUploadStatus?.replaceChildren();
     const formElement = event.currentTarget.form || document.getElementById("trainingForm");
-    automaticMaterialFiles(formElement).forEach((file) => setTrainingUploadStatus(file, isTrainingVideoFile(file) ? "Видео выбрано" : "Файл выбран", null, "selected"));
+    automaticMaterialFiles(formElement).forEach((file) => setTrainingUploadStatus(file, isTrainingVideoFile(file) ? "Видео выбрано — отправьте его боту" : "Файл выбран", null, "selected"));
   }
 
   function showTrainingCoverPreview(url) {
@@ -2595,6 +2677,16 @@ async function hideCurrentConversation() {
       if (!failures.length) formElement.elements.automatic_text.value = "";
     }
     const files = automaticMaterialFiles(formElement);
+    if (state.selectedTrainingInboxUpload && !files.some(isTrainingVideoFile)) {
+      const upload = state.selectedTrainingInboxUpload;
+      try {
+        await api.request(`/admin/training/${productId}/materials/from-upload/${upload.id}`, { method: "POST", body: JSON.stringify({ title: upload.file_name || "Видео", position }) });
+        position += 1; savedCount += 1;
+      } catch (error) {
+        failures.push(`${upload.file_name || "Видео"}: ${error.message}`);
+        reportClientError("training_video_attach", error);
+      }
+    }
     for (const file of files) {
       const key = trainingFileKey(file);
       const video = isTrainingVideoFile(file);
@@ -2602,7 +2694,11 @@ async function hideCurrentConversation() {
       if (cached?.savedProductId === String(productId)) continue;
       try {
         let upload = cached?.upload;
+        if (video && !upload && state.selectedTrainingInboxUpload && files.filter(isTrainingVideoFile).length === 1) {
+          upload = { ...state.selectedTrainingInboxUpload, inbox_upload_id: state.selectedTrainingInboxUpload.id };
+        }
         if (!upload) {
+          if (video) throw new Error("Отправьте видео боту и нажмите «Проверить загрузку»");
           setTrainingUploadStatus(file, video ? "Загрузка видео — 0%" : "Загрузка файла — 0%", 0, "uploading");
           upload = await api.upload(file, "/admin/training/materials/upload?material_type=file", {
             kind: "training", prepareImage: false, maxBytes: 50 * 1024 * 1024, timeoutMs: 295000,
@@ -2612,14 +2708,21 @@ async function hideCurrentConversation() {
           setTrainingUploadStatus(file, `${video ? "✅ Видео загружено" : "✅ Файл загружен"}. Сохраняем материал…`, 100, "uploaded");
         }
         const beforeFailures = failures.length;
-        await persist(file.name || "Материал", {
-          title: file.name || "Материал",
-          material_type: upload.material_type || "document",
-          delivery_reference: upload.delivery_reference,
-          mime_type: upload.mime_type || null,
-          file_size: upload.file_size || null,
-          metadata_json: upload.metadata_json || {},
-        });
+        if (video && upload.inbox_upload_id) {
+          try {
+            await api.request(`/admin/training/${productId}/materials/from-upload/${upload.inbox_upload_id}`, { method: "POST", body: JSON.stringify({ title: file.name || upload.file_name || "Видео", position }) });
+            position += 1; savedCount += 1;
+          } catch (error) { failures.push(`${file.name || "Видео"}: ${error.message}`); reportClientError("training_video_attach", error); }
+        } else {
+          await persist(file.name || "Материал", {
+            title: file.name || "Материал",
+            material_type: upload.material_type || "document",
+            delivery_reference: upload.delivery_reference,
+            mime_type: upload.mime_type || null,
+            file_size: upload.file_size || null,
+            metadata_json: upload.metadata_json || {},
+          });
+        }
         if (failures.length === beforeFailures) {
           state.trainingUploadCache.set(key, { upload, savedProductId: String(productId) });
           setTrainingUploadStatus(file, video ? "✅ Видео загружено" : "✅ Материал сохранён", 100, "success");
@@ -2689,7 +2792,7 @@ async function hideCurrentConversation() {
       } catch (refreshError) {
         reportClientError("training_refresh_after_save", refreshError);
       }
-      formElement.reset(); state.trainingUploadCache.clear(); state.trainingUploadRows.clear(); state.pendingTrainingCoverUrl = null; state.pendingTrainingRequestId = null; elements.trainingUploadStatus?.replaceChildren(); toggleAutomaticMaterialFields(); renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training");
+      formElement.reset(); state.trainingUploadCache.clear(); state.trainingUploadRows.clear(); state.trainingInboxUploads = []; state.selectedTrainingInboxUpload = null; state.pendingTrainingCoverUrl = null; state.pendingTrainingRequestId = null; elements.trainingUploadStatus?.replaceChildren(); elements.trainingInboxUploads?.replaceChildren(); toggleAutomaticMaterialFields(); renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training");
       notify(saved.published ? "✅ Обучение опубликовано" : wasExisting ? "✅ Обучение успешно изменено" : "✅ Обучение успешно создано");
     } catch (error) { retryNeeded = true; notify(error.message); } finally { button.disabled = false; button.textContent = retryNeeded ? "Повторить загрузку" : defaultButtonText; }
   }

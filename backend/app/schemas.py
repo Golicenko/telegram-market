@@ -314,6 +314,22 @@ class TrainingMaterialAdminOut(TrainingMaterialPublicOut):
     updated_at: datetime
 
 
+class TrainingInboxUploadOut(ORMModel):
+    id: uuid.UUID
+    file_name: str
+    mime_type: str
+    file_size: int
+    duration_seconds: int | None
+    material_type: str
+    status: str
+    created_at: datetime
+
+
+class TrainingInboxAttachCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=180)
+    position: int = Field(default=0, ge=0)
+
+
 class TrainingPurchaseOut(ORMModel):
     id: uuid.UUID
     product_id: uuid.UUID
