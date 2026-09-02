@@ -66,8 +66,9 @@ test("admin training orders expose durable notification state and filters", () =
 test("training cards expose a real buy action and automatic editor has protected material inputs", () => {
   assert.match(app, /dataset\.buyTraining = product\.id/);
   assert.match(html, /id="automaticMaterialFields"/);
-  assert.match(html, /name="automatic_video"/);
-  assert.match(html, /name="automatic_file"/);
+  assert.match(html, /name="automatic_material"[^>]*multiple/);
+  assert.match(html, /video\/mp4,video\/quicktime,video\/webm/);
+  assert.match(html, /До 50 МБ; фото — до 10 МБ/);
   assert.match(app, /saveInitialAutomaticMaterials/);
 });
 
@@ -92,10 +93,26 @@ test("admin can copy an exact production training deep link and startup opens it
 test("automatic materials are persisted one by one and publication waits for a saved material", () => {
   const materialFlow = app.slice(app.indexOf("async function saveInitialAutomaticMaterials"), app.indexOf("async function submitTrainingProduct"));
   assert.match(materialFlow, /await api\.request\(`\/admin\/training\/\$\{productId\}\/materials`/);
-  assert.match(materialFlow, /await persist\(file\.name \|\| fallbackTitle/);
+  assert.match(materialFlow, /await persist\(file\.name \|\| "Материал"/);
+  assert.match(materialFlow, /onProgress/);
+  assert.match(materialFlow, /savedProductId/);
   assert.match(app, /publishAfterMaterials/);
   assert.match(app, /materialResult\.savedCount/);
   assert.match(app, /Обучение оставлено скрытым: ни один материал не был сохранён/);
+  assert.match(app, /formElement\.elements\.product_id\.value = saved\.id/);
+  assert.match(app, /client_request_id: id \? undefined : state\.pendingTrainingRequestId/);
+  assert.match(app, /Повторить загрузку/);
+});
+
+test("training covers use an uncropped 16:9 preview in every training surface", () => {
+  const css = fs.readFileSync(path.join(root, "css", "style.css"), "utf8");
+  assert.match(html, /id="trainingCoverPreview"/);
+  assert.match(css, /\.training-card__media\{[^}]*aspect-ratio:16\/9[^}]*\}/);
+  assert.match(css, /\.training-detail__cover\{[^}]*aspect-ratio:16\/9;object-fit:contain/);
+  assert.match(css, /\.training-library-card>img\{[^}]*aspect-ratio:16\/9[^}]*object-fit:contain/);
+  assert.match(css, /\.training-admin-card>img\{[^}]*aspect-ratio:16\/9[^}]*object-fit:contain/);
+  assert.match(css, /\.training-cover-preview>div\{[^}]*aspect-ratio:16\/9/);
+  assert.doesNotMatch(app, /media\.append\(badge\)/);
 });
 
 test("deleted training disappears from both public and admin state before backend refresh", () => {

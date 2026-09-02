@@ -14,7 +14,8 @@ test("training save is successful before optional refresh", () => {
   assert.match(flow, /✅ Обучение успешно изменено/);
   assert.match(flow, /training_refresh_after_save/);
   assert.ok(flow.indexOf("let saved = await api.request") < flow.indexOf("await loadAdminTraining"));
-  assert.ok(flow.indexOf("await loadAdminTraining") < flow.indexOf("notify(materialResult.failures.length"));
+  assert.ok(flow.indexOf("await loadAdminTraining") < flow.indexOf("notify(saved.published"));
+  assert.match(flow, /catch \(refreshError\) \{\s*reportClientError\("training_refresh_after_save"/);
 });
 
 test("deal support replaces the accidental dispute action and is idempotent", () => {

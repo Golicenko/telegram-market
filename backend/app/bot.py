@@ -2,6 +2,7 @@ import httpx
 import logging
 from dataclasses import dataclass
 from fastapi import HTTPException
+from typing import BinaryIO
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 from .config import get_settings
@@ -591,8 +592,9 @@ async def upload_bot_material(
     telegram_id: int,
     material_type: str,
     filename: str,
-    content: bytes,
+    content: BinaryIO,
     content_type: str,
+    file_size: int,
 ) -> dict:
     settings = get_settings()
     methods = {
@@ -606,7 +608,8 @@ async def upload_bot_material(
     method_name, field_name = method
     url = f"https://api.telegram.org/bot{settings.bot_token}/{method_name}"
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        timeout = httpx.Timeout(connect=20, read=120, write=300, pool=20)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 url,
                 data={"chat_id": str(telegram_id), "caption": "Материал AUTOFLOW MARKET сохранён для автовыдачи"},
@@ -626,8 +629,9 @@ async def upload_bot_material(
         raise HTTPException(status_code=502, detail="Telegram не вернул идентификатор материала")
     return {
         "delivery_reference": file_info["file_id"],
-        "file_size": file_info.get("file_size", len(content)),
+        "file_size": file_info.get("file_size", file_size),
         "mime_type": file_info.get("mime_type", content_type),
+        "material_type": material_type,
     }
 
 

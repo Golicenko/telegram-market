@@ -136,6 +136,7 @@ class TrainingProduct(Base, TimestampMixin):
     __tablename__ = "training_products"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    client_request_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     title: Mapped[str] = mapped_column(Text, nullable=False)
     short_description: Mapped[str] = mapped_column(Text, nullable=False)
     full_description: Mapped[str] = mapped_column(Text, nullable=False)
@@ -151,6 +152,7 @@ class TrainingProduct(Base, TimestampMixin):
         CheckConstraint("product_type IN ('personal','automatic')", name="ck_training_products_type"),
         CheckConstraint("availability IN ('available','unavailable','coming_soon')", name="ck_training_products_availability"),
         CheckConstraint("price_af_coins >= 0", name="ck_training_products_price"),
+        UniqueConstraint("admin_id", "client_request_id", name="uq_training_product_admin_request"),
         Index("ix_training_products_public_order", "published", "pinned", "created_at"),
     )
 

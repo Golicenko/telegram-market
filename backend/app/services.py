@@ -346,28 +346,53 @@ async def delete_account_listing(session: AsyncSession, admin: User, account_id:
 async def create_training_product(session: AsyncSession, admin: User, payload) -> TrainingProduct:
     if admin.role != "admin":
         raise HTTPException(status_code=403, detail="Только администратор может создавать обучение")
-    if payload.product_type == "automatic" and payload.published:
-        raise HTTPException(
-            status_code=409,
-            detail="Сначала сохраните хотя бы один материал, затем опубликуйте обучение",
+    request_id = getattr(payload, "client_request_id", None)
+    try:
+        async with session.begin():
+            product = None
+            if request_id:
+                product = await session.scalar(
+                    select(TrainingProduct).where(
+                        TrainingProduct.admin_id == admin.id,
+                        TrainingProduct.client_request_id == request_id,
+                    )
+                )
+            if product is not None:
+                return product
+            if payload.product_type == "automatic" and payload.published:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Сначала сохраните хотя бы один материал, затем опубликуйте обучение",
+                )
+            product = TrainingProduct(
+                admin_id=admin.id,
+                client_request_id=request_id,
+                title=payload.title.strip(),
+                short_description=payload.short_description.strip(),
+                full_description=payload.full_description.strip(),
+                cover_url=payload.cover_url.strip(),
+                promo_video_url=payload.promo_video_url.strip() if payload.promo_video_url else None,
+                product_type=payload.product_type,
+                price_af_coins=money(payload.price_af_coins),
+                availability=payload.availability,
+                published=payload.published,
+                pinned=payload.pinned,
+            )
+            session.add(product)
+            await session.flush()
+            session.add(AdminAction(admin_id=admin.id, action="create_training_product", target_type="training_product", target_id=product.id))
+    except IntegrityError:
+        await session.rollback()
+        if request_id is None:
+            raise
+        product = await session.scalar(
+            select(TrainingProduct).where(
+                TrainingProduct.admin_id == admin.id,
+                TrainingProduct.client_request_id == request_id,
+            )
         )
-    async with session.begin():
-        product = TrainingProduct(
-            admin_id=admin.id,
-            title=payload.title.strip(),
-            short_description=payload.short_description.strip(),
-            full_description=payload.full_description.strip(),
-            cover_url=payload.cover_url.strip(),
-            promo_video_url=payload.promo_video_url.strip() if payload.promo_video_url else None,
-            product_type=payload.product_type,
-            price_af_coins=money(payload.price_af_coins),
-            availability=payload.availability,
-            published=payload.published,
-            pinned=payload.pinned,
-        )
-        session.add(product)
-        await session.flush()
-        session.add(AdminAction(admin_id=admin.id, action="create_training_product", target_type="training_product", target_id=product.id))
+        if product is None:
+            raise
     return product
 
 
