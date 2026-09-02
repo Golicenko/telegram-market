@@ -239,6 +239,7 @@
   function bindEvents() {
     ensureBroadcastAdminUi();
     const trainingForm = document.getElementById("trainingForm");
+    const trainingVideoInput = ensureTrainingVideoInput(trainingForm);
     ["title", "short_description", "full_description"].forEach((name) => {
       trainingForm?.elements[name]?.removeAttribute("maxlength");
       trainingForm?.elements[name]?.setAttribute("minlength", "1");
@@ -270,6 +271,7 @@
     bind(elements.withdrawForm, "submit", createWithdrawal, "withdrawForm");
     bind(document.getElementById("trainingForm"), "submit", submitTrainingProduct, "trainingForm");
     bind(trainingForm?.elements.product_type, "change", toggleAutomaticMaterialFields, "trainingProductType");
+    bind(trainingVideoInput, "change", previewTrainingMaterials, "trainingVideo");
     bind(trainingForm?.elements.automatic_material, "change", previewTrainingMaterials, "trainingMaterials");
     bind(elements.trainingCoverInput, "change", previewTrainingCover, "trainingCover");
     bind(document.getElementById("trainingBuyButton"), "click", () => buyTrainingProduct(), "trainingBuyButton");
@@ -2396,11 +2398,43 @@ async function hideCurrentConversation() {
     if (form && fields) fields.hidden = form.elements.product_type.value !== "automatic";
   }
 
+  function ensureTrainingVideoInput(formElement) {
+    if (!formElement) return null;
+    const existing = formElement.elements.automatic_video;
+    if (existing) return existing;
+    const fieldset = document.getElementById("automaticMaterialFields");
+    const genericInput = formElement.elements.automatic_material;
+    if (!fieldset || !genericInput) return null;
+    const label = document.createElement("label");
+    label.append(document.createTextNode("Добавить видео"));
+    const input = document.createElement("input");
+    input.name = "automatic_video";
+    input.type = "file";
+    input.multiple = true;
+    input.accept = "video/*,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm";
+    label.append(input);
+    fieldset.insertBefore(label, genericInput.closest("label"));
+    return input;
+  }
+
+  function isTrainingVideoFile(file) {
+    return String(file?.type || "").toLowerCase().startsWith("video/")
+      || /\.(mp4|mov|webm)$/i.test(String(file?.name || ""));
+  }
+
+  function automaticMaterialFiles(formElement) {
+    const files = [
+      ...(formElement.elements.automatic_video?.files || []),
+      ...(formElement.elements.automatic_material?.files || []),
+    ];
+    return [...new Map(files.map((file) => [trainingFileKey(file), file])).values()];
+  }
+
   function hasAutomaticMaterialInput(formElement) {
     if (formElement.elements.product_type.value !== "automatic") return false;
     return Boolean(
       String(formElement.elements.automatic_text?.value || "").trim()
-      || formElement.elements.automatic_material?.files?.length
+      || automaticMaterialFiles(formElement).length
     );
   }
 
@@ -2428,7 +2462,8 @@ async function hideCurrentConversation() {
 
   function previewTrainingMaterials(event) {
     state.trainingUploadCache.clear(); state.trainingUploadRows.clear(); elements.trainingUploadStatus?.replaceChildren();
-    [...(event.currentTarget.files || [])].forEach((file) => setTrainingUploadStatus(file, "Файл выбран", null, "selected"));
+    const formElement = event.currentTarget.form || document.getElementById("trainingForm");
+    automaticMaterialFiles(formElement).forEach((file) => setTrainingUploadStatus(file, isTrainingVideoFile(file) ? "Видео выбрано" : "Файл выбран", null, "selected"));
   }
 
   function showTrainingCoverPreview(url) {
@@ -2465,21 +2500,22 @@ async function hideCurrentConversation() {
       await persist("Инструкция", { title: "Инструкция", material_type: "text", delivery_reference: textReference });
       if (!failures.length) formElement.elements.automatic_text.value = "";
     }
-    const files = [...(formElement.elements.automatic_material?.files || [])];
+    const files = automaticMaterialFiles(formElement);
     for (const file of files) {
       const key = trainingFileKey(file);
+      const video = isTrainingVideoFile(file);
       const cached = state.trainingUploadCache.get(key);
       if (cached?.savedProductId === String(productId)) continue;
       try {
         let upload = cached?.upload;
         if (!upload) {
-          setTrainingUploadStatus(file, "Загрузка — 0%", 0, "uploading");
+          setTrainingUploadStatus(file, video ? "Загрузка видео — 0%" : "Загрузка файла — 0%", 0, "uploading");
           upload = await api.upload(file, "/admin/training/materials/upload?material_type=file", {
             kind: "training", prepareImage: false, maxBytes: 50 * 1024 * 1024, timeoutMs: 295000,
-            onProgress: (percent) => setTrainingUploadStatus(file, `Загрузка — ${percent}%`, percent, "uploading"),
+            onProgress: (percent) => setTrainingUploadStatus(file, `${video ? "Загрузка видео" : "Загрузка файла"} — ${percent}%`, percent, "uploading"),
           });
           state.trainingUploadCache.set(key, { upload, savedProductId: null });
-          setTrainingUploadStatus(file, "✅ Файл загружен. Сохраняем материал…", 100, "uploaded");
+          setTrainingUploadStatus(file, `${video ? "✅ Видео загружено" : "✅ Файл загружен"}. Сохраняем материал…`, 100, "uploaded");
         }
         const beforeFailures = failures.length;
         await persist(file.name || "Материал", {
@@ -2492,11 +2528,11 @@ async function hideCurrentConversation() {
         });
         if (failures.length === beforeFailures) {
           state.trainingUploadCache.set(key, { upload, savedProductId: String(productId) });
-          setTrainingUploadStatus(file, "✅ Материал сохранён", 100, "success");
+          setTrainingUploadStatus(file, video ? "✅ Видео загружено" : "✅ Материал сохранён", 100, "success");
         } else setTrainingUploadStatus(file, "Файл загружен, но материал не сохранён. Повторите.", 100, "error");
       } catch (error) {
         failures.push(`${file.name || "Материал"}: ${error.message}`);
-        setTrainingUploadStatus(file, error.message, null, "error");
+        setTrainingUploadStatus(file, video ? "Не удалось загрузить видео. Попробуйте ещё раз." : error.message, null, "error");
         reportClientError("training_material_upload", error);
       }
     }

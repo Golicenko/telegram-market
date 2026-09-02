@@ -72,6 +72,18 @@ test("training cards expose a real buy action and automatic editor has protected
   assert.match(app, /saveInitialAutomaticMaterials/);
 });
 
+test("automatic training restores a dedicated mobile video picker", () => {
+  assert.match(app, /input\.name = "automatic_video"/);
+  assert.match(app, /video\/\*,video\/mp4,video\/quicktime,video\/webm,\.mp4,\.mov,\.webm/);
+  assert.match(app, /bind\(trainingVideoInput, "change", previewTrainingMaterials/);
+  assert.match(app, /\.\.\.\(formElement\.elements\.automatic_video\?\.files \|\| \[\]\)/);
+  assert.match(app, /Видео выбрано/);
+  assert.match(app, /Загрузка видео/);
+  assert.match(app, /✅ Видео загружено/);
+  const trainingUpload = app.slice(app.indexOf("function ensureTrainingVideoInput"), app.indexOf("async function submitTrainingProduct"));
+  assert.doesNotMatch(trainingUpload, /duration|max_duration/i);
+});
+
 test("training purchase works from both the catalog card and the details screen", () => {
   assert.match(app, /trainingBuy\.dataset\.buyTraining/);
   assert.match(app, /buyTrainingProduct\(trainingBuy\.dataset\.buyTraining\)/);
