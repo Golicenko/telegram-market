@@ -7,8 +7,9 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app import routes
-from app.models import Conversation, ConversationMessage, Deal, Listing, User
-from app.schemas import ConversationMessageCreate, ListingCreate
+from app import bot
+from app.models import Conversation, ConversationMessage, Deal, Listing, PriceOffer, User
+from app.schemas import ConversationMessageCreate, ListingCreate, PriceOfferCreate
 from app.services import get_or_create_deal_conversation
 
 
@@ -196,3 +197,49 @@ def test_read_state_and_completed_chat_are_kept_on_backend():
     assert "conversation.buyer_hidden_at = None" in services_source
     assert "conversation.seller_hidden_at = None" in services_source
     assert "delete(Conversation)" not in routes_source + services_source
+
+
+def test_price_offer_accepts_one_af_and_is_database_backed():
+    assert PriceOfferCreate(amount_af_coins=Decimal("1")).amount_af_coins == Decimal("1")
+    check = next(item for item in PriceOffer.__table__.constraints if item.name == "ck_price_offers_min_price")
+    assert "amount_af_coins >= 1" in str(check.sqltext)
+    assert "listing_id" in PriceOffer.__table__.columns
+
+
+def test_offer_listing_migration_is_additive_and_backfills_existing_rows():
+    migration = Path(__file__).parents[1] / "migrations" / "versions" / "0026_price_offer_listing.py"
+    source = migration.read_text(encoding="utf-8")
+    assert "SET listing_id = conversation.listing_id" in source
+    assert 'op.alter_column("price_offers", "listing_id", nullable=False)' in source
+    assert "drop_table" not in source
+    assert "DELETE FROM" not in source.upper()
+
+
+def test_offer_notification_uses_exact_ids_and_actions():
+    listing_id = str(uuid.uuid4())
+    conversation_id = str(uuid.uuid4())
+    offer_id = str(uuid.uuid4())
+    payload = bot.price_offer_notification_payload(
+        123,
+        listing_id=listing_id,
+        conversation_id=conversation_id,
+        offer_id=offer_id,
+        amount_af_coins="1.00",
+        public_url="https://market.example",
+    )
+    keyboard = payload["reply_markup"]["inline_keyboard"]
+    assert keyboard[0][0]["callback_data"] == f"offer:accept:{offer_id}"
+    assert keyboard[0][1]["callback_data"] == f"offer:reject:{offer_id}"
+    assert conversation_id in keyboard[1][0]["web_app"]["url"]
+    assert listing_id in keyboard[1][0]["web_app"]["url"]
+    assert "1.00 AF Coins" in payload["text"]
+
+
+def test_listing_details_is_a_real_view_and_draft_offer_has_listing_endpoint():
+    root = Path(__file__).parents[2]
+    html = (root / "webapp" / "index.html").read_text(encoding="utf-8")
+    script = (root / "webapp" / "js" / "app.js").read_text(encoding="utf-8")
+    assert 'data-view="listing-detail"' in html
+    assert "listingDetailsModal" not in script
+    assert "`/conversations/listing/${sourceListingId}/offers`" in script
+    assert "conversationId ? `/conversations/${conversationId}/offers`" in script

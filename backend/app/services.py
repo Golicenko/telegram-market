@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from typing import Awaitable, Callable
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -924,6 +924,22 @@ async def get_or_create_conversation(
             conversation = Conversation(listing_id=listing.id, buyer_id=buyer.id, seller_id=listing.seller_id)
             session.add(conversation)
             await session.flush()
+        elif conversation and create:
+            # A participant pair owns one permanent conversation. Keep its
+            # compact listing context pointed at the listing that caused the
+            # latest real action (message/offer), without creating duplicates.
+            if conversation.listing_id != listing.id:
+                conversation.listing_id = listing.id
+                conversation.accepted_price_af_coins = await session.scalar(
+                    select(PriceOffer.amount_af_coins)
+                    .where(
+                        PriceOffer.conversation_id == conversation.id,
+                        PriceOffer.listing_id == listing.id,
+                        PriceOffer.status == "accepted",
+                    )
+                    .order_by(PriceOffer.responded_at.desc().nullslast(), PriceOffer.created_at.desc())
+                    .limit(1)
+                )
         seller = await session.get(User, listing.seller_id)
     return conversation, seller, listing
 
@@ -1114,6 +1130,7 @@ async def create_price_offer(session: AsyncSession, actor: User, conversation_id
             parent.responded_at = datetime.now(UTC)
         offer = PriceOffer(
             conversation_id=conversation.id,
+            listing_id=conversation.listing_id,
             offered_by_id=actor.id,
             amount_af_coins=money(amount),
             status="pending",
@@ -1131,7 +1148,7 @@ async def create_price_offer(session: AsyncSession, actor: User, conversation_id
             )
         )
         recipient_id = conversation.seller_id if actor.id == conversation.buyer_id else conversation.buyer_id
-        await create_notification(session, recipient_id, "price_offer", "Новое предложение цены", f"Предложено {offer.amount_af_coins} AF Coins", {"conversation_id": str(conversation.id), "offer_id": str(offer.id)})
+        await create_notification(session, recipient_id, "price_offer", "Новое предложение цены", f"Предложено {offer.amount_af_coins} AF Coins", {"conversation_id": str(conversation.id), "listing_id": str(offer.listing_id), "offer_id": str(offer.id)})
         recipient = await session.get(User, recipient_id)
     return offer, recipient
 
@@ -1147,7 +1164,21 @@ async def respond_price_offer(session: AsyncSession, actor: User, offer_id: uuid
         offer.status = "accepted" if accept else "rejected"
         offer.responded_at = datetime.now(UTC)
         if accept:
+            listing = await session.scalar(select(Listing).where(Listing.id == offer.listing_id).with_for_update())
+            if not listing or listing.status != "active":
+                raise HTTPException(status_code=409, detail="Listing is no longer available")
+            conversation.listing_id = offer.listing_id
             conversation.accepted_price_af_coins = offer.amount_af_coins
+            await session.execute(
+                update(PriceOffer)
+                .where(
+                    PriceOffer.conversation_id == conversation.id,
+                    PriceOffer.listing_id == offer.listing_id,
+                    PriceOffer.id != offer.id,
+                    PriceOffer.status == "pending",
+                )
+                .values(status="countered", responded_at=datetime.now(UTC))
+            )
         conversation.last_message_at = datetime.now(UTC)
         session.add(
             ConversationMessage(
@@ -1158,7 +1189,20 @@ async def respond_price_offer(session: AsyncSession, actor: User, offer_id: uuid
             )
         )
         recipient = await session.get(User, offer.offered_by_id)
-        await create_notification(session, offer.offered_by_id, "price_offer_response", "Ответ на предложение цены", "Предложение принято" if accept else "Предложение отклонено", {"conversation_id": str(conversation.id), "offer_id": str(offer.id)})
+        await create_notification(
+            session,
+            offer.offered_by_id,
+            "price_offer_response",
+            "Ответ на предложение цены",
+            f"Предложение принято: {offer.amount_af_coins} AF Coins" if accept else "Предложение отклонено",
+            {
+                "conversation_id": str(conversation.id),
+                "listing_id": str(offer.listing_id),
+                "offer_id": str(offer.id),
+                "amount_af_coins": str(offer.amount_af_coins),
+                "accepted": accept,
+            },
+        )
     return offer, recipient
 
 
