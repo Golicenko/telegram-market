@@ -54,6 +54,8 @@ def test_training_has_separate_table_and_legacy_accounts_are_preserved():
     assert AccountListing.__tablename__ == "account_listings"
     assert "account_listings" in Base.metadata.tables
     assert "training_products" in Base.metadata.tables
+    assert "client_request_id" in TrainingProduct.__table__.columns
+    assert any(constraint.name == "uq_training_product_admin_request" for constraint in TrainingProduct.__table__.constraints)
 
 
 def test_public_training_schema_contains_no_private_materials():
@@ -98,6 +100,22 @@ async def test_admin_can_create_pinned_training_for_free():
     assert product.product_type == "personal"
     assert product.price_af_coins == Decimal("250.00")
     assert not any(item.__class__.__name__ == "WalletTransaction" for item in session.added)
+
+
+@pytest.mark.asyncio
+async def test_training_create_retry_returns_existing_product_without_duplicate():
+    admin = User(id=uuid.uuid4(), telegram_id=2, first_name="Admin", role="admin")
+    existing = TrainingProduct(
+        id=uuid.uuid4(), admin_id=admin.id, client_request_id=uuid.uuid4(), title="Уже создано",
+        short_description="Кратко", full_description="Полностью", cover_url="/cover.jpg",
+        product_type="personal", price_af_coins=Decimal("100"), availability="available",
+        published=True, pinned=False,
+    )
+    value = payload().model_copy(update={"client_request_id": existing.client_request_id})
+    session = Session(scalar_values=[existing])
+    result = await create_training_product(session, admin, value)
+    assert result is existing
+    assert session.added == []
 
 
 @pytest.mark.asyncio

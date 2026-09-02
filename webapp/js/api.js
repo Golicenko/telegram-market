@@ -198,8 +198,16 @@
     return perform(new URL(path, document.baseURI).toString(), options, false);
   }
 
-  function uploadError(error, metadata = {}) {
+  function uploadError(error, metadata = {}, kind = "image") {
     const details = { ...metadata, endpoint: error?.endpoint || metadata.endpoint || "/api/uploads", errorType: error?.errorType || metadata.errorType || "upload", cause: error, autoflowErrorId: error?.autoflowErrorId || metadata.autoflowErrorId };
+    if (kind === "training") {
+      if (error?.errorType === "timeout") return new ApiError(0, "Загрузка не завершилась за допустимое время. Проверьте соединение и повторите.", details);
+      if (error?.errorType === "network") return new ApiError(0, "Не удалось загрузить файл. Проверьте интернет и попробуйте ещё раз.", details);
+      if (error?.errorType === "aborted") return new ApiError(0, "Загрузка файла отменена.", details);
+      if (error?.status === 413 || error?.status === 415) return new ApiError(error.status, readableErrorDetail(error.detail), details);
+      if ([502, 503, 504].includes(Number(error?.status))) return new ApiError(error.status, "Сервер временно недоступен. Попробуйте ещё раз через несколько секунд.", details);
+      return new ApiError(error?.status || 0, error?.message || "Не удалось загрузить файл.", details);
+    }
     if (error?.errorType === "timeout") return new ApiError(0, "Сервер не ответил вовремя при загрузке фотографии. Попробуйте снова.", details);
     if (error?.errorType === "network") return new ApiError(0, "Не удалось установить соединение с сервером. Проверьте интернет.", details);
     if (error?.errorType === "aborted") return new ApiError(0, "Загрузка фотографии была отменена.", details);
@@ -221,6 +229,45 @@
   function canvasBlob(canvas, type, quality) {
     if (typeof canvas.toBlob !== "function") return Promise.resolve(null);
     return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+  }
+
+  function uploadWithProgress(path, body, options, metadata) {
+    return new Promise((resolve, reject) => {
+      const xhr = new window.XMLHttpRequest();
+      const url = `${API_BASE}${path}`;
+      const errorId = requestErrorId();
+      const startedAt = performance.now();
+      xhr.open("POST", url, true);
+      xhr.timeout = options.timeoutMs;
+      const headers = authHeaders();
+      headers["X-AutoFlow-Error-ID"] = errorId;
+      Object.entries(headers).forEach(([name, value]) => xhr.setRequestHeader(name, value));
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && typeof options.onProgress === "function") {
+          options.onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+        }
+      };
+      const fail = (errorType, detail) => {
+        const error = new ApiError(Number(xhr.status || 0), detail, {
+          endpoint: safeEndpoint(url), errorType, autoflowErrorId: errorId,
+          duration_ms: Math.round(performance.now() - startedAt),
+        });
+        diagnostic(error, url, error.duration_ms, 1);
+        reject(error);
+      };
+      xhr.onerror = () => fail("network", "Нет соединения с сервером");
+      xhr.ontimeout = () => fail("timeout", "Сервер не ответил вовремя");
+      xhr.onabort = () => fail("aborted", "Загрузка отменена");
+      xhr.onload = () => {
+        let payload = null;
+        try { payload = xhr.responseText ? JSON.parse(xhr.responseText) : null; }
+        catch (_error) { return fail("invalid_json", "Сервер вернул некорректный ответ"); }
+        if (xhr.status < 200 || xhr.status >= 300) return fail("http", payload?.detail || xhr.statusText || "Ошибка запроса");
+        if (typeof options.onProgress === "function") options.onProgress(100);
+        resolve(payload);
+      };
+      xhr.send(body);
+    });
   }
 
   async function prepareImage(file, diagnosticMetadata) {
@@ -270,7 +317,9 @@
     }
   }
 
-  async function upload(file, path = "/uploads") {
+  async function upload(file, path = "/uploads", options = {}) {
+    const kind = options.kind || "image";
+    const maxBytes = Number(options.maxBytes || 30 * 1024 * 1024);
     const metadata = {
       endpoint: `/api${path.split("?")[0]}`,
       upload_stage: "client_validate",
@@ -279,10 +328,10 @@
       image_width: null,
       image_height: null,
     };
-    if (!file?.size) throw uploadError(new ApiError(422, "Не удалось обработать фотографию.", { errorType: "upload" }), metadata);
-    if (file.size > 30 * 1024 * 1024) throw uploadError(new ApiError(413, "Фотография слишком большая.", { errorType: "upload" }), metadata);
+    if (!file?.size) throw uploadError(new ApiError(422, kind === "training" ? "Файл пуст." : "Не удалось обработать фотографию.", { errorType: "upload" }), metadata, kind);
+    if (file.size > maxBytes) throw uploadError(new ApiError(413, kind === "training" ? `Файл слишком большой для загрузки. Максимум: ${Math.floor(maxBytes / 1024 / 1024)} МБ.` : "Фотография слишком большая.", { errorType: "upload" }), metadata, kind);
     try {
-      const preparedFile = await prepareImage(file, metadata);
+      const preparedFile = options.prepareImage === false ? file : await prepareImage(file, metadata);
       metadata.prepared_mime = String(preparedFile?.type || "unknown").slice(0, 80);
       metadata.prepared_size = Number(preparedFile?.size || 0);
       metadata.upload_stage = "formdata";
@@ -290,11 +339,14 @@
       body.append("file", preparedFile, preparedFile.name || "photo.jpg");
       metadata.upload_stage = "fetch";
       const startedAt = performance.now();
-      const response = await request(path, { method: "POST", body, timeoutMs: 90000, retries: 0 });
+      const timeoutMs = Number(options.timeoutMs || 90000);
+      const response = typeof options.onProgress === "function" && typeof window.XMLHttpRequest === "function"
+        ? await uploadWithProgress(path, body, { timeoutMs, onProgress: options.onProgress }, metadata)
+        : await request(path, { method: "POST", body, timeoutMs, retries: 0 });
       metadata.duration_ms = Math.round(performance.now() - startedAt);
       return response;
     } catch (error) {
-      throw uploadError(error, metadata);
+      throw uploadError(error, metadata, kind);
     }
   }
 

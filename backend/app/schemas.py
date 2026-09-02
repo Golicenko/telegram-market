@@ -233,6 +233,7 @@ class AccountListingOut(ORMModel):
 
 
 class TrainingProductCreate(BaseModel):
+    client_request_id: uuid.UUID | None = None
     title: str = Field(min_length=1)
     short_description: str = Field(min_length=1)
     full_description: str = Field(min_length=1)

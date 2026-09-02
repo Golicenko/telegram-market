@@ -767,6 +767,49 @@ def image_dimensions(content: bytes) -> tuple[int, int]:
         return image.size
 
 
+TRAINING_FILE_FORMATS = "MP4, MOV, WebM, JPG, PNG, WEBP, PDF, TXT и ZIP"
+
+
+def detect_training_material(header: bytes) -> tuple[str, str]:
+    """Detect supported training content from signatures, never from its extension alone."""
+
+    if header.startswith(b"\xff\xd8\xff"):
+        return "photo", "image/jpeg"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "photo", "image/png"
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return "photo", "image/webp"
+    if header.startswith(b"%PDF-"):
+        return "document", "application/pdf"
+    if header.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        return "document", "application/zip"
+    if header.startswith(b"\x1aE\xdf\xa3"):
+        return "document", "video/webm"
+    if len(header) >= 12 and header[4:8] == b"ftyp":
+        brand = header[8:12]
+        if brand == b"qt  ":
+            return "document", "video/quicktime"
+        return "video", "video/mp4"
+    if b"\x00" not in header:
+        try:
+            header.decode("utf-8")
+            return "document", "text/plain"
+        except UnicodeDecodeError:
+            pass
+    raise HTTPException(
+        status_code=415,
+        detail={"code": "unsupported_training_file", "message": f"Этот формат файла пока не поддерживается. Поддерживаются: {TRAINING_FILE_FORMATS}."},
+    )
+
+
+def spooled_file_size(file: UploadFile) -> int:
+    current = file.file.tell()
+    file.file.seek(0, 2)
+    size = file.file.tell()
+    file.file.seek(current)
+    return size
+
+
 @router.get("/health")
 async def health():
     return {"status": "ok"}
@@ -1427,21 +1470,32 @@ async def add_training_material(
 
 @router.post("/admin/training/materials/upload", status_code=201)
 async def upload_training_material(
-    material_type: str = Query(pattern="^(photo|video|document)$"),
+    material_type: str | None = Query(default=None, pattern="^(photo|video|document|file)$"),
     file: UploadFile = File(...),
     admin: User = Depends(require_admin),
+    settings: Settings = Depends(get_settings),
 ):
-    content = await file.read(20 * 1024 * 1024 + 1)
-    if len(content) > 20 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Материал не должен превышать 20 МБ")
-    if not content:
+    del material_type  # Kept for compatibility; the server determines the real type.
+    size = await run_in_threadpool(spooled_file_size, file)
+    if not size:
         raise HTTPException(status_code=400, detail="Файл пуст")
+    header = await file.read(4096)
+    await file.seek(0)
+    detected_type, detected_mime = detect_training_material(header)
+    max_bytes = settings.training_photo_upload_max_bytes if detected_type == "photo" else settings.training_file_upload_max_bytes
+    if size > max_bytes:
+        max_mb = max_bytes // (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail={"code": "training_file_too_large", "message": f"Файл слишком большой для загрузки. Максимум: {max_mb} МБ.", "max_bytes": max_bytes},
+        )
     return await upload_bot_material(
         admin.telegram_id,
-        material_type,
+        detected_type,
         file.filename or "material",
-        content,
-        file.content_type or "application/octet-stream",
+        file.file,
+        detected_mime,
+        size,
     )
 
 

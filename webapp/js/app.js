@@ -22,6 +22,11 @@
     adminTrainingOrderFilter: "new",
     adminTrainingMaterials: [],
     selectedAdminTrainingId: null,
+    trainingUploadCache: new Map(),
+    trainingUploadRows: new Map(),
+    pendingTrainingRequestId: null,
+    pendingTrainingCoverUrl: null,
+    trainingCoverObjectUrl: null,
     cart: [],
     advertisement: null,
     supportTickets: [],
@@ -149,6 +154,10 @@
     purchaseModalNote: document.getElementById("purchaseModalNote"),
     purchaseModalAction: document.getElementById("purchaseModalAction"),
     frontendBuildInfo: document.getElementById("frontendBuildInfo"),
+    trainingUploadStatus: document.getElementById("trainingUploadStatus"),
+    trainingCoverInput: document.getElementById("trainingCoverInput"),
+    trainingCoverPreview: document.getElementById("trainingCoverPreview"),
+    trainingCoverPreviewImage: document.getElementById("trainingCoverPreviewImage"),
   };
 
   let bootstrapPromise = null;
@@ -261,8 +270,16 @@
     bind(elements.withdrawForm, "submit", createWithdrawal, "withdrawForm");
     bind(document.getElementById("trainingForm"), "submit", submitTrainingProduct, "trainingForm");
     bind(trainingForm?.elements.product_type, "change", toggleAutomaticMaterialFields, "trainingProductType");
+    bind(trainingForm?.elements.automatic_material, "change", previewTrainingMaterials, "trainingMaterials");
+    bind(elements.trainingCoverInput, "change", previewTrainingCover, "trainingCover");
     bind(document.getElementById("trainingBuyButton"), "click", () => buyTrainingProduct(), "trainingBuyButton");
     bind(document.getElementById("trainingMaterialForm"), "submit", saveTrainingMaterial, "trainingMaterialForm");
+    const adminMaterialFile = document.getElementById("trainingMaterialForm")?.elements.file;
+    if (adminMaterialFile) {
+      adminMaterialFile.accept = "video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp,application/pdf,text/plain,application/zip,.mp4,.mov,.webm,.jpg,.jpeg,.png,.webp,.pdf,.txt,.zip";
+      const labelText = adminMaterialFile.parentElement?.firstChild;
+      if (labelText?.nodeType === Node.TEXT_NODE) labelText.textContent = "Добавить файл (до 50 МБ; фото до 10 МБ)";
+    }
     bind(elements.supportForm, "submit", submitSupportTicket, "supportForm");
     bind(elements.advertisementForm, "submit", submitAdvertisement, "advertisementForm");
     bind(document.getElementById("broadcastForm"), "submit", submitAdminBroadcast, "broadcastForm");
@@ -1066,13 +1083,13 @@ function handleClick(event) {
       const card = document.createElement("article"); card.className = `training-card${product.pinned ? " is-pinned" : ""}${!product.published ? " is-draft" : ""}`;
       const open = document.createElement("button"); open.type = "button"; open.className = "training-card__open"; open.dataset.openTrainingProduct = product.id;
       const media = document.createElement("div"); media.className = "training-card__media"; const image = document.createElement("img"); image.src = absoluteMediaUrl(product.cover_url); image.alt = product.title; media.append(image);
-      const badge = document.createElement("span"); badge.className = "premium-mark"; badge.textContent = product.pinned ? "PREMIUM · PINNED" : "PREMIUM"; media.append(badge);
+      const badge = document.createElement("span"); badge.className = "premium-mark"; badge.textContent = product.pinned ? "PREMIUM · PINNED" : "PREMIUM";
       const body = document.createElement("div"); body.className = "training-card__body";
       const type = document.createElement("span"); type.className = "training-type"; type.textContent = trainingTypeLabel(product.product_type);
       const title = document.createElement("h3"); title.textContent = product.title;
       const description = document.createElement("p"); description.textContent = product.short_description;
       const footer = document.createElement("div"); footer.className = "training-card__footer"; const price = document.createElement("strong"); price.append(document.createTextNode(`${formatNumber(product.price_af_coins)} `), coin("af-coin--small")); const arrow = document.createElement("span"); arrow.textContent = "Подробнее ›"; footer.append(price, arrow);
-      body.append(type, title, description, footer); open.append(media, body); card.append(open);
+      body.append(badge, type, title, description, footer); open.append(media, body); card.append(open);
       const purchase = state.trainingPurchases.find((item) => String(item.product_id) === String(product.id));
       if (state.me?.user.id !== product.admin_id) {
         const buy = document.createElement("button"); buy.type = "button"; buy.className = "training-card__buy"; buy.dataset.buyTraining = product.id;
@@ -2355,12 +2372,19 @@ async function hideCurrentConversation() {
   function openTrainingEditor(id = null) {
     if (state.me?.user.role !== "admin") return notify("Требуется роль администратора");
     const form = document.getElementById("trainingForm"); form.reset();
+    state.trainingUploadCache.clear(); state.trainingUploadRows.clear(); state.pendingTrainingCoverUrl = null; state.pendingTrainingRequestId = null;
+    elements.trainingUploadStatus?.replaceChildren();
+    if (state.trainingCoverObjectUrl) URL.revokeObjectURL(state.trainingCoverObjectUrl);
+    state.trainingCoverObjectUrl = null;
     const product = id ? [...state.training, ...state.adminTraining].find((item) => String(item.id) === String(id)) : null;
     form.elements.product_id.value = product?.id || "";
     document.getElementById("trainingEditorTitle").textContent = product ? "Изменить обучение" : "Создать обучение";
     if (product) {
       for (const field of ["title", "short_description", "full_description", "product_type", "availability", "price_af_coins", "promo_video_url"]) form.elements[field].value = product[field] ?? "";
       form.elements.published.checked = product.published; form.elements.pinned.checked = product.pinned;
+      showTrainingCoverPreview(absoluteMediaUrl(product.cover_url));
+    } else if (elements.trainingCoverPreview) {
+      elements.trainingCoverPreview.hidden = true;
     }
     toggleAutomaticMaterialFields();
     openSecondary("training-editor");
@@ -2372,17 +2396,57 @@ async function hideCurrentConversation() {
     if (form && fields) fields.hidden = form.elements.product_type.value !== "automatic";
   }
 
-  function hasAutomaticMaterialInput(form) {
-    if (form.get("product_type") !== "automatic") return false;
+  function hasAutomaticMaterialInput(formElement) {
+    if (formElement.elements.product_type.value !== "automatic") return false;
     return Boolean(
-      String(form.get("automatic_text") || "").trim()
-      || form.get("automatic_video")?.size
-      || form.get("automatic_file")?.size
+      String(formElement.elements.automatic_text?.value || "").trim()
+      || formElement.elements.automatic_material?.files?.length
     );
   }
 
-  async function saveInitialAutomaticMaterials(productId, form, startPosition = 0) {
-    if (form.get("product_type") !== "automatic") return { savedCount: 0, failures: [] };
+  function trainingFileKey(file) {
+    return [file.name, file.size, file.type, file.lastModified].join(":");
+  }
+
+  function setTrainingUploadStatus(file, message, percent = null, stateName = "") {
+    if (!elements.trainingUploadStatus) return;
+    const key = trainingFileKey(file);
+    let row = state.trainingUploadRows.get(key);
+    if (!row) {
+      row = document.createElement("div"); row.className = "training-upload-row";
+      const title = document.createElement("strong"); title.textContent = file.name || "Материал";
+      const size = document.createElement("small"); size.textContent = formatFileSize(file.size);
+      const status = document.createElement("span");
+      const progress = document.createElement("progress"); progress.max = 100; progress.value = 0; progress.hidden = true;
+      row.append(title, size, status, progress); elements.trainingUploadStatus.append(row);
+      state.trainingUploadRows.set(key, row);
+    }
+    row.className = `training-upload-row${stateName ? ` is-${stateName}` : ""}`;
+    row.querySelector("span").textContent = message;
+    const progress = row.querySelector("progress"); progress.hidden = percent === null; if (percent !== null) progress.value = percent;
+  }
+
+  function previewTrainingMaterials(event) {
+    state.trainingUploadCache.clear(); state.trainingUploadRows.clear(); elements.trainingUploadStatus?.replaceChildren();
+    [...(event.currentTarget.files || [])].forEach((file) => setTrainingUploadStatus(file, "Файл выбран", null, "selected"));
+  }
+
+  function showTrainingCoverPreview(url) {
+    if (!elements.trainingCoverPreview || !elements.trainingCoverPreviewImage || !url) return;
+    elements.trainingCoverPreviewImage.src = url; elements.trainingCoverPreview.hidden = false;
+  }
+
+  function previewTrainingCover(event) {
+    const file = event.currentTarget.files?.[0];
+    state.pendingTrainingCoverUrl = null;
+    if (state.trainingCoverObjectUrl) URL.revokeObjectURL(state.trainingCoverObjectUrl);
+    state.trainingCoverObjectUrl = file ? URL.createObjectURL(file) : null;
+    if (state.trainingCoverObjectUrl) showTrainingCoverPreview(state.trainingCoverObjectUrl);
+    else if (elements.trainingCoverPreview) elements.trainingCoverPreview.hidden = true;
+  }
+
+  async function saveInitialAutomaticMaterials(productId, formElement, startPosition = 0) {
+    if (formElement.elements.product_type.value !== "automatic") return { savedCount: 0, failures: [] };
     let position = startPosition;
     let savedCount = 0;
     const failures = [];
@@ -2396,25 +2460,43 @@ async function hideCurrentConversation() {
         reportClientError("training_material_save", error);
       }
     };
-    const textReference = String(form.get("automatic_text") || "").trim();
+    const textReference = String(formElement.elements.automatic_text?.value || "").trim();
     if (textReference) {
       await persist("Инструкция", { title: "Инструкция", material_type: "text", delivery_reference: textReference });
+      if (!failures.length) formElement.elements.automatic_text.value = "";
     }
-    for (const [field, type, fallbackTitle] of [["automatic_video", "video", "Видео"], ["automatic_file", "document", "Материал"]]) {
-      const file = form.get(field);
-      if (!file?.size) continue;
+    const files = [...(formElement.elements.automatic_material?.files || [])];
+    for (const file of files) {
+      const key = trainingFileKey(file);
+      const cached = state.trainingUploadCache.get(key);
+      if (cached?.savedProductId === String(productId)) continue;
       try {
-        const upload = await api.upload(file, `/admin/training/materials/upload?material_type=${encodeURIComponent(type)}`);
-        await persist(file.name || fallbackTitle, {
-          title: file.name || fallbackTitle,
-          material_type: type,
+        let upload = cached?.upload;
+        if (!upload) {
+          setTrainingUploadStatus(file, "Загрузка — 0%", 0, "uploading");
+          upload = await api.upload(file, "/admin/training/materials/upload?material_type=file", {
+            kind: "training", prepareImage: false, maxBytes: 50 * 1024 * 1024, timeoutMs: 295000,
+            onProgress: (percent) => setTrainingUploadStatus(file, `Загрузка — ${percent}%`, percent, "uploading"),
+          });
+          state.trainingUploadCache.set(key, { upload, savedProductId: null });
+          setTrainingUploadStatus(file, "✅ Файл загружен. Сохраняем материал…", 100, "uploaded");
+        }
+        const beforeFailures = failures.length;
+        await persist(file.name || "Материал", {
+          title: file.name || "Материал",
+          material_type: upload.material_type || "document",
           delivery_reference: upload.delivery_reference,
           mime_type: upload.mime_type || null,
           file_size: upload.file_size || null,
           metadata_json: upload.metadata_json || {},
         });
+        if (failures.length === beforeFailures) {
+          state.trainingUploadCache.set(key, { upload, savedProductId: String(productId) });
+          setTrainingUploadStatus(file, "✅ Материал сохранён", 100, "success");
+        } else setTrainingUploadStatus(file, "Файл загружен, но материал не сохранён. Повторите.", 100, "error");
       } catch (error) {
-        failures.push(`${file.name || fallbackTitle}: ${error.message}`);
+        failures.push(`${file.name || "Материал"}: ${error.message}`);
+        setTrainingUploadStatus(file, error.message, null, "error");
         reportClientError("training_material_upload", error);
       }
     }
@@ -2422,46 +2504,64 @@ async function hideCurrentConversation() {
   }
 
   async function submitTrainingProduct(event) {
-    event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const button = formElement.querySelector("button[type=submit]"); if (button.disabled) return; button.disabled = true;
+    event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const button = formElement.querySelector("button[type=submit]"); if (button.disabled) return; const defaultButtonText = "Сохранить обучение"; button.disabled = true; button.textContent = "Сохраняем обучение…";
+    let retryNeeded = false;
     try {
-      const id = form.get("product_id"); const existing = id ? [...state.training, ...state.adminTraining].find((item) => String(item.id) === String(id)) : null;
-      let coverUrl = existing?.cover_url || null; const cover = form.get("cover"); if (cover?.size) coverUrl = (await api.upload(cover)).url;
+      const id = form.get("product_id"); const wasExisting = Boolean(id); const existing = id ? [...state.training, ...state.adminTraining].find((item) => String(item.id) === String(id)) : null;
+      let coverUrl = state.pendingTrainingCoverUrl || existing?.cover_url || null; const cover = form.get("cover");
+      if (cover?.size && !state.pendingTrainingCoverUrl) {
+        button.textContent = "Загружаем обложку…";
+        state.pendingTrainingCoverUrl = (await api.upload(cover)).url;
+        coverUrl = state.pendingTrainingCoverUrl;
+      }
       if (!coverUrl) throw new Error("Добавьте одну основную обложку");
       const automatic = form.get("product_type") === "automatic";
       const wantsPublished = form.get("published") === "on";
       let existingMaterials = [];
       if (automatic && id) existingMaterials = await api.request(`/admin/training/${id}/materials`);
-      if (automatic && wantsPublished && !existingMaterials.length && !hasAutomaticMaterialInput(form)) {
+      if (automatic && wantsPublished && !existingMaterials.length && !hasAutomaticMaterialInput(formElement)) {
         throw new Error("Для публикации автовыдачи добавьте хотя бы один материал");
       }
       const publishAfterMaterials = automatic && wantsPublished && !existingMaterials.length;
-      const payload = { title: form.get("title"), short_description: form.get("short_description"), full_description: form.get("full_description"), cover_url: coverUrl, promo_video_url: form.get("promo_video_url") || null, product_type: form.get("product_type"), availability: form.get("availability"), price_af_coins: Number(form.get("price_af_coins")), published: publishAfterMaterials ? false : wantsPublished, pinned: form.get("pinned") === "on" };
+      if (!id && !state.pendingTrainingRequestId) state.pendingTrainingRequestId = createRequestId();
+      const payload = { client_request_id: id ? undefined : state.pendingTrainingRequestId, title: form.get("title"), short_description: form.get("short_description"), full_description: form.get("full_description"), cover_url: coverUrl, promo_video_url: form.get("promo_video_url") || null, product_type: form.get("product_type"), availability: form.get("availability"), price_af_coins: Number(form.get("price_af_coins")), published: publishAfterMaterials ? false : wantsPublished, pinned: form.get("pinned") === "on" };
+      button.textContent = wasExisting ? "Сохраняем изменения…" : "Создаём обучение…";
       let saved = await api.request(id ? `/admin/training/${id}` : "/admin/training", { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) });
-      const materialResult = await saveInitialAutomaticMaterials(saved.id, form, existingMaterials.length);
-      if (publishAfterMaterials && materialResult.savedCount) {
+      formElement.elements.product_id.value = saved.id;
+      const upsert = (items) => [saved, ...items.filter((item) => item.id !== saved.id)];
+      state.training = saved.published ? upsert(state.training) : state.training.filter((item) => item.id !== saved.id);
+      const previousAdmin = state.adminTraining.find((item) => item.id === saved.id);
+      state.adminTraining = [{ purchase_count: 0, revenue_af_coins: 0, archived: false, ...previousAdmin, ...saved }, ...state.adminTraining.filter((item) => item.id !== saved.id)];
+      button.textContent = "Сохраняем материалы…";
+      const materialResult = await saveInitialAutomaticMaterials(saved.id, formElement, existingMaterials.length);
+      if (publishAfterMaterials && materialResult.savedCount && !materialResult.failures.length) {
         try {
+          button.textContent = "Публикуем обучение…";
           saved = await api.request(`/admin/training/${saved.id}`, { method: "PATCH", body: JSON.stringify({ published: true }) });
         } catch (error) {
-          materialResult.failures.push(`Публикация: ${error.message}`);
+          materialResult.failures.push(`Материалы сохранены, но обучение осталось скрытым: ${error.message}`);
           reportClientError("training_publish_after_materials", error);
         }
       } else if (publishAfterMaterials && !materialResult.savedCount) {
         materialResult.failures.push("Обучение оставлено скрытым: ни один материал не был сохранён");
       }
-      const upsert = (items) => [saved, ...items.filter((item) => item.id !== saved.id)];
       state.training = saved.published ? upsert(state.training) : state.training.filter((item) => item.id !== saved.id);
-      const previousAdmin = state.adminTraining.find((item) => item.id === saved.id);
       const savedAdmin = { purchase_count: 0, revenue_af_coins: 0, archived: false, ...previousAdmin, ...saved };
       state.adminTraining = [savedAdmin, ...state.adminTraining.filter((item) => item.id !== saved.id)];
+      if (materialResult.failures.length) {
+        retryNeeded = true;
+        renderTraining(); renderAdminTraining();
+        notify(`Обучение сохранено как черновик. ${materialResult.failures[0]}`);
+        return;
+      }
       try {
         await loadAdminTraining(state.adminTrainingFilter);
       } catch (refreshError) {
         reportClientError("training_refresh_after_save", refreshError);
       }
-      formElement.reset(); toggleAutomaticMaterialFields(); renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training");
-      const successMessage = id ? "✅ Обучение успешно изменено" : "✅ Обучение успешно создано";
-      notify(materialResult.failures.length ? `${successMessage}. ⚠️ ${materialResult.failures.join("; ")}` : successMessage);
-    } catch (error) { notify(error.message); } finally { button.disabled = false; }
+      formElement.reset(); state.trainingUploadCache.clear(); state.trainingUploadRows.clear(); state.pendingTrainingCoverUrl = null; state.pendingTrainingRequestId = null; elements.trainingUploadStatus?.replaceChildren(); toggleAutomaticMaterialFields(); renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training");
+      notify(saved.published ? "✅ Обучение опубликовано" : wasExisting ? "✅ Обучение успешно изменено" : "✅ Обучение успешно создано");
+    } catch (error) { retryNeeded = true; notify(error.message); } finally { button.disabled = false; button.textContent = retryNeeded ? "Повторить загрузку" : defaultButtonText; }
   }
 
   async function deleteTrainingProduct(id) {
@@ -3098,10 +3198,17 @@ async function hideCurrentConversation() {
   }
 
   async function saveTrainingMaterial(event) {
-    event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const button = formElement.querySelector("button[type=submit]"); if (button.disabled) return; button.disabled = true;
+    event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); const button = formElement.querySelector("button[type=submit]"); if (button.disabled) return; const defaultButtonText = button.textContent; button.disabled = true; button.textContent = "Сохраняем…";
     try {
-      const materialType = form.get("material_type"); const file = form.get("file"); let upload = null;
-      if (file?.size) upload = await api.upload(file, `/admin/training/materials/upload?material_type=${encodeURIComponent(materialType)}`);
+      let materialType = form.get("material_type"); const file = form.get("file"); let upload = null;
+      if (file?.size) {
+        upload = await api.upload(file, "/admin/training/materials/upload?material_type=file", {
+          kind: "training", prepareImage: false, maxBytes: 50 * 1024 * 1024, timeoutMs: 295000,
+          onProgress: (percent) => { button.textContent = `Загрузка — ${percent}%`; },
+        });
+        materialType = upload.material_type || materialType;
+        button.textContent = "Сохраняем материал…";
+      }
       const reference = upload?.delivery_reference || String(form.get("delivery_reference") || "").trim();
       if (!reference) throw new Error("Добавьте текст, ссылку, file_id или выберите файл");
       const payload = { title: form.get("title"), material_type: materialType, delivery_reference: reference, mime_type: upload?.mime_type || null, file_size: upload?.file_size || null, metadata_json: upload?.metadata_json || {}, position: Number(form.get("position") || 0) };
@@ -3109,7 +3216,7 @@ async function hideCurrentConversation() {
       await api.request(id ? `/admin/training/materials/${id}` : `/admin/training/${state.selectedAdminTrainingId}/materials`, { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) });
       await openTrainingMaterials(state.selectedAdminTrainingId); notify("Материал сохранён");
     } catch (error) { notify(error.message); }
-    finally { button.disabled = false; }
+    finally { button.disabled = false; button.textContent = defaultButtonText; }
   }
 
   function closeAdminTrainingDetail() { elements.adminTrainingDetail.hidden = true; state.selectedAdminTrainingId = null; }

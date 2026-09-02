@@ -18,6 +18,7 @@ function loadApi(fetchImpl, initData = "", options = {}) {
     clearTimeout,
     dispatchEvent() {},
   };
+  if (options.XMLHttpRequest) window.XMLHttpRequest = options.XMLHttpRequest;
   const context = {
     window,
     document: { baseURI: "https://autoflow.example/" },
@@ -190,4 +191,28 @@ test("upload preserves the AF error id, stage and HTTP status for support", asyn
     assert.equal(error.file_mime, "image/jpeg");
     return true;
   });
+});
+
+test("training upload reports real transport progress and keeps the backend response authoritative", async () => {
+  const progress = [];
+  class FakeXMLHttpRequest {
+    constructor() { this.upload = {}; this.status = 201; this.responseText = JSON.stringify({ delivery_reference: "telegram-file-id", material_type: "video", file_size: 8 }); this.headers = {}; }
+    open(method, url) { this.method = method; this.url = url; }
+    setRequestHeader(name, value) { this.headers[name] = value; }
+    send() {
+      this.upload.onprogress({ lengthComputable: true, loaded: 4, total: 8 });
+      this.onload();
+    }
+  }
+  const { api } = loadApi(async () => { throw new Error("fetch must not be used"); }, "", { XMLHttpRequest: FakeXMLHttpRequest });
+  const file = new Blob(["12345678"], { type: "video/mp4" });
+  Object.defineProperty(file, "name", { value: "lesson.mp4" });
+  const response = await api.upload(file, "/admin/training/materials/upload?material_type=file", {
+    kind: "training",
+    prepareImage: false,
+    onProgress: (value) => progress.push(value),
+  });
+  assert.deepEqual(progress, [50, 100]);
+  assert.equal(response.delivery_reference, "telegram-file-id");
+  assert.equal(response.material_type, "video");
 });
