@@ -192,9 +192,12 @@ async def configure_chat_menu_button(chat_id: int | None = None) -> bool:
         return False
 
 
-async def answer_bot_callback(callback_query_id: str) -> bool:
+async def answer_bot_callback(callback_query_id: str, text: str | None = None, *, show_alert: bool = False) -> bool:
     try:
-        await call_bot_api("answerCallbackQuery", {"callback_query_id": callback_query_id})
+        payload = {"callback_query_id": callback_query_id}
+        if text:
+            payload.update({"text": text[:200], "show_alert": show_alert})
+        await call_bot_api("answerCallbackQuery", payload)
         return True
     except HTTPException:
         return False
@@ -461,6 +464,78 @@ async def answer_pre_checkout_query(query_id: str, ok: bool, error_message: str 
         payload["error_message"] = error_message[:200]
     await call_bot_api("answerPreCheckoutQuery", payload)
     return True
+
+
+def price_offer_notification_payload(
+    telegram_id: int,
+    *,
+    listing_id: str,
+    conversation_id: str,
+    offer_id: str,
+    amount_af_coins: str,
+    public_url: str,
+) -> dict:
+    chat_url = versioned_webapp_url(
+        f"{public_url.rstrip('/')}/?{urlencode({'conversation_id': conversation_id, 'listing_id': listing_id, 'offer_id': offer_id})}"
+    )
+    return {
+        "chat_id": telegram_id,
+        "text": (
+            "💰 Вам предложили другую цену\n\n"
+            "Ваш автомобиль хотят купить за:\n\n"
+            f"{amount_af_coins} AF Coins"
+        ),
+        "reply_markup": {"inline_keyboard": [
+            [
+                {"text": "✅ Принять", "callback_data": f"offer:accept:{offer_id}"},
+                {"text": "❌ Отклонить", "callback_data": f"offer:reject:{offer_id}"},
+            ],
+            [{"text": "💬 Открыть чат", "web_app": {"url": chat_url}}],
+        ]},
+    }
+
+
+async def send_price_offer_notification(telegram_id: int, **offer) -> bool:
+    public_url = get_settings().externally_reachable_url
+    if not public_url:
+        return False
+    try:
+        await call_bot_api("sendMessage", price_offer_notification_payload(telegram_id, public_url=public_url, **offer))
+        return True
+    except HTTPException:
+        return False
+
+
+async def send_price_offer_response_notification(
+    telegram_id: int,
+    *,
+    accepted: bool,
+    amount_af_coins: str,
+    listing_id: str,
+    conversation_id: str,
+    offer_id: str,
+) -> bool:
+    public_url = get_settings().externally_reachable_url
+    payload: dict = {
+        "chat_id": telegram_id,
+        "text": (
+            f"✅ Продавец согласился на вашу цену — {amount_af_coins} AF"
+            if accepted else "Предложение отклонено"
+        ),
+    }
+    if accepted and public_url:
+        target = versioned_webapp_url(
+            f"{public_url.rstrip('/')}/?{urlencode({'listing_id': listing_id, 'offer_id': offer_id})}"
+        )
+        payload["reply_markup"] = {"inline_keyboard": [[{
+            "text": f"Купить за {amount_af_coins} AF",
+            "web_app": {"url": target},
+        }]]}
+    try:
+        await call_bot_api("sendMessage", payload)
+        return True
+    except HTTPException:
+        return False
 
 
 async def send_bot_notification(telegram_id: int, text: str) -> bool:

@@ -28,6 +28,8 @@ from .bot import (
     send_deal_transfer_reminder,
     send_personal_training_order_notification,
     send_bot_notification,
+    send_price_offer_notification,
+    send_price_offer_response_notification,
     send_bot_menu,
     send_bot_material,
     training_mini_app_link,
@@ -1712,29 +1714,10 @@ async def start_conversation(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    conversation, seller, listing = await get_or_create_conversation(session, user, listing_id, create=False)
-    if conversation:
-        details = await conversation_details(session, conversation, user)
-        details["listing"] = await listing_out(session, listing, user.id)
-        return details
-    return {
-        "id": None,
-        "draft": True,
-        "listing": await listing_out(session, listing, user.id),
-        "deal": None,
-        "buyer_id": str(user.id),
-        "seller_id": str(seller.id),
-        "counterparty": {
-            "id": str(seller.id),
-            "name": " ".join(filter(None, [seller.first_name, seller.last_name])),
-            "username": seller.username,
-            "photo_url": seller.photo_url,
-            "mini_app_last_active_at": seller.mini_app_last_active_at,
-        },
-        "offers": [],
-        "last_message": None,
-        "unread_count": 0,
-    }
+    conversation, _, listing = await get_or_create_conversation(session, user, listing_id, create=True)
+    details = await conversation_details(session, conversation, user)
+    details["listing"] = await listing_out(session, listing, user.id)
+    return details
 
 
 @router.get("/conversations")
@@ -1918,7 +1901,37 @@ async def add_price_offer(
 ):
     offer, recipient = await create_price_offer(session, user, conversation_id, payload.amount_af_coins)
     if recipient and recipient.bot_started:
-        background_tasks.add_task(send_bot_notification, recipient.telegram_id, f"Новое предложение цены: {offer.amount_af_coins} AF Coins")
+        conversation = await session.get(Conversation, offer.conversation_id)
+        background_tasks.add_task(
+            send_price_offer_notification,
+            recipient.telegram_id,
+            listing_id=str(offer.listing_id),
+            conversation_id=str(conversation.id),
+            offer_id=str(offer.id),
+            amount_af_coins=str(offer.amount_af_coins),
+        )
+    return offer
+
+
+@router.post("/conversations/listing/{listing_id}/offers", response_model=PriceOfferOut, status_code=201)
+async def add_first_price_offer(
+    listing_id: uuid.UUID,
+    payload: PriceOfferCreate,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    conversation, _, _ = await get_or_create_conversation(session, user, listing_id, create=True)
+    offer, recipient = await create_price_offer(session, user, conversation.id, payload.amount_af_coins)
+    if recipient and recipient.bot_started:
+        background_tasks.add_task(
+            send_price_offer_notification,
+            recipient.telegram_id,
+            listing_id=str(listing_id),
+            conversation_id=str(conversation.id),
+            offer_id=str(offer.id),
+            amount_af_coins=str(offer.amount_af_coins),
+        )
     return offer
 
 
@@ -1932,7 +1945,15 @@ async def counter_price_offer(
 ):
     offer, recipient = await create_price_offer(session, user, conversation_id, payload.amount_af_coins, payload.parent_offer_id)
     if recipient and recipient.bot_started:
-        background_tasks.add_task(send_bot_notification, recipient.telegram_id, f"Встречное предложение: {offer.amount_af_coins} AF Coins")
+        conversation = await session.get(Conversation, offer.conversation_id)
+        background_tasks.add_task(
+            send_price_offer_notification,
+            recipient.telegram_id,
+            listing_id=str(offer.listing_id),
+            conversation_id=str(conversation.id),
+            offer_id=str(offer.id),
+            amount_af_coins=str(offer.amount_af_coins),
+        )
     return offer
 
 
@@ -1948,7 +1969,16 @@ async def answer_price_offer(
         raise HTTPException(status_code=404, detail="Unknown offer action")
     offer, recipient = await respond_price_offer(session, user, offer_id, action == "accept")
     if recipient and recipient.bot_started:
-        background_tasks.add_task(send_bot_notification, recipient.telegram_id, "Ваше предложение цены принято" if action == "accept" else "Ваше предложение цены отклонено")
+        conversation = await session.get(Conversation, offer.conversation_id)
+        background_tasks.add_task(
+            send_price_offer_response_notification,
+            recipient.telegram_id,
+            accepted=action == "accept",
+            amount_af_coins=str(offer.amount_af_coins),
+            listing_id=str(offer.listing_id),
+            conversation_id=str(conversation.id),
+            offer_id=str(offer.id),
+        )
     return offer
 
 
@@ -2808,6 +2838,37 @@ async def telegram_webhook(
         await answer_pre_checkout_query(pre_checkout["id"], accepted, error_message)
         return {"ok": True}
     callback = update.get("callback_query") or {}
+    callback_data = str(callback.get("data") or "")
+    if callback.get("id") and callback_data.startswith("offer:"):
+        callback_sender = callback.get("from") or {}
+        try:
+            _, action, raw_offer_id = callback_data.split(":", 2)
+            if action not in {"accept", "reject"}:
+                raise ValueError("unknown action")
+            offer_id = uuid.UUID(raw_offer_id)
+            actor = await session.scalar(select(User).where(User.telegram_id == int(callback_sender.get("id") or 0)))
+            if not actor:
+                raise HTTPException(status_code=403, detail="Откройте Mini App перед ответом на предложение")
+            offer, recipient = await respond_price_offer(session, actor, offer_id, action == "accept")
+            conversation = await session.get(Conversation, offer.conversation_id)
+            await answer_bot_callback(
+                str(callback["id"]),
+                "Предложение принято" if action == "accept" else "Предложение отклонено",
+            )
+            if recipient and recipient.bot_started:
+                background_tasks.add_task(
+                    send_price_offer_response_notification,
+                    recipient.telegram_id,
+                    accepted=action == "accept",
+                    amount_af_coins=str(offer.amount_af_coins),
+                    listing_id=str(offer.listing_id),
+                    conversation_id=str(conversation.id),
+                    offer_id=str(offer.id),
+                )
+        except (ValueError, HTTPException) as exc:
+            detail = exc.detail if isinstance(exc, HTTPException) else "Некорректное предложение"
+            await answer_bot_callback(str(callback["id"]), str(detail), show_alert=True)
+        return {"ok": True}
     if callback.get("id") and callback.get("data") in {"autoflow:how", "autoflow:start"}:
         callback_message = callback.get("message") or {}
         callback_sender = callback.get("from") or {}

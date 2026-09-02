@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-caaaa1ed4b50" />
-    <link rel="stylesheet" href="css/style.css?v=af-caaaa1ed4b50" />
+    <meta name="autoflow-build" content="af-85518c6fe32e" />
+    <link rel="stylesheet" href="css/style.css?v=af-85518c6fe32e" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-caaaa1ed4b50" defer></script>
-    <script src="js/app.js?v=af-caaaa1ed4b50" defer></script>
+    <script src="js/api.js?v=af-85518c6fe32e" defer></script>
+    <script src="js/app.js?v=af-85518c6fe32e" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -56,6 +56,37 @@
           <div class="compact-page-title admin-title-row"><div><span class="eyebrow">Особая коллекция</span><h1 id="uniqueTitle">Уникальные машины</h1></div><button class="admin-add-button" type="button" data-open-unique data-admin-only hidden>＋ Добавить уникальную</button></div>
           <div class="cards-grid" id="uniqueCars" aria-live="polite"></div>
           <div class="empty-state empty-state--tall" id="uniqueEmptyState"><div class="empty-star" aria-hidden="true">☆</div><h2>Уникальных машин пока нет</h2><p>Раздел заполняет только администратор</p></div>
+        </section>
+
+        <section class="view listing-page" data-view="listing-detail" aria-labelledby="listingPageTitle" hidden>
+          <div class="listing-page__header">
+            <button class="back-button" type="button" data-back aria-label="Назад">‹</button>
+            <span id="listingPageKind">Объявление</span>
+          </div>
+          <div class="listing-page__media">
+            <img id="listingPageImage" alt="Фотография автомобиля" hidden />
+            <div class="listing-page__placeholder" id="listingPageImagePlaceholder" aria-hidden="true">◇</div>
+          </div>
+          <article class="listing-page__body">
+            <h1 id="listingPageTitle"></h1>
+            <p class="listing-page__brand" id="listingPageBrand"></p>
+            <div class="listing-page__price"><strong id="listingPagePrice">0</strong><span class="af-coin" aria-label="AF Coins"></span><span>AF Coins</span></div>
+            <section class="listing-page__section"><h2>Описание</h2><p id="listingPageDescription"></p></section>
+            <section class="listing-page__section"><h2>Характеристики</h2><div class="listing-page__specs" id="listingPageSpecs"></div></section>
+            <div class="listing-page__engagement"><span id="listingPageViews">👁 0 просмотров</span><button id="listingPageLike" type="button">♡ 0 лайков</button></div>
+            <div class="listing-page__offer" id="listingPageOffer" hidden>
+              <form id="listingOfferForm">
+                <label>Ваша цена<div><input id="listingOfferAmount" name="amount" type="number" min="1" step="0.01" inputmode="decimal" enterkeyhint="send" required /><span>AF</span></div></label>
+                <button type="submit">Отправить предложение</button>
+                <button type="button" data-close-listing-offer>Отмена</button>
+              </form>
+            </div>
+            <div class="listing-page__actions" id="listingPageActions">
+              <button class="listing-page__buy" id="listingPageBuy" type="button">Купить</button>
+              <button class="listing-page__message" id="listingPageChat" type="button">Написать продавцу</button>
+              <button class="listing-page__negotiate" id="listingPageOfferButton" type="button">Предложить свою цену</button>
+            </div>
+          </article>
         </section>
 
         <section class="view" data-view="training" aria-labelledby="trainingTitle" hidden>

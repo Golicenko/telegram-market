@@ -38,6 +38,7 @@
     catalog: { brands: [] },
     photoFiles: [],
     currentConversation: null,
+    selectedListing: null,
     editingListingId: null,
     messages: [],
     notifications: [],
@@ -63,6 +64,8 @@
     pendingDealDeepLink: launchParams.get("deal_id"),
     pendingDealBuyerEntry: launchParams.get("buyer_entry") === "1",
     pendingSupportDealDeepLink: launchParams.get("support_deal_id"),
+    pendingConversationDeepLink: launchParams.get("conversation_id"),
+    pendingListingDeepLink: launchParams.get("conversation_id") ? null : launchParams.get("listing_id"),
     pendingTrainingDeepLink: launchParams.get("training_id") || launchParams.get("startapp") || window.Telegram?.WebApp?.initDataUnsafe?.start_param || null,
     openingDealDeepLink: false,
     serverAvailable: true,
@@ -158,6 +161,22 @@
     trainingCoverInput: document.getElementById("trainingCoverInput"),
     trainingCoverPreview: document.getElementById("trainingCoverPreview"),
     trainingCoverPreviewImage: document.getElementById("trainingCoverPreviewImage"),
+    listingPageImage: document.getElementById("listingPageImage"),
+    listingPageImagePlaceholder: document.getElementById("listingPageImagePlaceholder"),
+    listingPageKind: document.getElementById("listingPageKind"),
+    listingPageTitle: document.getElementById("listingPageTitle"),
+    listingPageBrand: document.getElementById("listingPageBrand"),
+    listingPagePrice: document.getElementById("listingPagePrice"),
+    listingPageDescription: document.getElementById("listingPageDescription"),
+    listingPageSpecs: document.getElementById("listingPageSpecs"),
+    listingPageViews: document.getElementById("listingPageViews"),
+    listingPageLike: document.getElementById("listingPageLike"),
+    listingPageBuy: document.getElementById("listingPageBuy"),
+    listingPageChat: document.getElementById("listingPageChat"),
+    listingPageOfferButton: document.getElementById("listingPageOfferButton"),
+    listingPageOffer: document.getElementById("listingPageOffer"),
+    listingOfferForm: document.getElementById("listingOfferForm"),
+    listingOfferAmount: document.getElementById("listingOfferAmount"),
   };
 
   let bootstrapPromise = null;
@@ -268,6 +287,11 @@
     bind(document.getElementById("chatHideButton"), "click", hideCurrentConversation, "chatHideButton");
     bind(document.getElementById("chatInput"), "input", resizeChatInput, "chatInput");
     bind(elements.chatListing, "click", openChatListing, "chatListing");
+    bind(elements.listingPageLike, "click", likeSelectedListing, "listingPageLike");
+    bind(elements.listingPageBuy, "click", buySelectedListing, "listingPageBuy");
+    bind(elements.listingPageChat, "click", chatFromSelectedListing, "listingPageChat");
+    bind(elements.listingPageOfferButton, "click", showListingOfferForm, "listingPageOfferButton");
+    bind(elements.listingOfferForm, "submit", submitListingOffer, "listingOfferForm");
     bind(elements.withdrawForm, "submit", createWithdrawal, "withdrawForm");
     bind(document.getElementById("trainingForm"), "submit", submitTrainingProduct, "trainingForm");
     bind(trainingForm?.elements.product_type, "change", toggleAutomaticMaterialFields, "trainingProductType");
@@ -358,6 +382,8 @@
     void openSupportCaseDeepLink();
     void openDealSupportDeepLink();
     void openDealDeepLink();
+    void openConversationDeepLink();
+    void openListingDeepLink();
   }
 
   async function authenticateCurrentUser() {
@@ -500,6 +526,12 @@ function handleClick(event) {
     return void closePurchaseFlow();
   }
 
+  if (target.closest("[data-close-listing-offer]")) {
+    elements.listingPageOffer.hidden = true;
+    elements.listingPageOfferButton.hidden = false;
+    return;
+  }
+
   if (target.closest("[data-open-topup-info]")) {
     return void openDialog(
       document.getElementById("topupInfoModal")
@@ -552,6 +584,10 @@ function handleClick(event) {
     if (promoteListingButton) return void promoteListing(promoteListingButton.dataset.promoteListing);
     const openListingButton = target.closest("[data-open-listing]");
     if (openListingButton) return void openListingDetails(openListingButton.dataset.openListing);
+    const listingCard = target.closest("[data-listing-card]");
+    if (listingCard && !target.closest("button,a,input,select,textarea,label")) {
+      return void openListingDetails(listingCard.dataset.listingCard);
+    }
     const cartRemove = target.closest("[data-cart-remove]");
     if (cartRemove) return void removeFromCart(cartRemove.dataset.cartRemove);
     const profileTab = target.closest("[data-profile-tab]");
@@ -646,13 +682,13 @@ function handleClick(event) {
       view.hidden = !active;
       view.classList.toggle("is-active", active);
     });
-    const navView = ["add", "cart", "deal-chat"].includes(viewName) ? "market" : viewName === "training-detail" || viewName === "training-editor" ? "training" : ["topup", "withdraw"].includes(viewName) ? "profile" : ["admin", "support"].includes(viewName) ? "more" : viewName;
+    const navView = ["add", "cart", "deal-chat", "listing-detail"].includes(viewName) ? "market" : viewName === "training-detail" || viewName === "training-editor" ? "training" : ["topup", "withdraw"].includes(viewName) ? "profile" : ["admin", "support"].includes(viewName) ? "more" : viewName;
     elements.navButtons.forEach((button) => {
       const active = button.dataset.navTarget === navView;
       button.classList.toggle("is-active", active);
       active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
     });
-    elements.shell.classList.toggle("is-focused", ["add", "topup", "cart", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "admin"].includes(viewName));
+    elements.shell.classList.toggle("is-focused", ["add", "topup", "cart", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin"].includes(viewName));
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (state.serverAvailable && ["market", "unique", "training", "profile", "cart"].includes(viewName)) {
       try { await refreshMarketplace(); } catch (error) { notify(error.message); }
@@ -801,7 +837,7 @@ function handleClick(event) {
   switchProfileTab("chats");
   }
   function openSecondary(viewName) {
-    state.previousView = ["add", "topup", "cart", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "admin"].includes(state.currentView) ? "market" : state.currentView;
+    state.previousView = ["add", "topup", "cart", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin"].includes(state.currentView) ? "market" : state.currentView;
     navigate(viewName);
   }
 
@@ -1072,6 +1108,14 @@ function handleClick(event) {
           liked_by_me: Boolean(engagement.liked_by_me),
         });
       }));
+    if (String(state.selectedListing?.id) === String(id)) {
+      Object.assign(state.selectedListing, {
+        views_count: Number(engagement.views_count || 0),
+        likes_count: Number(engagement.likes_count || 0),
+        liked_by_me: Boolean(engagement.liked_by_me),
+      });
+      if (state.currentView === "listing-detail") renderListingPage();
+    }
     document.querySelectorAll(`[data-listing-views="${CSS.escape(String(id))}"]`).forEach((node) => { node.textContent = `👁 ${Number(engagement.views_count || 0)}`; });
     document.querySelectorAll(`[data-listing-like="${CSS.escape(String(id))}"]`).forEach((button) => {
       button.classList.toggle("is-liked", Boolean(engagement.liked_by_me));
@@ -1116,7 +1160,7 @@ function handleClick(event) {
   }
 
   async function buyNowFlow(id) {
-    const listing = [...state.regular, ...state.unique].find((item) => String(item.id) === String(id));
+    const listing = [...state.regular, ...state.unique, state.selectedListing].filter(Boolean).find((item) => String(item.id) === String(id));
     if (!listing) return notify("Объявление не найдено");
     if (listing.status !== "active") return notify("Объявление уже недоступно");
     if (state.me?.user.id === listing.seller_id) return notify("Нельзя купить собственное объявление");
@@ -1383,37 +1427,76 @@ function handleClick(event) {
   async function openListingDetails(id) {
     try {
       const listing = await api.request(`/listings/${id}`);
-      const existing = document.getElementById("listingDetailsModal");
-      if (existing) existing.remove();
-      const dialog = document.createElement("dialog");
-      dialog.className = "modal";
-      dialog.id = "listingDetailsModal";
-      const head = document.createElement("div");
-      head.className = "modal-head";
-      const heading = document.createElement("div");
-      const eyebrow = document.createElement("span"); eyebrow.className = "eyebrow"; eyebrow.textContent = listing.listing_type === "unique" ? "Уникальная машина" : "Объявление";
-      const title = document.createElement("h2"); title.textContent = listingTitle(listing);
-      heading.append(eyebrow, title);
-      const close = document.createElement("button"); close.type = "button"; close.textContent = "×"; close.addEventListener("click", () => dialog.close());
-      head.append(heading, close);
-      const description = document.createElement("p"); description.textContent = listing.description;
-      const stats = document.createElement("p"); stats.textContent = `${listing.power_hp} л.с. · ${listing.max_speed_kph} км/ч · передача ${deliveryTimeLabel(listing.delivery_time_estimate)}`;
-      const price = document.createElement("p"); price.append(document.createTextNode(`${formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins)} `), coin("af-coin--small"));
-      const engagement = document.createElement("p"); engagement.className = "listing-detail-engagement"; engagement.textContent = `👁 ${listing.views_count || 0}   ${listing.liked_by_me ? "♥" : "♡"} ${listing.likes_count || 0}`;
-      dialog.append(head, description, stats, price, engagement);
-      if (listing.seller_id !== state.me?.user.id) {
-        const message = document.createElement("button"); message.className = "publish-button"; message.type = "button"; message.textContent = "Написать продавцу";
-        message.addEventListener("click", async () => { dialog.close(); await startConversation(listing.id); });
-        const buy = document.createElement("button"); buy.className = "publish-button"; buy.type = "button"; buy.textContent = `Купить за ${formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins)} AF Coins`;
-        buy.disabled = listing.status !== "active";
-        buy.addEventListener("click", () => { dialog.close(); void buyNowFlow(listing.id); });
-        dialog.append(buy, message);
-      }
-      document.body.append(dialog);
-      dialog.addEventListener("close", () => dialog.remove(), { once: true });
-      openDialog(dialog);
-      window.setTimeout(() => { if (dialog.open) void recordListingView(id); }, 750);
+      state.selectedListing = listing;
+      state.previousView = state.currentView === "listing-detail" ? state.previousView : state.currentView;
+      renderListingPage();
+      await navigate("listing-detail");
+      window.setTimeout(() => { if (state.selectedListing?.id === id && state.currentView === "listing-detail") void recordListingView(id); }, 750);
     } catch (error) { notify(error.message); }
+  }
+
+  function renderListingPage() {
+    const listing = state.selectedListing;
+    if (!listing) return;
+    const imageUrl = safeArray(listing.images)[0];
+    elements.listingPageImage.hidden = !imageUrl;
+    elements.listingPageImagePlaceholder.hidden = Boolean(imageUrl);
+    if (imageUrl) elements.listingPageImage.src = imageUrl;
+    else elements.listingPageImage.removeAttribute("src");
+    elements.listingPageKind.textContent = listing.listing_type === "unique" ? "Уникальная машина" : "Объявление";
+    elements.listingPageTitle.textContent = listingTitle(listing);
+    elements.listingPageBrand.textContent = listing.brand || "Автомобиль";
+    const effectivePrice = listing.effective_price_af_coins ?? listing.price_af_coins;
+    elements.listingPagePrice.textContent = formatNumber(effectivePrice);
+    elements.listingPageDescription.textContent = listing.description || "Описание не указано";
+    elements.listingPageSpecs.replaceChildren(...[
+      `Мощность: ${listing.power_hp} л.с.`,
+      `Максимальная скорость: ${listing.max_speed_kph} км/ч`,
+      `Передача: ${deliveryTimeLabel(listing.delivery_time_estimate)}`,
+      `Статус: ${statusLabel(listing.status)}`,
+    ].map((value) => { const item = document.createElement("span"); item.textContent = value; return item; }));
+    elements.listingPageViews.textContent = `👁 ${Number(listing.views_count || 0)} просмотров`;
+    elements.listingPageLike.textContent = `${listing.liked_by_me ? "♥" : "♡"} ${Number(listing.likes_count || 0)} лайков`;
+    elements.listingPageLike.classList.toggle("is-liked", Boolean(listing.liked_by_me));
+    const isOwner = listing.seller_id === state.me?.user.id;
+    elements.listingPageLike.disabled = isOwner;
+    elements.listingPageBuy.hidden = isOwner;
+    elements.listingPageChat.hidden = isOwner;
+    elements.listingPageOfferButton.hidden = isOwner;
+    elements.listingPageOffer.hidden = true;
+    elements.listingPageBuy.disabled = listing.status !== "active";
+    elements.listingPageBuy.textContent = `Купить за ${formatNumber(effectivePrice)} AF`;
+    elements.listingOfferAmount.value = formatNumber(effectivePrice);
+  }
+
+  async function likeSelectedListing() {
+    if (!state.selectedListing) return;
+    await toggleListingLike(state.selectedListing.id);
+    const refreshed = await api.request(`/listings/${state.selectedListing.id}`);
+    state.selectedListing = refreshed;
+    renderListingPage();
+  }
+
+  function buySelectedListing() {
+    if (state.selectedListing) void buyNowFlow(state.selectedListing.id);
+  }
+
+  function chatFromSelectedListing() {
+    if (state.selectedListing) void startConversation(state.selectedListing.id);
+  }
+
+  function showListingOfferForm() {
+    elements.listingPageOffer.hidden = false;
+    elements.listingPageOfferButton.hidden = true;
+    window.setTimeout(() => elements.listingOfferAmount.focus({ preventScroll: true }), 30);
+  }
+
+  async function submitListingOffer(event) {
+    event.preventDefault();
+    if (!state.selectedListing) return;
+    const amount = Number(elements.listingOfferAmount.value);
+    if (!Number.isFinite(amount) || amount < 1) return notify("Цена предложения должна быть не меньше 1 AF");
+    await createOffer(amount, state.selectedListing.id);
   }
 
   function editListing(id) {
@@ -1759,7 +1842,7 @@ async function hideCurrentConversation() {
   async function startConversation(listingId) {
     try {
       const conversation = await api.request(`/conversations/listing/${listingId}`, { method: "POST" });
-      if (conversation.id) return await openConversation(conversation.id, conversation);
+      if (conversation.id) return await openConversation(conversation.id, conversation, state.currentView);
       state.currentConversation = conversation;
       state.messages = [];
       state.previousView = state.currentView;
@@ -1770,7 +1853,7 @@ async function hideCurrentConversation() {
     catch (error) { notify(error.message); }
   }
 
-  async function openConversation(id, prefetched = null) {
+  async function openConversation(id, prefetched = null, returnView = null) {
     try {
       const [conversationResult, messagesResult] = await Promise.allSettled([
         prefetched ? Promise.resolve(prefetched) : api.request(`/conversations/${id}`),
@@ -1782,7 +1865,7 @@ async function hideCurrentConversation() {
       if (messagesResult.status === "rejected") reportClientError("conversation_messages_initial", messagesResult.reason);
       state.currentConversation = conversation;
       state.messages = messages;
-      state.previousView = state.currentView === "profile" ? "profile" : "market";
+      state.previousView = returnView || (state.currentView === "profile" ? "profile" : "market");
       renderConversation();
       await navigate("deal-chat");
       try {
@@ -1931,17 +2014,18 @@ async function hideCurrentConversation() {
 
   function renderOffers() {
     const conversation = state.currentConversation; elements.offerPanel.replaceChildren(); if (!conversation || conversation.deal) return;
-    const latest = [...conversation.offers].reverse().find((item) => item.status === "pending");
-    if (latest) {
-      const text = document.createElement("span"); text.append(document.createTextNode(`Предложение: ${formatNumber(latest.amount_af_coins)} `), coin("af-coin--small")); elements.offerPanel.append(text);
-      if (latest.offered_by_id !== state.me.user.id) {
-        const accept = document.createElement("button"); accept.dataset.offerAction = "accept"; accept.dataset.offerId = latest.id; accept.textContent = "Принять";
-        const reject = document.createElement("button"); reject.dataset.offerAction = "reject"; reject.dataset.offerId = latest.id; reject.textContent = "Отклонить";
-        const counter = document.createElement("button"); counter.dataset.offerAction = "counter"; counter.dataset.offerId = latest.id; counter.textContent = "Своя цена"; elements.offerPanel.append(accept, reject, counter);
+    const pending = safeArray(conversation.offers).filter((item) => item.status === "pending");
+    pending.forEach((offer) => {
+      const row = document.createElement("div"); row.className = "offer-panel__row"; row.dataset.offerId = offer.id;
+      const text = document.createElement("span"); text.append(document.createTextNode(`Предложение: ${formatNumber(offer.amount_af_coins)} `), coin("af-coin--small")); row.append(text);
+      if (offer.offered_by_id !== state.me.user.id) {
+        const accept = document.createElement("button"); accept.dataset.offerAction = "accept"; accept.dataset.offerId = offer.id; accept.textContent = "Принять";
+        const reject = document.createElement("button"); reject.dataset.offerAction = "reject"; reject.dataset.offerId = offer.id; reject.textContent = "Отклонить";
+        const counter = document.createElement("button"); counter.dataset.offerAction = "counter"; counter.dataset.offerId = offer.id; counter.textContent = "Своя цена"; row.append(accept, reject, counter);
       }
-    } else {
-      const button = document.createElement("button"); button.dataset.newOffer = ""; button.textContent = "Предложить цену"; elements.offerPanel.append(button);
-    }
+      elements.offerPanel.append(row);
+    });
+    const button = document.createElement("button"); button.dataset.newOffer = ""; button.textContent = "Предложить свою цену"; elements.offerPanel.append(button);
   }
 
   function renderDealControls() {
@@ -2086,15 +2170,25 @@ async function hideCurrentConversation() {
   function openChatListing() {
     const listingId = state.currentConversation?.listing?.id;
     if (!listingId) return;
-    state.selectedListingId = listingId;
-    navigate("market");
-    notify("Объявление открыто в Market");
+    void openListingDetails(listingId);
   }
 
-  async function createOffer() {
-    const value = window.prompt("Предложите цену в AF Coins (минимум 1)", String(state.currentConversation?.listing.price_af_coins || 1));
-    if (!value) return;
-    try { await api.request(`/conversations/${state.currentConversation.id}/offers`, { method: "POST", body: JSON.stringify({ amount_af_coins: Number(value) }) }); await openConversation(state.currentConversation.id); }
+  async function createOffer(explicitAmount = null, listingId = null) {
+    const value = explicitAmount ?? window.prompt("Предложите цену в AF Coins (минимум 1)", String(state.currentConversation?.listing.price_af_coins || 1));
+    if (value === null || value === "") return;
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount < 1) return notify("Цена предложения должна быть не меньше 1 AF");
+    const conversationId = listingId ? null : state.currentConversation?.id;
+    const sourceListingId = listingId || state.currentConversation?.listing?.id;
+    if (!conversationId && !sourceListingId) return notify("Объявление не найдено");
+    try {
+      const path = conversationId ? `/conversations/${conversationId}/offers` : `/conversations/listing/${sourceListingId}/offers`;
+      const offer = await api.request(path, { method: "POST", body: JSON.stringify({ amount_af_coins: amount }) });
+      elements.listingPageOffer.hidden = true;
+      elements.listingPageOfferButton.hidden = false;
+      await openConversation(offer.conversation_id, null, listingId ? "listing-detail" : null);
+      notify("Предложение отправлено продавцу");
+    }
     catch (error) { notify(error.message); }
   }
 
@@ -3311,6 +3405,24 @@ async function hideCurrentConversation() {
     } finally {
       state.openingDealDeepLink = false;
     }
+  }
+
+  async function openConversationDeepLink() {
+    const conversationId = state.pendingConversationDeepLink;
+    if (!conversationId || !state.me) return;
+    try {
+      await openConversation(encodeURIComponent(conversationId));
+      state.pendingConversationDeepLink = null;
+    } catch (error) {
+      notify(error.message);
+    }
+  }
+
+  async function openListingDeepLink() {
+    const listingId = state.pendingListingDeepLink;
+    if (!listingId || !state.me) return;
+    await openListingDetails(encodeURIComponent(listingId));
+    state.pendingListingDeepLink = null;
   }
 
   function switchAdminTab(tab) {

@@ -397,6 +397,7 @@ class CounterOfferCreate(PriceOfferCreate):
 class PriceOfferOut(ORMModel):
     id: uuid.UUID
     conversation_id: uuid.UUID
+    listing_id: uuid.UUID
     offered_by_id: uuid.UUID
     amount_af_coins: Decimal
     status: str
