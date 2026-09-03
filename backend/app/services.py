@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from typing import Awaitable, Callable
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -167,6 +167,7 @@ async def create_listing(
                     delivery_time_estimate=payload.delivery_time_estimate,
                     pinned=admin_pinned,
                     pinned_until=now + timedelta(hours=settings.listing_promotion_hours) if admin_pinned else None,
+                    content_revision=await session.scalar(select(func.nextval("content_publication_revision_seq"))) if listing_type == "unique" else None,
                 )
                 session.add(listing)
                 await session.flush()
@@ -282,7 +283,10 @@ async def set_listing_publication(session: AsyncSession, admin: User, listing_id
         listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
         if not listing or listing.status in {"deleted", "sold", "reserved"}:
             raise HTTPException(status_code=409, detail="Listing publication state cannot be changed")
+        was_active = listing.status == "active"
         listing.status = "active" if published else "paused"
+        if published and listing.listing_type == "unique" and not was_active:
+            listing.content_revision = await session.scalar(select(func.nextval("content_publication_revision_seq")))
         session.add(AdminAction(admin_id=admin.id, action="publish_listing" if published else "unpublish_listing", target_type="listing", target_id=listing.id))
     return listing
 
@@ -377,6 +381,9 @@ async def create_training_product(session: AsyncSession, admin: User, payload) -
                 availability=payload.availability,
                 published=payload.published,
                 pinned=payload.pinned,
+                views_count=0,
+                content_revision=await session.scalar(select(func.nextval("content_publication_revision_seq"))) if payload.published else None,
+                published_at=datetime.now(UTC) if payload.published else None,
             )
             session.add(product)
             await session.flush()
@@ -418,6 +425,9 @@ async def update_training_product(session: AsyncSession, admin: User, product_id
                 status_code=409,
                 detail="Сначала сохраните хотя бы один материал, затем опубликуйте обучение",
             )
+        if target_published and not product.published:
+            product.content_revision = await session.scalar(select(func.nextval("content_publication_revision_seq")))
+            product.published_at = datetime.now(UTC)
         for field, value in changes.items():
             if field == "price_af_coins" and value is not None:
                 value = money(value)
@@ -467,8 +477,12 @@ async def set_training_product_state(
                     status_code=409,
                     detail="Сначала сохраните хотя бы один материал, затем опубликуйте обучение",
                 )
+            was_published = product.published and product.deleted_at is None
             product.deleted_at = None
             product.published = True
+            if not was_published:
+                product.content_revision = await session.scalar(select(func.nextval("content_publication_revision_seq")))
+                product.published_at = datetime.now(UTC)
         elif action == "hide":
             product.published = False
             product.pinned = False
