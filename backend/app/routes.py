@@ -1519,10 +1519,49 @@ async def training_product_share_link(
 async def change_training_product_state(
     product_id: uuid.UUID,
     action: str,
+    request: Request,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    return await set_training_product_state(session, admin, product_id, action)
+    if action != "publish":
+        return await set_training_product_state(session, admin, product_id, action)
+    error_id = request.headers.get("X-AutoFlow-Error-ID", "")[:16] or None
+    try:
+        product = await set_training_product_state(session, admin, product_id, action)
+    except Exception as exc:
+        await session.rollback()
+        material_count = None
+        try:
+            material_count = int(await session.scalar(
+                select(func.count(TrainingMaterial.id)).where(
+                    TrainingMaterial.product_id == product_id,
+                    TrainingMaterial.is_active.is_(True),
+                )
+            ) or 0)
+        except Exception:
+            await session.rollback()
+        logger.exception(
+            "training_publish_failed context=training_publish_after_materials training_id=%s material_count=%s status=%s error_id=%s error_type=%s",
+            product_id,
+            material_count,
+            getattr(exc, "status_code", 500),
+            error_id,
+            type(exc).__name__,
+        )
+        raise
+    material_count = int(await session.scalar(
+        select(func.count(TrainingMaterial.id)).where(
+            TrainingMaterial.product_id == product_id,
+            TrainingMaterial.is_active.is_(True),
+        )
+    ) or 0)
+    logger.info(
+        "training_publish_completed context=training_publish_after_materials training_id=%s material_count=%s status=200 error_id=%s",
+        product_id,
+        material_count,
+        error_id,
+    )
+    return product
 
 
 @router.get("/admin/training/{product_id}/materials", response_model=list[TrainingMaterialAdminOut])

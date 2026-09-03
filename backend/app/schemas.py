@@ -51,6 +51,8 @@ class ClientDiagnosticCreate(BaseModel):
     user_agent: str = Field(default="unknown", max_length=200)
     online: bool | None = None
     related_id: str | None = Field(default=None, max_length=128)
+    training_id: str | None = Field(default=None, max_length=128)
+    material_count: int | None = Field(default=None, ge=0, le=10000)
     upload_stage: str | None = Field(default=None, max_length=64)
     file_mime: str | None = Field(default=None, max_length=80)
     file_size: int | None = Field(default=None, ge=0, le=100 * 1024 * 1024)
