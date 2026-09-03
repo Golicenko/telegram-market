@@ -2205,10 +2205,15 @@ async function hideCurrentConversation() {
       const endpoint = state.currentConversation.id
         ? `/conversations/${state.currentConversation.id}/messages`
         : `/conversations/listing/${state.currentConversation.listing.id}/messages`;
-      const message = await api.request(endpoint, { method: "POST", body: JSON.stringify({ body, client_message_id: clientMessageId }) });
+      const dealId = state.currentConversation?.deal?.id || null;
+      const message = await api.request(endpoint, {
+        method: "POST",
+        body: JSON.stringify({ body, client_message_id: clientMessageId, deal_id: dealId }),
+      });
       input.value = "";
       resizeChatInput();
-      await openConversation(message.conversation_id);
+      if (message.deal_id) await openDealConversation(message.deal_id);
+      else await openConversation(message.conversation_id);
     } catch (error) { input.value = body; resizeChatInput(); notify(`Сообщение не отправлено: ${error.message}`); }
     finally { button.disabled = false; }
   }

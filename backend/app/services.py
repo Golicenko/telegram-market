@@ -998,6 +998,7 @@ async def _ensure_deal_conversation_locked(
         session.add(
             ConversationMessage(
                 conversation_id=conversation.id,
+                deal_id=deal.id,
                 sender_id=deal.buyer_id,
                 body=f"Покупатель оплатил {deal.price_af_coins} AF Coins. Деньги под защитой до подтверждения получения.",
                 message_type="system",
@@ -1073,12 +1074,21 @@ async def save_deal_delivery_details(
         deal.preferred_delivery_time = delivery_label
         deal.delivery_timezone = "Europe/Moscow"
         if deal.delivery_details_submitted_at is None:
-            deal.delivery_details_submitted_at = datetime.now(UTC)
+            submitted_at = datetime.now(UTC)
+            deal.delivery_details_submitted_at = submitted_at
+            deal.seller_response_deadline = submitted_at + timedelta(
+                seconds=get_settings().seller_response_timeout_seconds
+            )
+        if deal.seller_purchase_notification_status in {None, "pending", "failed"}:
+            deal.seller_purchase_notification_status = "pending"
+            deal.seller_purchase_notification_next_attempt_at = datetime.now(UTC)
+            deal.seller_purchase_notification_error = None
         if changed:
             conversation.last_message_at = datetime.now(UTC)
             session.add(
                 ConversationMessage(
                     conversation_id=conversation.id,
+                    deal_id=deal.id,
                     sender_id=buyer.id,
                     body=(
                         "🚗 Данные для передачи\n"
@@ -1094,7 +1104,12 @@ async def save_deal_delivery_details(
 
 
 async def send_conversation_message(
-    session: AsyncSession, sender: User, conversation_id: uuid.UUID, body: str, client_message_id: uuid.UUID
+    session: AsyncSession,
+    sender: User,
+    conversation_id: uuid.UUID,
+    body: str,
+    client_message_id: uuid.UUID,
+    deal_id: uuid.UUID | None = None,
 ) -> tuple[ConversationMessage, User, bool]:
     async with session.begin():
         conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id).with_for_update())
@@ -1112,13 +1127,23 @@ async def send_conversation_message(
         if existing:
             return existing, recipient, False
         now = datetime.now(UTC)
-        if conversation.deal_id and sender.id == conversation.seller_id:
+        deal = None
+        if deal_id:
             deal = await session.scalar(
-                select(Deal).where(Deal.id == conversation.deal_id).with_for_update()
+                select(Deal).where(Deal.id == deal_id).with_for_update()
             )
             if (
-                deal
-                and deal.status in {"paid", "seller_contacted"}
+                not deal
+                or deal.conversation_id != conversation.id
+                or sender.id not in {deal.buyer_id, deal.seller_id}
+                or {deal.buyer_id, deal.seller_id} != {conversation.buyer_id, conversation.seller_id}
+            ):
+                raise HTTPException(status_code=404, detail="Deal not found")
+        if deal and sender.id == deal.seller_id:
+            if deal.seller_timeout_processed_at is not None:
+                raise HTTPException(status_code=409, detail="Сделка уже автоматически отменена из-за истечения срока ответа")
+            if (
+                deal.status in {"paid", "seller_contacted"}
                 and deal.delivery_details_submitted_at
                 and not deal.seller_responded_at
             ):
@@ -1129,7 +1154,7 @@ async def send_conversation_message(
                     )
                 deal.seller_responded_at = now
         message = ConversationMessage(
-            conversation_id=conversation.id, sender_id=sender.id, body=body.strip(),
+            conversation_id=conversation.id, deal_id=deal_id, sender_id=sender.id, body=body.strip(),
             message_type="text", client_message_id=client_message_id,
         )
         session.add(message)
@@ -1333,6 +1358,7 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
             session.add(
                 ConversationMessage(
                     conversation_id=conversation.id,
+                    deal_id=deal.id,
                     sender_id=buyer.id,
                     body=f"Покупатель оплатил {agreed_price} AF Coins. Деньги под защитой до подтверждения получения.",
                     message_type="system",
@@ -1443,6 +1469,7 @@ async def _purchase_locked_listing(
     session.add(
         ConversationMessage(
             conversation_id=conversation.id,
+            deal_id=deal.id,
             sender_id=buyer.id,
             body=f"Покупатель оплатил {agreed_price} AF Coins. Деньги под защитой до подтверждения получения.",
             message_type="system",
@@ -1890,6 +1917,10 @@ async def auto_cancel_unanswered_deal(
         seller = await session.get(User, deal.seller_id)
         if not listing or not buyer_wallet or not buyer or not seller:
             raise HTTPException(status_code=409, detail="Seller timeout refund state is inconsistent")
+        if listing.status != "reserved" or listing.reserved_by_deal_id != deal.id:
+            raise HTTPException(status_code=409, detail="Listing reservation does not match the timed out deal")
+        if money(deal.purchased_frozen_amount + deal.earned_frozen_amount) != money(deal.frozen_amount):
+            raise HTTPException(status_code=409, detail="Protected deal components do not match the frozen amount")
 
         _apply_deal_refund(
             session,

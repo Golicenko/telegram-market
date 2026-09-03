@@ -189,6 +189,7 @@ class MessageCreate(BaseModel):
 
 class ConversationMessageCreate(MessageCreate):
     client_message_id: uuid.UUID
+    deal_id: uuid.UUID | None = None
 
 
 class MessageOut(ORMModel):
@@ -426,6 +427,7 @@ class TrainingPurchaseStatusUpdate(BaseModel):
 class ConversationMessageOut(ORMModel):
     id: uuid.UUID
     conversation_id: uuid.UUID
+    deal_id: uuid.UUID | None = None
     sender_id: uuid.UUID
     body: str
     message_type: str

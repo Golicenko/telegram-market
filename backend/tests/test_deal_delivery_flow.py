@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -82,6 +83,7 @@ def fixture():
         purchased_frozen_amount=Decimal("100"), earned_frozen_amount=Decimal("0"),
         seller_payout=Decimal("70"), platform_commission=Decimal("30"),
     )
+    listing.reserved_by_deal_id = deal.id
     return buyer, seller, listing, conversation, deal
 
 
@@ -98,6 +100,10 @@ async def test_delivery_details_are_persisted_on_exact_deal_and_message_is_idemp
     assert result.buyer_server == "test server"
     assert result.preferred_delivery_time == "Сегодня, 19:00"
     assert result.delivery_timezone == "Europe/Moscow"
+    assert result.delivery_details_submitted_at is not None
+    assert result.delivery_details_submitted_at.tzinfo is not None
+    assert result.seller_response_deadline == result.delivery_details_submitted_at + timedelta(hours=24)
+    assert result.seller_purchase_notification_status == "pending"
     messages = [item for item in session.added if isinstance(item, ConversationMessage)]
     assert len(messages) == 1
     assert messages[0].message_type == "system"
@@ -169,11 +175,14 @@ async def test_transfer_schedules_one_reminder_in_the_same_status_transition():
     deal.buyer_server = "test server"
     deal.preferred_delivery_time = "Сегодня, 19:00"
     deal.delivery_timezone = "Europe/Moscow"
+    deal.delivery_details_submitted_at = datetime.now(UTC)
+    deal.seller_response_deadline = deal.delivery_details_submitted_at + timedelta(hours=24)
     before = datetime.now(UTC)
 
     await set_deal_status(Session(deal, listing, conversation), seller, deal.id, "transfer_in_progress")
 
     assert deal.status == "transfer_in_progress"
+    assert deal.seller_responded_at is not None
     assert deal.buyer_transfer_reminder_status == "pending"
     assert deal.buyer_transfer_reminder_scheduled_at >= before + timedelta(seconds=119)
 
@@ -221,6 +230,8 @@ async def test_repeated_notification_dispatch_sends_only_once_per_deal(monkeypat
     deal.buyer_server = "test server"
     deal.preferred_delivery_time = "Сегодня, 19:00"
     deal.delivery_timezone = "Europe/Moscow"
+    deal.delivery_details_submitted_at = datetime.now(UTC)
+    deal.seller_response_deadline = deal.delivery_details_submitted_at + timedelta(seconds=2)
 
     class NotificationSession(Session):
         async def get(self, model, key):
@@ -251,6 +262,40 @@ async def test_repeated_notification_dispatch_sends_only_once_per_deal(monkeypat
     assert deal.delivery_details_submitted_at is not None
     assert deal.seller_response_deadline is not None
     assert timedelta(seconds=1) <= deal.seller_response_deadline - deal.seller_purchase_notification_sent_at <= timedelta(seconds=2)
+
+
+@pytest.mark.asyncio
+async def test_failed_seller_telegram_delivery_does_not_remove_financial_deadline(monkeypatch):
+    buyer, seller, listing, conversation, deal = fixture()
+    seller.bot_started = True
+    deal.seller_purchase_notification_status = "pending"
+    deal.buyer_game_id = "AB123456"
+    deal.buyer_server = "server"
+    deal.preferred_delivery_time = "Сегодня, 19:00"
+    deal.delivery_timezone = "Europe/Moscow"
+    deal.delivery_details_submitted_at = datetime.now(UTC)
+    deal.seller_response_deadline = deal.delivery_details_submitted_at + timedelta(hours=24)
+    original_deadline = deal.seller_response_deadline
+
+    class NotificationSession(Session):
+        async def get(self, model, key):
+            if model is User and key == seller.id:
+                return seller
+            if model is User and key == buyer.id:
+                return buyer
+            return await super().get(model, key)
+
+    monkeypatch.setattr(routes, "SessionLocal", lambda: NotificationSession(deal, listing, conversation))
+
+    async def failed_send(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(routes, "send_deal_purchase_notification", failed_send)
+    await routes.notify_deal_purchase_seller(deal.id)
+
+    assert deal.seller_purchase_notification_status == "failed"
+    assert deal.seller_purchase_notification_next_attempt_at is not None
+    assert deal.seller_response_deadline == original_deadline
 
 
 @pytest.mark.asyncio
@@ -466,20 +511,67 @@ class TimeoutSession:
         return False
 
 
+class StaleNotificationRecoverySession:
+    def __init__(self, deal):
+        self.deal = deal
+
+    def begin(self):
+        return Transaction()
+
+    async def execute(self, statement):
+        source = str(statement)
+        if "seller_purchase_notification_status" in source:
+            self.deal.seller_purchase_notification_status = "pending"
+            self.deal.seller_purchase_notification_next_attempt_at = datetime.now(UTC)
+        if "seller_timeout_notification_status" in source:
+            self.deal.seller_timeout_notification_status = "pending"
+            self.deal.seller_timeout_notification_next_attempt_at = datetime.now(UTC)
+        return type("Result", (), {"rowcount": 1})()
+
+    async def scalars(self, _query):
+        return Rows([])
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_stale_sending_notifications_are_recovered_after_restart(monkeypatch):
+    _buyer, _seller, _listing, _conversation, deal = fixture()
+    stale = datetime.now(UTC) - timedelta(hours=1)
+    deal.seller_purchase_notification_status = "sending"
+    deal.seller_purchase_notification_claimed_at = stale
+    deal.seller_timeout_notification_status = "sending"
+    deal.seller_timeout_notification_claimed_at = stale
+    session = StaleNotificationRecoverySession(deal)
+    monkeypatch.setattr(routes, "SessionLocal", lambda: session)
+
+    await routes.recover_deal_purchase_notifications()
+    await routes.recover_seller_response_timeouts()
+
+    assert deal.seller_purchase_notification_status == "pending"
+    assert deal.seller_timeout_notification_status == "pending"
+    assert deal.seller_purchase_notification_next_attempt_at is not None
+    assert deal.seller_timeout_notification_next_attempt_at is not None
+
+
 @pytest.mark.asyncio
 async def test_expired_unanswered_deal_refunds_once_and_never_pays_seller():
     buyer, seller, listing, _conversation, deal = fixture()
     now = datetime.now(UTC)
     deal.delivery_details_submitted_at = now - timedelta(hours=25)
     deal.seller_response_deadline = now - timedelta(hours=1)
-    deal.purchased_frozen_amount = Decimal("70")
-    deal.earned_frozen_amount = Decimal("30")
+    deal.purchased_frozen_amount = Decimal("60")
+    deal.earned_frozen_amount = Decimal("40")
     wallet = Wallet(
         user_id=buyer.id,
         purchased_balance=Decimal("0"),
         earned_balance=Decimal("0"),
-        purchased_frozen_balance=Decimal("70"),
-        earned_frozen_balance=Decimal("30"),
+        purchased_frozen_balance=Decimal("60"),
+        earned_frozen_balance=Decimal("40"),
         total_earned=Decimal("0"),
         version=0,
     )
@@ -497,8 +589,8 @@ async def test_expired_unanswered_deal_refunds_once_and_never_pays_seller():
     assert listing.status == "active"
     assert wallet.available_balance == Decimal("100.00")
     assert wallet.frozen_balance == Decimal("0.00")
-    assert wallet.purchased_balance == Decimal("70.00")
-    assert wallet.earned_balance == Decimal("30.00")
+    assert wallet.purchased_balance == Decimal("60.00")
+    assert wallet.earned_balance == Decimal("40.00")
     refunds = [item for item in session.added if isinstance(item, WalletTransaction)]
     assert len(refunds) == 1
     assert refunds[0].transaction_type == "seller_timeout_refund"
@@ -537,9 +629,257 @@ async def test_seller_chat_message_is_a_response_but_opening_is_not():
     )
 
     assert deal.seller_responded_at is None
-    await send_conversation_message(session, seller, conversation.id, "Буду в указанное время", uuid.uuid4())
+    await send_conversation_message(
+        session, seller, conversation.id, "Буду в указанное время", uuid.uuid4(), deal.id
+    )
     assert deal.seller_responded_at is not None
     assert len([item for item in session.added if isinstance(item, ConversationMessage)]) == 1
+
+
+@pytest.mark.asyncio
+async def test_generic_pair_chat_does_not_answer_the_legacy_current_deal_pointer():
+    buyer, seller, _listing, conversation, deal = fixture()
+    deal.delivery_details_submitted_at = datetime.now(UTC)
+    deal.seller_response_deadline = datetime.now(UTC) + timedelta(hours=24)
+    conversation.deal_id = deal.id
+    session = TimeoutSession([conversation, None], users={buyer.id: buyer, seller.id: seller})
+
+    await send_conversation_message(session, seller, conversation.id, "Обычное сообщение", uuid.uuid4())
+
+    assert deal.seller_responded_at is None
+    message = next(item for item in session.added if isinstance(item, ConversationMessage))
+    assert message.deal_id is None
+
+
+@pytest.mark.asyncio
+async def test_response_in_shared_conversation_marks_only_the_explicit_deal():
+    buyer, seller, _listing, conversation, first = fixture()
+    second = Deal(
+        id=uuid.uuid4(), listing_id=uuid.uuid4(), conversation_id=conversation.id,
+        buyer_id=buyer.id, seller_id=seller.id, status="paid",
+        price_af_coins=Decimal("50"), frozen_amount=Decimal("50"),
+        purchased_frozen_amount=Decimal("50"), earned_frozen_amount=Decimal("0"),
+        seller_payout=Decimal("35"), platform_commission=Decimal("15"),
+        delivery_details_submitted_at=datetime.now(UTC),
+        seller_response_deadline=datetime.now(UTC) + timedelta(hours=24),
+    )
+    first.delivery_details_submitted_at = datetime.now(UTC)
+    first.seller_response_deadline = datetime.now(UTC) + timedelta(hours=24)
+    conversation.deal_id = second.id
+    session = TimeoutSession([conversation, None, first], users={buyer.id: buyer, seller.id: seller})
+
+    await send_conversation_message(
+        session, seller, conversation.id, "Ответ по первой машине", uuid.uuid4(), first.id
+    )
+
+    assert first.seller_responded_at is not None
+    assert second.seller_responded_at is None
+    message = next(item for item in session.added if isinstance(item, ConversationMessage))
+    assert message.deal_id == first.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["transfer_in_progress", "completed", "cancelled", "disputed"])
+async def test_terminal_transfer_and_disputed_deals_are_never_timeout_refunded(status):
+    _buyer, _seller, _listing, _conversation, deal = fixture()
+    deal.status = status
+    deal.delivery_details_submitted_at = datetime.now(UTC) - timedelta(hours=25)
+    deal.seller_response_deadline = datetime.now(UTC) - timedelta(hours=1)
+    session = TimeoutSession([deal])
+
+    assert await auto_cancel_unanswered_deal(session, deal.id) is None
+    assert not [item for item in session.added if isinstance(item, WalletTransaction)]
+
+
+@pytest.mark.asyncio
+async def test_old_timeout_job_cannot_touch_a_new_reservation_after_refund():
+    _buyer, _seller, listing, _conversation, old_deal = fixture()
+    old_deal.status = "cancelled"
+    old_deal.seller_timeout_processed_at = datetime.now(UTC)
+    new_deal_id = uuid.uuid4()
+    listing.status = "reserved"
+    listing.reserved_by_deal_id = new_deal_id
+
+    assert await auto_cancel_unanswered_deal(TimeoutSession([old_deal]), old_deal.id) is None
+    assert listing.status == "reserved"
+    assert listing.reserved_by_deal_id == new_deal_id
+
+
+class LockedTransaction:
+    def __init__(self, lock):
+        self.lock = lock
+
+    async def __aenter__(self):
+        await self.lock.acquire()
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        self.lock.release()
+        return False
+
+
+class ConcurrentRefundState:
+    def __init__(self, buyer, seller, listing, deal, wallet):
+        self.buyer = buyer
+        self.seller = seller
+        self.listing = listing
+        self.deal = deal
+        self.wallet = wallet
+        self.lock = asyncio.Lock()
+        self.added = []
+
+
+class ConcurrentRefundSession:
+    def __init__(self, state):
+        self.state = state
+
+    def begin(self):
+        return LockedTransaction(self.state.lock)
+
+    async def scalar(self, query):
+        entity = query.column_descriptions[0].get("entity")
+        return {Deal: self.state.deal, Listing: self.state.listing, Wallet: self.state.wallet}.get(entity)
+
+    async def scalars(self, _query):
+        return Rows([])
+
+    async def get(self, model, key):
+        if model is User and key == self.state.buyer.id:
+            return self.state.buyer
+        if model is User and key == self.state.seller.id:
+            return self.state.seller
+        return None
+
+    def add(self, value):
+        self.state.added.append(value)
+
+
+class SellerRaceSession(ConcurrentRefundSession):
+    def __init__(self, state, conversation, entered, proceed):
+        super().__init__(state)
+        self.conversation = conversation
+        self.entered = entered
+        self.proceed = proceed
+        self.paused = False
+
+    async def scalar(self, query):
+        entity = query.column_descriptions[0].get("entity")
+        if entity is Conversation:
+            if not self.paused:
+                self.paused = True
+                self.entered.set()
+                await self.proceed.wait()
+            return self.conversation
+        if entity is ConversationMessage:
+            return None
+        return await super().scalar(query)
+
+    async def get(self, model, key):
+        return await super().get(model, key)
+
+    async def flush(self):
+        return None
+
+
+class WorkerRaceSession(ConcurrentRefundSession):
+    def __init__(self, state, entered, proceed):
+        super().__init__(state)
+        self.entered = entered
+        self.proceed = proceed
+        self.paused = False
+
+    async def scalar(self, query):
+        entity = query.column_descriptions[0].get("entity")
+        if entity is Deal and not self.paused:
+            self.paused = True
+            self.entered.set()
+            await self.proceed.wait()
+        return await super().scalar(query)
+
+
+@pytest.mark.asyncio
+async def test_two_concurrent_workers_release_the_hold_exactly_once():
+    buyer, seller, listing, _conversation, deal = fixture()
+    now = datetime.now(UTC)
+    deal.delivery_details_submitted_at = now - timedelta(hours=25)
+    deal.seller_response_deadline = now - timedelta(seconds=1)
+    wallet = Wallet(
+        user_id=buyer.id, purchased_balance=Decimal("0"), earned_balance=Decimal("0"),
+        purchased_frozen_balance=Decimal("100"), earned_frozen_balance=Decimal("0"),
+        total_earned=Decimal("0"), version=0,
+    )
+    state = ConcurrentRefundState(buyer, seller, listing, deal, wallet)
+
+    results = await asyncio.gather(
+        auto_cancel_unanswered_deal(ConcurrentRefundSession(state), deal.id, now=now),
+        auto_cancel_unanswered_deal(ConcurrentRefundSession(state), deal.id, now=now),
+    )
+
+    assert sum(result is not None for result in results) == 1
+    refunds = [item for item in state.added if isinstance(item, WalletTransaction)]
+    assert len(refunds) == 1
+    assert wallet.available_balance == Decimal("100.00")
+    assert wallet.frozen_balance == Decimal("0.00")
+
+
+def response_race_fixture():
+    buyer, seller, listing, conversation, deal = fixture()
+    deadline = datetime.now(UTC) - timedelta(milliseconds=1)
+    deal.delivery_details_submitted_at = deadline - timedelta(hours=24)
+    deal.seller_response_deadline = deadline
+    conversation.deal_id = deal.id
+    wallet = Wallet(
+        user_id=buyer.id, purchased_balance=Decimal("0"), earned_balance=Decimal("0"),
+        purchased_frozen_balance=Decimal("100"), earned_frozen_balance=Decimal("0"),
+        total_earned=Decimal("0"), version=0,
+    )
+    return buyer, seller, listing, conversation, deal, wallet
+
+
+@pytest.mark.asyncio
+async def test_seller_lock_before_deadline_wins_race_and_prevents_refund():
+    buyer, seller, listing, conversation, deal, wallet = response_race_fixture()
+    # The seller request reached the server before expiry and holds the same Deal row.
+    deal.seller_response_deadline = datetime.now(UTC) + timedelta(seconds=1)
+    state = ConcurrentRefundState(buyer, seller, listing, deal, wallet)
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    seller_task = asyncio.create_task(send_conversation_message(
+        SellerRaceSession(state, conversation, entered, proceed),
+        seller, conversation.id, "Отвечаю вовремя", uuid.uuid4(), deal.id,
+    ))
+    await entered.wait()
+    worker_task = asyncio.create_task(auto_cancel_unanswered_deal(
+        ConcurrentRefundSession(state), deal.id, now=deal.seller_response_deadline + timedelta(seconds=1)
+    ))
+    proceed.set()
+    await seller_task
+    assert await worker_task is None
+    assert deal.seller_responded_at is not None
+    assert wallet.frozen_balance == Decimal("100")
+
+
+@pytest.mark.asyncio
+async def test_worker_lock_after_deadline_wins_race_and_late_seller_gets_409():
+    buyer, seller, listing, conversation, deal, wallet = response_race_fixture()
+    state = ConcurrentRefundState(buyer, seller, listing, deal, wallet)
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    worker_task = asyncio.create_task(auto_cancel_unanswered_deal(
+        WorkerRaceSession(state, entered, proceed), deal.id, now=datetime.now(UTC)
+    ))
+    await entered.wait()
+    seller_proceed = asyncio.Event()
+    seller_proceed.set()
+    seller_task = asyncio.create_task(send_conversation_message(
+        SellerRaceSession(state, conversation, asyncio.Event(), seller_proceed),
+        seller, conversation.id, "Слишком поздно", uuid.uuid4(), deal.id,
+    ))
+    proceed.set()
+    assert await worker_task is not None
+    with pytest.raises(HTTPException) as error:
+        await asyncio.wait_for(seller_task, timeout=1)
+    assert error.value.status_code == 409
+    assert deal.status == "cancelled"
+    assert wallet.available_balance == Decimal("100.00")
 
 
 @pytest.mark.asyncio
@@ -627,7 +967,22 @@ def test_timeout_migration_is_additive_and_worker_is_database_backed():
     routes_source = (root / "app" / "routes.py").read_text(encoding="utf-8")
     assert "seller_response_deadline" in migration
     assert "conversation_messages" in migration
-    assert "deal_messages" in migration
     assert "drop_table" not in migration
+    assert "Existing deals deliberately keep NULL deadlines" in migration
+    assert "UPDATE deals" not in migration
     assert "Deal.seller_response_deadline <= now" in routes_source
     assert "sleep(86400)" not in routes_source
+    assert ".limit(100)" in routes_source
+    assert "while True:" in routes_source
+    assert "seller_timeout_notification_claimed_at < stale_cutoff" in routes_source
+    assert "seller_purchase_notification_claimed_at < stale_cutoff" in routes_source
+
+
+def test_timeout_refund_has_database_and_state_idempotency_guards():
+    external_reference = WalletTransaction.__table__.c.external_reference
+    assert external_reference.unique is True
+    source = (Path(__file__).parents[1] / "app" / "services.py").read_text(encoding="utf-8")
+    timeout_service = source[source.index("async def auto_cancel_unanswered_deal"):source.index("async def unpublish_seller_active_listings")]
+    assert ".with_for_update()" in timeout_service
+    assert "seller_timeout_processed_at is not None" in timeout_service
+    assert 'external_reference=f"seller-timeout-refund:{deal.id}"' in timeout_service
