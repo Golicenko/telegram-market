@@ -46,6 +46,6 @@ test("mobile conversation owns the full viewport even with the keyboard open", (
   assert.match(css, /\.chat-view\{display:flex;flex-direction:column;min-height:0/);
   assert.match(css, /\.messages\{flex:1 1 auto;min-height:0/);
   assert.match(css, /\.chat-compose\{margin-top:auto/);
-  assert.match(app, /chatInputFocused/);
+  assert.match(app, /chatFieldFocused/);
   assert.match(app, /keyboardOpen \? visualHeight : fullHeight/);
 });

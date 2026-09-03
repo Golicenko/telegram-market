@@ -328,7 +328,9 @@ class Deal(Base, TimestampMixin):
     seller_payout: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     platform_commission: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     buyer_game_id: Mapped[str | None] = mapped_column(String(128))
+    buyer_server: Mapped[str | None] = mapped_column(String(128))
     preferred_delivery_time: Mapped[str | None] = mapped_column(String(64))
+    delivery_timezone: Mapped[str | None] = mapped_column(String(64))
     seller_purchase_notification_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="pending", server_default="pending", index=True
     )
