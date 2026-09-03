@@ -149,6 +149,8 @@ class DealOut(ORMModel):
     buyer_server: str | None
     preferred_delivery_time: str | None
     delivery_timezone: str | None
+    seller_response_deadline: datetime | None
+    seller_responded_at: datetime | None
     transfer_started_at: datetime | None
     completed_at: datetime | None
     created_at: datetime
@@ -187,6 +189,7 @@ class MessageCreate(BaseModel):
 
 class ConversationMessageCreate(MessageCreate):
     client_message_id: uuid.UUID
+    deal_id: uuid.UUID | None = None
 
 
 class MessageOut(ORMModel):
@@ -424,6 +427,7 @@ class TrainingPurchaseStatusUpdate(BaseModel):
 class ConversationMessageOut(ORMModel):
     id: uuid.UUID
     conversation_id: uuid.UUID
+    deal_id: uuid.UUID | None = None
     sender_id: uuid.UUID
     body: str
     message_type: str

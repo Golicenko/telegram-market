@@ -98,6 +98,10 @@ SELLER_PAYOUT_PERCENT=70
 STAR_TOPUP_MIN=100
 STAR_TOPUP_MAX=1000
 TRAINING_DELIVERY_COOLDOWN_SECONDS=300
+SELLER_RESPONSE_TIMEOUT_SECONDS=86400
+DEAL_NOTIFICATION_CLAIM_TIMEOUT_SECONDS=120
+DEAL_NOTIFICATION_RETRY_BASE_SECONDS=30
+DEAL_NOTIFICATION_MAX_ATTEMPTS=5
 ```
 
 Если имя PostgreSQL-сервиса отличается от `Postgres`, исправьте ссылку `${{<имя сервиса>.DATABASE_URL}}`. Railway предоставляет `RAILWAY_PUBLIC_DOMAIN`; приложение регистрирует `https://<domain>/api/telegram/webhook` автоматически. Можно явно задать `PUBLIC_BASE_URL`.
@@ -190,6 +194,7 @@ TRAINING_DELIVERY_COOLDOWN_SECONDS=300
 - `GET /api/notifications`, `POST /api/notifications/{id}/read`
 - `GET|PUT|DELETE /api/admin/advertisement`, `POST /api/admin/advertisement/upload`
 - `GET /api/admin/users`, `GET /api/admin/users/{id}`, `POST /api/admin/users/{id}/{block|unblock}`
+- `GET /api/admin/users/{id}/active-listings-count`, `POST /api/admin/users/{id}/unpublish-active-listings`
 - `GET /api/admin/listings`, `POST /api/admin/listings/{id}/{promote|publish|unpublish}`
 - `GET /api/admin/deals`, `POST /api/admin/deals/{id}/resolve`
 - `GET /api/admin/withdrawals`, `POST /api/admin/withdrawals/{id}/{approve|paid|reject}`
@@ -238,6 +243,7 @@ TRAINING_DELIVERY_COOLDOWN_SECONDS=300
 - Покупка переводит AF Coins под защиту, блокирует объявление, создаёт сделку и постоянный внутренний диалог.
 - На обычных и уникальных карточках доступна одинаковая серверная покупка. При недостатке баланса интерфейс показывает точную недостающую сумму и выставляет привязанный к объявлению XTR invoice; после `successful_payment` backend автоматически пытается завершить ту же покупку. Если объявление уже занял другой покупатель, начисленные AF Coins остаются на балансе.
 - Сделка поддерживает статусы, торг, сообщения, отмену, спор, подтверждение через пять минут и расчёт продавцу 70% / платформе 30%.
+- Сразу после успешного серверного сохранения данных передачи backend сохраняет 24-часовой deadline независимо от Telegram. Уведомление продавца доставляется отдельной очередью с PostgreSQL-состоянием, ограниченными retry и восстановлением прерванного `sending`. Если продавец не написал по конкретной сделке и не совершил действие по ней, worker атомарно отменяет сделку и один раз возвращает покупателю 100% защищённых AF Coins. Администратор получает решение о ручном снятии активных объявлений продавца; записи и финансовая история не удаляются.
 - Профиль показывает объявления, покупки, активные сделки, диалоги и неизменяемую историю кошелька.
 - Заявка на ручной вывод принимает только заработанные AF Coins и защищает их от повторной траты; администратор может approve/paid/reject с обязательной причиной отказа.
 - Telegram `initData` проверяется по HMAC на сервере; роли нельзя подменить через CSS или JavaScript.

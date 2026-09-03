@@ -58,6 +58,7 @@ def test_message_idempotency_is_enforced_by_database():
     assert [column.name for column in constraint.columns] == [
         "conversation_id", "sender_id", "client_message_id"
     ]
+    assert "deal_id" in ConversationMessage.__table__.columns
 
 
 def test_client_message_id_is_required_and_long_messages_are_supported():
@@ -140,6 +141,8 @@ def test_frontend_exposes_deal_chat_and_removes_model_filter():
     assert "overflow-x: hidden" in styles
     assert "--chat-viewport-height" in styles
     assert "visualViewport" in script
+    assert "deal_id: dealId" in script
+    assert "openDealConversation(message.deal_id)" in script
 
 
 class EmptyScalarResult:

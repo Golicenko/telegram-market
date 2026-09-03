@@ -25,6 +25,7 @@ from .bot import (
     create_star_invoice_link,
     send_deal_support_case_notification,
     send_deal_purchase_notification,
+    send_inactive_seller_admin_notification,
     send_deal_transfer_reminder,
     send_personal_training_order_notification,
     send_bot_notification,
@@ -105,6 +106,7 @@ from .schemas import (
 )
 from .services import (
     adjust_balance,
+    auto_cancel_unanswered_deal,
     cancel_deal,
     cancel_withdrawal,
     checkout_cart,
@@ -146,6 +148,7 @@ from .services import (
     update_training_product,
     update_training_material,
     update_training_purchase_status,
+    unpublish_seller_active_listings,
     purchase_training_product,
     set_training_product_state,
     validate_star_pre_checkout,
@@ -553,6 +556,13 @@ async def notify_personal_training_admin(purchase_id: uuid.UUID) -> None:
         await session.commit()
 
 
+def deal_notification_retry_at(attempts: int, *, now: datetime | None = None) -> datetime:
+    current_time = now or datetime.now(UTC)
+    base = get_settings().deal_notification_retry_base_seconds
+    delay = min(3600, base * (2 ** min(max(attempts - 1, 0), 7)))
+    return current_time + timedelta(seconds=delay)
+
+
 async def notify_deal_purchase_seller(deal_id: uuid.UUID) -> None:
     """Claim one deal notification durably before touching Telegram."""
     telegram_id = None
@@ -560,12 +570,23 @@ async def notify_deal_purchase_seller(deal_id: uuid.UUID) -> None:
     async with SessionLocal() as session:
         async with session.begin():
             deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
-            if not deal or deal.seller_purchase_notification_status != "pending":
+            now = datetime.now(UTC)
+            if (
+                not deal
+                or deal.seller_purchase_notification_status not in {"pending", "failed"}
+                or int(deal.seller_purchase_notification_attempts or 0) >= get_settings().deal_notification_max_attempts
+                or (
+                    deal.seller_purchase_notification_next_attempt_at
+                    and deal.seller_purchase_notification_next_attempt_at > now
+                )
+            ):
                 return
             if not (deal.buyer_game_id and deal.buyer_server and deal.preferred_delivery_time and deal.delivery_timezone):
                 return
             deal.seller_purchase_notification_status = "sending"
-            deal.seller_purchase_notification_claimed_at = datetime.now(UTC)
+            deal.seller_purchase_notification_claimed_at = now
+            deal.seller_purchase_notification_attempts = int(deal.seller_purchase_notification_attempts or 0) + 1
+            deal.seller_purchase_notification_next_attempt_at = None
             seller = await session.get(User, deal.seller_id)
             buyer = await session.get(User, deal.buyer_id)
             photo_url = await session.scalar(
@@ -584,6 +605,9 @@ async def notify_deal_purchase_seller(deal_id: uuid.UUID) -> None:
             else:
                 deal.seller_purchase_notification_status = "failed"
                 deal.seller_purchase_notification_error = "Продавец не запускал бота"
+                deal.seller_purchase_notification_next_attempt_at = deal_notification_retry_at(
+                    deal.seller_purchase_notification_attempts, now=now
+                )
 
     if telegram_id is None:
         return
@@ -593,19 +617,229 @@ async def notify_deal_purchase_seller(deal_id: uuid.UUID) -> None:
             deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
             if not deal or deal.seller_purchase_notification_status != "sending":
                 return
+            sent_at = datetime.now(UTC)
             deal.seller_purchase_notification_status = "sent" if sent else "failed"
-            deal.seller_purchase_notification_sent_at = datetime.now(UTC) if sent else None
+            deal.seller_purchase_notification_sent_at = sent_at if sent else None
             deal.seller_purchase_notification_error = None if sent else "Telegram не принял уведомление"
+            deal.seller_purchase_notification_next_attempt_at = (
+                None if sent else deal_notification_retry_at(deal.seller_purchase_notification_attempts, now=sent_at)
+            )
+
+
+async def notify_seller_timeout_cancellation(deal_id: uuid.UUID) -> None:
+    """Send each timeout notice at most once after an atomic refund."""
+    buyer_telegram_id: int | None = None
+    seller_telegram_id: int | None = None
+    seller_details: dict | None = None
+    administrator_ids: set[int] = set()
+    async with SessionLocal() as session:
+        async with session.begin():
+            deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+            now = datetime.now(UTC)
+            if (
+                not deal
+                or deal.seller_timeout_notification_status not in {"pending", "failed"}
+                or int(deal.seller_timeout_notification_attempts or 0) >= get_settings().deal_notification_max_attempts
+                or (
+                    deal.seller_timeout_notification_next_attempt_at
+                    and deal.seller_timeout_notification_next_attempt_at > now
+                )
+            ):
+                return
+            deal.seller_timeout_notification_status = "sending"
+            deal.seller_timeout_notification_claimed_at = now
+            deal.seller_timeout_notification_attempts = int(deal.seller_timeout_notification_attempts or 0) + 1
+            deal.seller_timeout_notification_next_attempt_at = None
+            buyer = await session.get(User, deal.buyer_id)
+            seller = await session.get(User, deal.seller_id)
+            administrators = list((await session.scalars(
+                select(User).where(User.role == "admin", User.bot_started.is_(True))
+            )).all())
+            if buyer and buyer.bot_started:
+                buyer_telegram_id = buyer.telegram_id
+            if seller and seller.bot_started:
+                seller_telegram_id = seller.telegram_id
+            administrator_ids.update(item.telegram_id for item in administrators)
+            configured_admin_id = get_settings().admin_id
+            if configured_admin_id:
+                administrator_ids.add(configured_admin_id)
+            if seller:
+                seller_details = {
+                    "seller_id": str(seller.id),
+                    "seller_name": " ".join(filter(None, [seller.first_name, seller.last_name])) or "Продавец",
+                    "seller_telegram_id": seller.telegram_id,
+                    "deal_id": str(deal.id),
+                }
+
+    results: list[bool] = []
+    if buyer_telegram_id is not None:
+        results.append(await send_bot_notification(
+            buyer_telegram_id,
+            "↩️ Сделка отменена\n\nПродавец не ответил в течение 24 часов.\n\nВсе средства возвращены на ваш баланс.",
+        ))
+    if seller_telegram_id is not None:
+        results.append(await send_bot_notification(
+            seller_telegram_id,
+            "⚠️ Сделка отменена\n\nВы не ответили покупателю в течение 24 часов.\n\n"
+            "Сделка была автоматически отменена, а деньги возвращены покупателю.\n\n"
+            "Ваши активные объявления могут быть сняты с публикации администратором.",
+        ))
+    if seller_details:
+        for telegram_id in administrator_ids:
+            results.append(await send_inactive_seller_admin_notification(telegram_id, **seller_details))
+
+    delivered = all(results) if results else True
+    async with SessionLocal() as session:
+        async with session.begin():
+            deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+            if not deal or deal.seller_timeout_notification_status != "sending":
+                return
+            deal.seller_timeout_notification_status = "sent" if delivered else "failed"
+            deal.seller_timeout_notification_sent_at = datetime.now(UTC) if delivered else None
+            deal.seller_timeout_notification_error = None if delivered else "Telegram не принял одно или несколько уведомлений"
+            deal.seller_timeout_notification_next_attempt_at = (
+                None
+                if delivered
+                else deal_notification_retry_at(deal.seller_timeout_notification_attempts)
+            )
+
+
+async def recover_seller_response_timeouts() -> None:
+    """Resume deadlines from PostgreSQL after deploys and process due refunds."""
+    now = datetime.now(UTC)
+    stale_cutoff = now - timedelta(seconds=get_settings().deal_notification_claim_timeout_seconds)
+    async with SessionLocal() as session:
+        async with session.begin():
+            await session.execute(
+                update(Deal)
+                .where(
+                    Deal.seller_timeout_notification_status == "sending",
+                    or_(
+                        Deal.seller_timeout_notification_claimed_at.is_(None),
+                        Deal.seller_timeout_notification_claimed_at < stale_cutoff,
+                    ),
+                )
+                .values(
+                    seller_timeout_notification_status="pending",
+                    seller_timeout_notification_next_attempt_at=now,
+                    seller_timeout_notification_error="Предыдущая отправка прервана перезапуском сервиса",
+                )
+            )
+    async with SessionLocal() as session:
+        due_ids = list((await session.scalars(
+            select(Deal.id)
+            .where(
+                Deal.status.in_(("paid", "seller_contacted")),
+                Deal.seller_response_deadline.is_not(None),
+                Deal.seller_response_deadline <= now,
+                Deal.seller_responded_at.is_(None),
+                Deal.seller_timeout_processed_at.is_(None),
+            )
+            .order_by(Deal.seller_response_deadline)
+            .limit(100)
+        )).all())
+    for deal_id in due_ids:
+        try:
+            async with SessionLocal() as session:
+                result = await auto_cancel_unanswered_deal(session, deal_id, now=now)
+            if result:
+                await notify_seller_timeout_cancellation(deal_id)
+        except Exception as exc:
+            deal_notification_logger.error(
+                "seller_response_timeout_deal_failed deal_id=%s error_type=%s",
+                deal_id,
+                type(exc).__name__,
+            )
+
+    async with SessionLocal() as session:
+        pending_notice_ids = list((await session.scalars(
+            select(Deal.id)
+            .where(
+                Deal.seller_timeout_notification_status.in_(("pending", "failed")),
+                Deal.seller_timeout_notification_attempts < get_settings().deal_notification_max_attempts,
+                or_(
+                    Deal.seller_timeout_notification_next_attempt_at.is_(None),
+                    Deal.seller_timeout_notification_next_attempt_at <= now,
+                ),
+            )
+            .order_by(Deal.seller_timeout_processed_at)
+            .limit(100)
+        )).all())
+    for deal_id in pending_notice_ids:
+        try:
+            await notify_seller_timeout_cancellation(deal_id)
+        except Exception as exc:
+            deal_notification_logger.error(
+                "seller_timeout_notification_failed deal_id=%s error_type=%s",
+                deal_id,
+                type(exc).__name__,
+            )
+
+
+async def run_seller_response_timeout_worker() -> None:
+    """Poll durable deadlines instead of relying on an in-process 24-hour sleep."""
+    poll_seconds = get_settings().deal_notification_poll_seconds
+    while True:
+        for job_name, recovery in (
+            ("seller_response_timeout", recover_seller_response_timeouts),
+            ("seller_purchase_notification", recover_deal_purchase_notifications),
+        ):
+            try:
+                await recovery()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                deal_notification_logger.error(
+                    "deal_background_job_failed job=%s error_type=%s",
+                    job_name,
+                    type(exc).__name__,
+                )
+        await asyncio.sleep(poll_seconds)
 
 
 async def recover_deal_purchase_notifications() -> None:
-    """Send only notifications that were never claimed before a restart."""
+    """Recover interrupted/retryable seller notifications from PostgreSQL."""
+    now = datetime.now(UTC)
+    stale_cutoff = now - timedelta(seconds=get_settings().deal_notification_claim_timeout_seconds)
+    async with SessionLocal() as session:
+        async with session.begin():
+            await session.execute(
+                update(Deal)
+                .where(
+                    Deal.seller_purchase_notification_status == "sending",
+                    or_(
+                        Deal.seller_purchase_notification_claimed_at.is_(None),
+                        Deal.seller_purchase_notification_claimed_at < stale_cutoff,
+                    ),
+                )
+                .values(
+                    seller_purchase_notification_status="pending",
+                    seller_purchase_notification_next_attempt_at=now,
+                    seller_purchase_notification_error="Предыдущая отправка прервана перезапуском сервиса",
+                )
+            )
     async with SessionLocal() as session:
         pending_ids = list((await session.scalars(
-            select(Deal.id).where(Deal.seller_purchase_notification_status == "pending")
+            select(Deal.id).where(
+                Deal.status.in_(("paid", "seller_contacted")),
+                Deal.delivery_details_submitted_at.is_not(None),
+                Deal.seller_purchase_notification_status.in_(("pending", "failed")),
+                Deal.seller_purchase_notification_attempts < get_settings().deal_notification_max_attempts,
+                or_(
+                    Deal.seller_purchase_notification_next_attempt_at.is_(None),
+                    Deal.seller_purchase_notification_next_attempt_at <= now,
+                ),
+            ).order_by(Deal.seller_purchase_notification_next_attempt_at).limit(100)
         )).all())
     for deal_id in pending_ids:
-        await notify_deal_purchase_seller(deal_id)
+        try:
+            await notify_deal_purchase_seller(deal_id)
+        except Exception as exc:
+            deal_notification_logger.error(
+                "seller_purchase_notification_failed deal_id=%s error_type=%s",
+                deal_id,
+                type(exc).__name__,
+            )
 
 
 def deal_transfer_reminder_is_relevant(deal: Deal) -> bool:
@@ -2139,7 +2373,9 @@ async def add_conversation_message(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    message, recipient, created = await send_conversation_message(session, user, conversation_id, payload.body, payload.client_message_id)
+    message, recipient, created = await send_conversation_message(
+        session, user, conversation_id, payload.body, payload.client_message_id, payload.deal_id
+    )
     if created and recipient and recipient.bot_started:
         background_tasks.add_task(send_bot_notification, recipient.telegram_id, "Новое сообщение в AUTOFLOW MARKET. Откройте приложение, чтобы ответить")
     return message
@@ -2155,7 +2391,7 @@ async def add_first_conversation_message(
 ):
     conversation, _, _ = await get_or_create_conversation(session, user, listing_id, create=True)
     message, recipient, created = await send_conversation_message(
-        session, user, conversation.id, payload.body, payload.client_message_id
+        session, user, conversation.id, payload.body, payload.client_message_id, payload.deal_id
     )
     if created and recipient and recipient.bot_started:
         background_tasks.add_task(send_bot_notification, recipient.telegram_id, "Новое сообщение в AUTOFLOW MARKET. Откройте приложение, чтобы ответить")
@@ -2348,7 +2584,21 @@ async def send_message(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    deal = await ensure_deal_participant(session, deal_id, user)
+    deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+    if not deal or user.id not in {deal.buyer_id, deal.seller_id}:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    now = datetime.now(UTC)
+    if user.id == deal.seller_id and deal.seller_timeout_processed_at is not None:
+        raise HTTPException(status_code=409, detail="Сделка уже автоматически отменена из-за истечения срока ответа")
+    if (
+        user.id == deal.seller_id
+        and deal.status in {"paid", "seller_contacted"}
+        and deal.delivery_details_submitted_at
+        and not deal.seller_responded_at
+    ):
+        if deal.seller_response_deadline and now >= deal.seller_response_deadline:
+            raise HTTPException(status_code=409, detail="Срок ответа истёк. Сделка ожидает автоматической отмены")
+        deal.seller_responded_at = now
     message = DealMessage(deal_id=deal.id, sender_id=user.id, body=payload.body.strip())
     session.add(message)
     recipient_id = deal.seller_id if user.id == deal.buyer_id else deal.buyer_id
@@ -2590,6 +2840,30 @@ async def admin_user_details(user_id: uuid.UUID, admin: User = Depends(require_a
     listings = list((await session.scalars(select(Listing).where(Listing.seller_id == user.id).order_by(Listing.created_at.desc()))).all())
     deals = list((await session.scalars(select(Deal).where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id)).order_by(Deal.created_at.desc()))).all())
     return {"user": UserOut.model_validate(user), "wallet": WalletOut.model_validate(wallet_value), "listings": [await listing_out(session, item) for item in listings], "deals": [DealOut.model_validate(item) for item in deals]}
+
+
+@router.get("/admin/users/{user_id}/active-listings-count")
+async def admin_active_listings_count(
+    user_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    if not await session.get(User, user_id):
+        raise HTTPException(status_code=404, detail="User not found")
+    count = int(await session.scalar(
+        select(func.count(Listing.id)).where(Listing.seller_id == user_id, Listing.status == "active")
+    ) or 0)
+    return {"count": count}
+
+
+@router.post("/admin/users/{user_id}/unpublish-active-listings")
+async def admin_unpublish_active_listings(
+    user_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    count = await unpublish_seller_active_listings(session, admin, user_id)
+    return {"ok": True, "count": count}
 
 
 @router.post("/admin/users/{user_id}/{action}")
