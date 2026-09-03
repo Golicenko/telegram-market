@@ -26,6 +26,7 @@
     trainingUploadRows: new Map(),
     trainingInboxUploads: [],
     selectedTrainingInboxUpload: null,
+    pendingTrainingPublish: null,
     pendingTrainingRequestId: null,
     pendingTrainingCoverUrl: null,
     trainingCoverObjectUrl: null,
@@ -2741,6 +2742,18 @@ async function hideCurrentConversation() {
     let retryNeeded = false;
     try {
       const id = form.get("product_id"); const wasExisting = Boolean(id); const existing = id ? [...state.training, ...state.adminTraining].find((item) => String(item.id) === String(id)) : null;
+      if (state.pendingTrainingPublish && String(state.pendingTrainingPublish.productId) === String(id)) {
+        button.textContent = "Повторяем публикацию…";
+        const finalized = await finalizeTrainingPublish(id, state.pendingTrainingPublish.materialCount);
+        state.pendingTrainingPublish = null;
+        const upsertFinalized = (items) => [finalized, ...items.filter((item) => item.id !== finalized.id)];
+        state.training = upsertFinalized(state.training);
+        state.adminTraining = [{ purchase_count: 0, revenue_af_coins: 0, archived: false, ...existing, ...finalized }, ...state.adminTraining.filter((item) => item.id !== finalized.id)];
+        resetTrainingEditor(formElement);
+        renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training");
+        notify("✅ Обучение опубликовано");
+        return;
+      }
       let coverUrl = state.pendingTrainingCoverUrl || existing?.cover_url || null; const cover = form.get("cover");
       if (cover?.size && !state.pendingTrainingCoverUrl) {
         button.textContent = "Загружаем обложку…";
@@ -2755,7 +2768,7 @@ async function hideCurrentConversation() {
       if (automatic && wantsPublished && !existingMaterials.length && !hasAutomaticMaterialInput(formElement)) {
         throw new Error("Для публикации автовыдачи добавьте хотя бы один материал");
       }
-      const publishAfterMaterials = automatic && wantsPublished && !existingMaterials.length;
+      const publishAfterMaterials = automatic && wantsPublished && !existing?.published;
       if (!id && !state.pendingTrainingRequestId) state.pendingTrainingRequestId = createRequestId();
       const payload = { client_request_id: id ? undefined : state.pendingTrainingRequestId, title: form.get("title"), short_description: form.get("short_description"), full_description: form.get("full_description"), cover_url: coverUrl, promo_video_url: form.get("promo_video_url") || null, product_type: form.get("product_type"), availability: form.get("availability"), price_af_coins: Number(form.get("price_af_coins")), published: publishAfterMaterials ? false : wantsPublished, pinned: form.get("pinned") === "on" };
       button.textContent = wasExisting ? "Сохраняем изменения…" : "Создаём обучение…";
@@ -2767,13 +2780,17 @@ async function hideCurrentConversation() {
       state.adminTraining = [{ purchase_count: 0, revenue_af_coins: 0, archived: false, ...previousAdmin, ...saved }, ...state.adminTraining.filter((item) => item.id !== saved.id)];
       button.textContent = "Сохраняем материалы…";
       const materialResult = await saveInitialAutomaticMaterials(saved.id, formElement, existingMaterials.length);
-      if (publishAfterMaterials && materialResult.savedCount && !materialResult.failures.length) {
+      const materialCount = existingMaterials.length + materialResult.savedCount;
+      if (publishAfterMaterials && materialCount && !materialResult.failures.length) {
         try {
           button.textContent = "Публикуем обучение…";
-          saved = await api.request(`/admin/training/${saved.id}`, { method: "PATCH", body: JSON.stringify({ published: true }) });
+          saved = await finalizeTrainingPublish(saved.id, materialCount);
+          state.pendingTrainingPublish = null;
         } catch (error) {
-          materialResult.failures.push(`Материалы сохранены, но обучение осталось скрытым: ${error.message}`);
-          reportClientError("training_publish_after_materials", error);
+          state.pendingTrainingPublish = { productId: saved.id, materialCount };
+          const code = reportClientError("training_publish_after_materials", error);
+          const businessMessage = Number(error.status) > 0 && error.message && !/ошибка запроса|request failed/i.test(error.message) ? error.message : `Не удалось опубликовать обучение. Код: ${code}`;
+          materialResult.failures.push(businessMessage);
         }
       } else if (publishAfterMaterials && !materialResult.savedCount) {
         materialResult.failures.push("Обучение оставлено скрытым: ни один материал не был сохранён");
@@ -2792,9 +2809,29 @@ async function hideCurrentConversation() {
       } catch (refreshError) {
         reportClientError("training_refresh_after_save", refreshError);
       }
-      formElement.reset(); state.trainingUploadCache.clear(); state.trainingUploadRows.clear(); state.trainingInboxUploads = []; state.selectedTrainingInboxUpload = null; state.pendingTrainingCoverUrl = null; state.pendingTrainingRequestId = null; elements.trainingUploadStatus?.replaceChildren(); elements.trainingInboxUploads?.replaceChildren(); toggleAutomaticMaterialFields(); renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training");
+      resetTrainingEditor(formElement); renderTraining(); renderAdminTraining(); await navigate("admin"); switchAdminTab("training");
       notify(saved.published ? "✅ Обучение опубликовано" : wasExisting ? "✅ Обучение успешно изменено" : "✅ Обучение успешно создано");
-    } catch (error) { retryNeeded = true; notify(error.message); } finally { button.disabled = false; button.textContent = retryNeeded ? "Повторить загрузку" : defaultButtonText; }
+    } catch (error) {
+      retryNeeded = true;
+      if (state.pendingTrainingPublish) {
+        const code = reportClientError("training_publish_after_materials", error);
+        notify(Number(error.status) > 0 && error.message && !/ошибка запроса|request failed/i.test(error.message) ? error.message : `Не удалось опубликовать обучение. Код: ${code}`);
+      } else notify(error.message);
+    } finally { button.disabled = false; button.textContent = state.pendingTrainingPublish ? "Повторить публикацию" : retryNeeded ? "Повторить загрузку" : defaultButtonText; }
+  }
+
+  async function finalizeTrainingPublish(productId, materialCount) {
+    try {
+      return await api.request(`/admin/training/${productId}/state/publish`, { method: "POST", timeoutMs: 20000, retries: 0 });
+    } catch (error) {
+      error.trainingId = String(productId);
+      error.materialCount = Number(materialCount || 0);
+      throw error;
+    }
+  }
+
+  function resetTrainingEditor(formElement) {
+    formElement.reset(); state.trainingUploadCache.clear(); state.trainingUploadRows.clear(); state.trainingInboxUploads = []; state.selectedTrainingInboxUpload = null; state.pendingTrainingPublish = null; state.pendingTrainingCoverUrl = null; state.pendingTrainingRequestId = null; elements.trainingUploadStatus?.replaceChildren(); elements.trainingInboxUploads?.replaceChildren(); toggleAutomaticMaterialFields();
   }
 
   async function deleteTrainingProduct(id) {
@@ -3734,6 +3771,8 @@ async function hideCurrentConversation() {
       user_agent: String(window.navigator?.userAgent || "unknown").slice(0, 200),
       online: window.navigator?.onLine !== false,
       related_id: state.currentConversation?.deal?.id || state.currentConversation?.listing?.id || null,
+      training_id: error?.trainingId || null,
+      material_count: Number.isInteger(error?.materialCount) ? error.materialCount : null,
       duration_ms: Number.isFinite(error?.duration_ms) ? error.duration_ms : null,
       upload_stage: error?.upload_stage || null,
       file_mime: error?.file_mime || null,

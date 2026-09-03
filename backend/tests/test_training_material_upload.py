@@ -1,11 +1,15 @@
 import tempfile
 import struct
+import uuid
+from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException, UploadFile
 
 from app import routes
 from app.config import Settings
+from app.models import AdminAction, TrainingInboxUpload, TrainingMaterial, TrainingProduct, User
+from app.schemas import TrainingInboxAttachCreate
 
 
 def upload_with_size(name: str, header: bytes, size: int) -> UploadFile:
@@ -148,3 +152,58 @@ def test_telegram_inbox_enforces_two_gib_metadata_boundary_without_reading_file(
     assert routes.extract_training_inbox_video(message, 2 * 1024 * 1024 * 1024) is not None
     message["video"]["file_size"] += 1
     assert routes.extract_training_inbox_video(message, 2 * 1024 * 1024 * 1024) is None
+
+
+@pytest.mark.asyncio
+async def test_inbox_video_attach_retry_returns_the_same_material():
+    admin = User(id=uuid.uuid4(), telegram_id=123, first_name="Admin", role="admin")
+    product = TrainingProduct(
+        id=uuid.uuid4(), admin_id=admin.id, title="Автокурс", short_description="Кратко",
+        full_description="Описание", cover_url="/cover.jpg", product_type="automatic",
+        price_af_coins=Decimal("100"), availability="available", published=False, pinned=False,
+    )
+    upload = TrainingInboxUpload(
+        id=uuid.uuid4(), admin_id=admin.id, telegram_update_id=777,
+        telegram_file_id="telegram-file-id", telegram_file_unique_id="unique-id",
+        file_name="lesson.mp4", mime_type="video/mp4", file_size=500 * 1024 * 1024,
+        duration_seconds=3600, material_type="video", metadata_json={}, status="available",
+    )
+
+    class AttachSession:
+        def __init__(self, existing=None):
+            self.values = [product, upload]
+            self.added = []
+            self.existing = existing
+
+        async def scalar(self, _query):
+            return self.values.pop(0)
+
+        def add(self, item):
+            self.added.append(item)
+
+        async def flush(self):
+            material = next(item for item in self.added if isinstance(item, TrainingMaterial))
+            material.id = material.id or uuid.uuid4()
+
+        async def commit(self):
+            return None
+
+        async def get(self, model, item_id):
+            return self.existing if model is TrainingMaterial and self.existing.id == item_id else None
+
+    first_session = AttachSession()
+    material = await routes.attach_training_inbox_upload(
+        product.id, upload.id, TrainingInboxAttachCreate(title="lesson.mp4", position=0), admin, first_session
+    )
+    assert upload.status == "attached"
+    assert upload.material_id == material.id
+    assert material.delivery_reference == "telegram-file-id"
+    assert len([item for item in first_session.added if isinstance(item, TrainingMaterial)]) == 1
+    assert any(isinstance(item, AdminAction) for item in first_session.added)
+
+    retry_session = AttachSession(existing=material)
+    same_material = await routes.attach_training_inbox_upload(
+        product.id, upload.id, TrainingInboxAttachCreate(title="lesson.mp4", position=0), admin, retry_session
+    )
+    assert same_material is material
+    assert not any(isinstance(item, TrainingMaterial) for item in retry_session.added)

@@ -162,6 +162,28 @@ async def test_automatic_training_can_be_published_after_material_is_saved():
 
 
 @pytest.mark.asyncio
+async def test_automatic_training_publish_is_idempotent_and_partial_update_keeps_fields():
+    admin = User(id=uuid.uuid4(), telegram_id=2, first_name="Admin", role="admin")
+    product = TrainingProduct(
+        id=uuid.uuid4(), admin_id=admin.id, title="Не затирать", short_description="Кратко",
+        full_description="Полностью", cover_url="/cover.jpg", product_type="automatic",
+        price_af_coins=Decimal("100"), availability="available", published=False, pinned=True,
+    )
+    first = await set_training_product_state(Session([product, uuid.uuid4()]), admin, product.id, "publish")
+    second = await set_training_product_state(Session([product, uuid.uuid4()]), admin, product.id, "publish")
+    assert first is second is product
+    assert product.published is True
+    assert product.title == "Не затирать"
+    assert product.price_af_coins == Decimal("100")
+
+    updated = await update_training_product(
+        Session([product, uuid.uuid4()]), admin, product.id, TrainingProductUpdate(published=True)
+    )
+    assert updated.title == "Не затирать"
+    assert updated.cover_url == "/cover.jpg"
+
+
+@pytest.mark.asyncio
 async def test_deleted_training_is_soft_deleted_and_excluded_from_admin_management():
     admin = User(id=uuid.uuid4(), telegram_id=2, first_name="Admin", role="admin")
     product = TrainingProduct(

@@ -117,6 +117,12 @@ test("automatic materials are persisted one by one and publication waits for a s
   assert.match(app, /formElement\.elements\.product_id\.value = saved\.id/);
   assert.match(app, /client_request_id: id \? undefined : state\.pendingTrainingRequestId/);
   assert.match(app, /Повторить загрузку/);
+  assert.match(app, /\/admin\/training\/\$\{productId\}\/state\/publish/);
+  assert.match(app, /pendingTrainingPublish/);
+  assert.match(app, /Повторить публикацию/);
+  assert.match(app, /function finalizeTrainingPublish/);
+  assert.match(app, /training_id: error\?\.trainingId/);
+  assert.match(app, /material_count: Number\.isInteger\(error\?\.materialCount\)/);
 });
 
 test("training covers use an uncropped 16:9 preview in every training surface", () => {
