@@ -2033,7 +2033,7 @@ async function hideCurrentConversation() {
     const form = document.createElement("form");
     form.className = "deal-delivery__form";
     form.innerHTML = `
-      <label>Игровой ID<input name="buyer_game_id" type="text" inputmode="numeric" maxlength="128" autocomplete="off" placeholder="12345678" required></label>
+      <label>Игровой ID<input name="buyer_game_id" type="text" inputmode="text" maxlength="128" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="AB123456" required></label>
       <label>Сервер<input name="buyer_server" type="text" maxlength="128" autocomplete="off" placeholder="Введите сервер" required></label>
       <label class="deal-delivery__time">Удобное время сегодня<input name="preferred_time" type="time" required></label>
       <small>Время указывается по МСК</small>

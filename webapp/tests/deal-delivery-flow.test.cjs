@@ -32,6 +32,15 @@ test("deal delivery form persists via the backend and has a mobile-safe layout",
   assert.match(app, /✅ Да, машина у меня/);
 });
 
+test("game id keeps letters and opens a normal mobile keyboard", () => {
+  const field = app.match(/<label>Игровой ID<input[^>]+>/)?.[0] || "";
+  assert.match(field, /type="text"/);
+  assert.match(field, /inputmode="text"/);
+  assert.doesNotMatch(field, /type="number"|inputmode="numeric"/);
+  const submitFlow = app.slice(app.indexOf("async function submitDealDeliveryDetails"), app.indexOf("async function copyBuyerGameId"));
+  assert.doesNotMatch(submitFlow, /parseInt|parseFloat|replace\([^)]*\\D/);
+});
+
 test("deep link is retained through bootstrap and authorized before exact chat opens", () => {
   assert.match(app, /const launchParams = new URLSearchParams\(window\.location\.search\)/);
   assert.match(app, /pendingDealDeepLink: launchParams\.get\("deal_id"\)/);
