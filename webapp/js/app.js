@@ -715,6 +715,9 @@ function handleClick(event) {
     state.contentUnseen = snapshot;
     renderContentBadges();
     await refreshMarketplace();
+    if (state.failedOptional.has(section)) {
+      throw new Error(section === "training" ? "Не удалось загрузить обучение" : "Не удалось загрузить уникальные машины");
+    }
     const result = await api.request(`/content/${section}/mark-seen`, {
       method: "POST",
       body: JSON.stringify({ marker: Number(snapshot?.[section]?.marker || 0) }),
