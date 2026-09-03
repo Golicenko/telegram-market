@@ -90,18 +90,22 @@ async def test_delivery_details_are_persisted_on_exact_deal_and_message_is_idemp
     session = Session(deal, listing, conversation)
 
     result = await save_deal_delivery_details(
-        session, buyer, deal.id, " 12345678 ", "scheduled", "19:00"
+        session, buyer, deal.id, " 12345678 ", " test server ", "19:00"
     )
 
     assert result.buyer_game_id == "12345678"
+    assert result.buyer_server == "test server"
     assert result.preferred_delivery_time == "Сегодня, 19:00"
+    assert result.delivery_timezone == "Europe/Moscow"
     messages = [item for item in session.added if isinstance(item, ConversationMessage)]
     assert len(messages) == 1
     assert messages[0].message_type == "system"
     assert "ID покупателя: 12345678" in messages[0].body
+    assert "Сервер: test server" in messages[0].body
+    assert "Сегодня, 19:00 МСК" in messages[0].body
 
     retry = Session(deal, listing, conversation)
-    await save_deal_delivery_details(retry, buyer, deal.id, "12345678", "scheduled", "19:00")
+    await save_deal_delivery_details(retry, buyer, deal.id, "12345678", "test server", "19:00")
     assert not [item for item in retry.added if isinstance(item, ConversationMessage)]
 
 
@@ -111,7 +115,7 @@ async def test_only_exact_deal_buyer_can_store_delivery_details():
     outsider = User(id=uuid.uuid4(), telegram_id=303, first_name="Other", role="user")
     with pytest.raises(HTTPException) as error:
         await save_deal_delivery_details(
-            Session(deal, listing, conversation), outsider, deal.id, "123", "now", None
+            Session(deal, listing, conversation), outsider, deal.id, "123", "server", "19:00"
         )
     assert error.value.status_code == 404
 
@@ -132,7 +136,9 @@ async def test_seller_cannot_mark_transfer_before_buyer_sends_delivery_details()
 async def test_transfer_schedules_one_reminder_in_the_same_status_transition():
     _buyer, seller, listing, conversation, deal = fixture()
     deal.buyer_game_id = "12345678"
-    deal.preferred_delivery_time = "Сейчас"
+    deal.buyer_server = "test server"
+    deal.preferred_delivery_time = "Сегодня, 19:00"
+    deal.delivery_timezone = "Europe/Moscow"
     before = datetime.now(UTC)
 
     await set_deal_status(Session(deal, listing, conversation), seller, deal.id, "transfer_in_progress")
@@ -145,11 +151,21 @@ async def test_transfer_schedules_one_reminder_in_the_same_status_transition():
 def test_seller_notification_opens_the_exact_deal():
     deal_id = str(uuid.uuid4())
     payload = deal_purchase_notification_payload(
-        202, deal_id=deal_id, public_url="https://market.example/app"
+        202,
+        deal_id=deal_id,
+        public_url="https://market.example/app",
+        buyer_name="Максим",
+        buyer_game_id="12345678",
+        buyer_server="test server",
+        preferred_delivery_time="Сегодня, 19:00",
+        photo_url="/uploads/car.jpg",
     )
     button_url = payload["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"]
     assert parse_qs(urlparse(button_url).query)["deal_id"] == [deal_id]
-    assert payload["text"].count("Вашу машину купили") == 1
+    assert payload["caption"].count("Вашу машину купили") == 1
+    assert payload["caption"].count("12345678") == 1
+    assert "@" not in payload["caption"]
+    assert payload["photo"] == "https://market.example/uploads/car.jpg"
 
 
 def test_buyer_reminder_has_exact_deal_and_support_deep_links():
@@ -168,29 +184,58 @@ def test_buyer_reminder_has_exact_deal_and_support_deep_links():
 
 @pytest.mark.asyncio
 async def test_repeated_notification_dispatch_sends_only_once_per_deal(monkeypatch):
-    _buyer, seller, listing, conversation, deal = fixture()
+    buyer, seller, listing, conversation, deal = fixture()
     seller.bot_started = True
     deal.seller_purchase_notification_status = "pending"
+    deal.buyer_game_id = "12345678"
+    deal.buyer_server = "test server"
+    deal.preferred_delivery_time = "Сегодня, 19:00"
+    deal.delivery_timezone = "Europe/Moscow"
 
     class NotificationSession(Session):
         async def get(self, model, key):
             if model is User and key == seller.id:
                 return seller
+            if model is User and key == buyer.id:
+                return buyer
             return await super().get(model, key)
 
     monkeypatch.setattr(routes, "SessionLocal", lambda: NotificationSession(deal, listing, conversation))
     sent = []
 
-    async def fake_send(telegram_id, *, deal_id):
-        sent.append((telegram_id, deal_id))
+    async def fake_send(telegram_id, **details):
+        sent.append((telegram_id, details))
         return True
 
     monkeypatch.setattr(routes, "send_deal_purchase_notification", fake_send)
     await routes.notify_deal_purchase_seller(deal.id)
     await routes.notify_deal_purchase_seller(deal.id)
 
-    assert sent == [(seller.telegram_id, str(deal.id))]
+    assert len(sent) == 1
+    assert sent[0][0] == seller.telegram_id
+    assert sent[0][1]["deal_id"] == str(deal.id)
+    assert sent[0][1]["buyer_game_id"] == "12345678"
+    assert sent[0][1]["buyer_server"] == "test server"
     assert deal.seller_purchase_notification_status == "sent"
+
+
+@pytest.mark.asyncio
+async def test_seller_notification_waits_for_all_delivery_details(monkeypatch):
+    _buyer, seller, listing, conversation, deal = fixture()
+    seller.bot_started = True
+    deal.seller_purchase_notification_status = "pending"
+    monkeypatch.setattr(routes, "SessionLocal", lambda: Session(deal, listing, conversation))
+    sent = []
+
+    async def fake_send(*args, **kwargs):
+        sent.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(routes, "send_deal_purchase_notification", fake_send)
+    await routes.notify_deal_purchase_seller(deal.id)
+
+    assert sent == []
+    assert deal.seller_purchase_notification_status == "pending"
 
 
 @pytest.mark.asyncio
@@ -330,3 +375,16 @@ def test_migration_preserves_old_deals_and_enables_pending_for_new_deals():
     assert 'server_default="not_scheduled"' in reminder_migration
     assert "buyer_transfer_reminder_scheduled_at" in reminder_migration
     assert "drop_table" not in reminder_migration
+
+    delivery_migration = (Path(__file__).parents[1] / "migrations" / "versions" / "0029_deal_delivery_server_timezone.py").read_text(encoding="utf-8")
+    assert "buyer_server" in delivery_migration
+    assert "delivery_timezone" in delivery_migration
+    assert "drop_table" not in delivery_migration
+
+
+def test_seller_purchase_notification_is_only_queued_after_delivery_details():
+    source = (Path(__file__).parents[1] / "app" / "routes.py").read_text(encoding="utf-8")
+    scheduling = "background_tasks.add_task(notify_deal_purchase_seller, deal.id)"
+    assert source.count(scheduling) == 1
+    endpoint = source[source.index('router.put("/deals/{deal_id}/delivery-details"'):]
+    assert scheduling in endpoint[:2000]

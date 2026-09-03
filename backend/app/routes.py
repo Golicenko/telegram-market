@@ -556,23 +556,38 @@ async def notify_personal_training_admin(purchase_id: uuid.UUID) -> None:
 async def notify_deal_purchase_seller(deal_id: uuid.UUID) -> None:
     """Claim one deal notification durably before touching Telegram."""
     telegram_id = None
+    notification_details = None
     async with SessionLocal() as session:
         async with session.begin():
             deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
             if not deal or deal.seller_purchase_notification_status != "pending":
                 return
+            if not (deal.buyer_game_id and deal.buyer_server and deal.preferred_delivery_time and deal.delivery_timezone):
+                return
             deal.seller_purchase_notification_status = "sending"
             deal.seller_purchase_notification_claimed_at = datetime.now(UTC)
             seller = await session.get(User, deal.seller_id)
+            buyer = await session.get(User, deal.buyer_id)
+            photo_url = await session.scalar(
+                select(ListingImage.url).where(ListingImage.listing_id == deal.listing_id).order_by(ListingImage.position).limit(1)
+            )
             if seller and seller.bot_started:
                 telegram_id = seller.telegram_id
+                notification_details = {
+                    "deal_id": str(deal.id),
+                    "buyer_name": (" ".join(filter(None, [buyer.first_name, buyer.last_name])) or "Покупатель") if buyer else "Покупатель",
+                    "buyer_game_id": deal.buyer_game_id,
+                    "buyer_server": deal.buyer_server,
+                    "preferred_delivery_time": deal.preferred_delivery_time,
+                    "photo_url": photo_url,
+                }
             else:
                 deal.seller_purchase_notification_status = "failed"
                 deal.seller_purchase_notification_error = "Продавец не запускал бота"
 
     if telegram_id is None:
         return
-    sent = await send_deal_purchase_notification(telegram_id, deal_id=str(deal_id))
+    sent = await send_deal_purchase_notification(telegram_id, **notification_details)
     async with SessionLocal() as session:
         async with session.begin():
             deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
@@ -1269,12 +1284,10 @@ async def unlike_listing(
 @router.post("/listings/{listing_id}/purchase", response_model=DealOut)
 async def buy_listing_now(
     listing_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     deal, _seller_telegram_id, _created = await purchase_listing(session, user, listing_id)
-    background_tasks.add_task(notify_deal_purchase_seller, deal.id)
     return deal
 
 
@@ -1949,13 +1962,10 @@ async def delete_from_cart(listing_id: uuid.UUID, user: User = Depends(get_curre
 
 @router.post("/cart/checkout", response_model=list[DealOut])
 async def checkout(
-    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     deals, _seller_ids = await checkout_cart(session, user)
-    for deal in deals:
-        background_tasks.add_task(notify_deal_purchase_seller, deal.id)
     return deals
 
 
@@ -2313,12 +2323,15 @@ async def open_deal_conversation(
 async def update_deal_delivery_details(
     deal_id: uuid.UUID,
     payload: DealDeliveryDetailsCreate,
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    return await save_deal_delivery_details(
-        session, user, deal_id, payload.buyer_game_id, payload.delivery_window, payload.preferred_time
+    deal = await save_deal_delivery_details(
+        session, user, deal_id, payload.buyer_game_id, payload.buyer_server, payload.preferred_time
     )
+    background_tasks.add_task(notify_deal_purchase_seller, deal.id)
+    return deal
 
 
 @router.get("/deals/{deal_id}/messages", response_model=list[MessageOut])
@@ -2500,13 +2513,10 @@ async def star_payment_status(
 @router.post("/wallet/star-payments/intents/{intent_id}/resume-checkout", response_model=StarPaymentStatusOut)
 async def resume_listing_checkout(
     intent_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     intent, deal, _seller_telegram_id = await complete_listing_payment_intent(session, user, intent_id)
-    if deal:
-        background_tasks.add_task(notify_deal_purchase_seller, deal.id)
     wallet_value = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
     messages = {
         "completed": "Покупка оформлена. Деньги находятся под защитой.",
@@ -3306,7 +3316,6 @@ async def telegram_webhook(
                 session, payment_user, payment_intent.id
             )
             if deal:
-                background_tasks.add_task(notify_deal_purchase_seller, deal.id)
                 background_tasks.add_task(
                     send_bot_notification,
                     int(sender["id"]),
@@ -3339,7 +3348,5 @@ async def telegram_webhook(
                 )
                 await session.commit()
             else:
-                for deal in deals:
-                    background_tasks.add_task(notify_deal_purchase_seller, deal.id)
                 background_tasks.add_task(send_bot_notification, int(sender["id"]), f"Покупка оформлена. Создано сделок: {len(deals)}")
     return {"ok": True}

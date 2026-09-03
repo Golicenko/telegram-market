@@ -3,7 +3,7 @@ import logging
 from dataclasses import dataclass
 from fastapi import HTTPException
 from typing import BinaryIO
-from urllib.parse import quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urljoin, urlsplit, urlunsplit
 
 from .config import get_settings
 from .frontend import versioned_webapp_url
@@ -316,38 +316,51 @@ def deal_purchase_notification_payload(
     *,
     deal_id: str,
     public_url: str,
+    buyer_name: str,
+    buyer_game_id: str,
+    buyer_server: str,
+    preferred_delivery_time: str,
+    photo_url: str | None = None,
 ) -> dict:
     target = versioned_webapp_url(
         f"{public_url.rstrip('/')}/?{urlencode({'deal_id': deal_id})}"
     )
-    return {
+    text = (
+        "🚗 Вашу машину купили\n\n"
+        f"Покупатель: {buyer_name}\n"
+        f"Сервер: {buyer_server}\n"
+        f"ID: {buyer_game_id}\n"
+        f"Удобное время: {preferred_delivery_time} МСК\n\n"
+        "Покупатель уже оплатил автомобиль. Свяжитесь с ним и передайте машину по указанным данным."
+    )
+    payload = {
         "chat_id": telegram_id,
-        "text": (
-            "💰 Вашу машину купили\n\n"
-            "Покупатель уже оплатил покупку. Деньги находятся под защитой.\n"
-            "Откройте сделку и передайте автомобиль по игровому ID, который укажет покупатель.\n"
-            "После получения автомобиля покупатель подтвердит передачу, и деньги будут начислены вам."
-        ),
         "reply_markup": {
             "inline_keyboard": [[{
-                "text": "🚗 Открыть сделку",
+                "text": "💬 Открыть сделку",
                 "web_app": {"url": target},
             }]]
         },
     }
+    if photo_url:
+        payload["photo"] = photo_url if photo_url.startswith(("https://", "http://")) else urljoin(public_url.rstrip("/") + "/", photo_url)
+        payload["caption"] = text
+    else:
+        payload["text"] = text
+    return payload
 
 
-async def send_deal_purchase_notification(telegram_id: int, *, deal_id: str) -> bool:
+async def send_deal_purchase_notification(telegram_id: int, **deal_details) -> bool:
     public_url = get_settings().externally_reachable_url
     if not public_url:
         return False
     try:
         await call_bot_api(
-            "sendMessage",
+            "sendPhoto" if deal_details.get("photo_url") else "sendMessage",
             deal_purchase_notification_payload(
                 telegram_id,
-                deal_id=deal_id,
                 public_url=public_url,
+                **deal_details,
             ),
         )
         return True

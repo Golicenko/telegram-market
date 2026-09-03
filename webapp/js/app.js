@@ -169,6 +169,7 @@
     trainingCoverPreviewImage: document.getElementById("trainingCoverPreviewImage"),
     listingPageImage: document.getElementById("listingPageImage"),
     listingPageImagePlaceholder: document.getElementById("listingPageImagePlaceholder"),
+    listingPageSold: document.getElementById("listingPageSold"),
     listingPageKind: document.getElementById("listingPageKind"),
     listingPageTitle: document.getElementById("listingPageTitle"),
     listingPageBrand: document.getElementById("listingPageBrand"),
@@ -492,6 +493,9 @@ function handleClick(event) {
     return void navigate(navButton.dataset.navTarget);
   }
 
+  const copyGameId = target.closest("[data-copy-game-id]");
+  if (copyGameId) return void copyBuyerGameId(copyGameId.dataset.copyGameId);
+
   if (target.closest("[data-open-add]")) {
     return void openListingForm("regular");
   }
@@ -686,6 +690,7 @@ function handleClick(event) {
     if (!next) return;
     state.currentView = viewName;
     document.body.classList.toggle("chat-open", viewName === "deal-chat");
+    if (viewName !== "deal-chat") document.body.classList.remove("deal-details-required");
     document.body.classList.toggle("admin-open", viewName === "admin");
     if (viewName === "deal-chat") updateChatViewport();
     updateFloatingChatVisibility();
@@ -1011,6 +1016,13 @@ function handleClick(event) {
       placeholder.textContent = "◇";
       media.append(placeholder);
     }
+    if (listing.status !== "active") {
+      media.classList.add("is-sold");
+      const sold = document.createElement("div");
+      sold.className = "car-card__sold";
+      sold.textContent = "ПРОДАНО";
+      media.append(sold);
+    }
     const body = document.createElement("div");
     body.className = "car-card__body";
     const title = document.createElement("h3");
@@ -1300,8 +1312,8 @@ function handleClick(event) {
     state.purchaseFlow = null;
     await refreshMarketplace();
     showPurchaseSuccess(
-      "✅ Машина оплачена",
-      "Деньги находятся под защитой и будут переданы продавцу только после подтверждения получения автомобиля.",
+      "✅ Машина куплена",
+      "Укажите данные, чтобы продавец смог передать вам автомобиль.",
     );
     if (!deal?.id) return;
     await openDealConversation(deal.id);
@@ -1481,8 +1493,11 @@ function handleClick(event) {
     const listing = state.selectedListing;
     if (!listing) return;
     const imageUrl = safeArray(listing.images)[0];
-    elements.listingPageImage.hidden = !imageUrl;
-    elements.listingPageImagePlaceholder.hidden = Boolean(imageUrl);
+    const sold = listing.status !== "active";
+    elements.listingPageImage.parentElement.classList.toggle("is-sold", sold);
+    elements.listingPageSold.hidden = !sold;
+    elements.listingPageImage.hidden = sold || !imageUrl;
+    elements.listingPageImagePlaceholder.hidden = sold || Boolean(imageUrl);
     if (imageUrl) elements.listingPageImage.src = imageUrl;
     else elements.listingPageImage.removeAttribute("src");
     elements.listingPageKind.textContent = listing.listing_type === "unique" ? "Уникальная машина" : "Объявление";
@@ -1969,7 +1984,9 @@ async function hideCurrentConversation() {
     panel.hidden = !deal;
     if (!deal) return;
     const isBuyer = deal.buyer_id === state.me.user.id;
-    const hasDetails = Boolean(deal.buyer_game_id && deal.preferred_delivery_time);
+    const hasDetails = Boolean(deal.buyer_game_id && deal.buyer_server && deal.preferred_delivery_time && deal.delivery_timezone);
+    const requiresDetails = isBuyer && !hasDetails && ["paid", "seller_contacted"].includes(deal.status);
+    document.body.classList.toggle("deal-details-required", requiresDetails);
 
     const title = document.createElement("strong");
     const copy = document.createElement("p");
@@ -1989,14 +2006,19 @@ async function hideCurrentConversation() {
     }
     if (isBuyer && hasDetails) {
       title.textContent = "⏳ Ожидается передача автомобиля";
-      copy.textContent = `Продавец получил ваши данные.\nID: ${deal.buyer_game_id}\nВремя: ${deal.preferred_delivery_time}\nЕсли необходимо что-то уточнить, используйте чат ниже.`;
+      copy.textContent = `Продавец получил ваши данные.\nID: ${deal.buyer_game_id}\nСервер: ${deal.buyer_server}\nВремя: ${deal.preferred_delivery_time} МСК\nЕсли необходимо что-то уточнить, используйте чат ниже.`;
       panel.append(title, copy);
       return;
     }
     if (!isBuyer && hasDetails) {
-      title.textContent = "🚗 Передайте автомобиль покупателю";
-      copy.textContent = `ID покупателя: ${deal.buyer_game_id}\nУдобное время: ${deal.preferred_delivery_time}\n\nПередайте автомобиль по указанному ID. После передачи нажмите «Машина передана».`;
-      panel.append(title, copy);
+      title.textContent = "Передача автомобиля";
+      copy.textContent = `Покупатель: ${state.currentConversation?.counterparty?.name || "Покупатель"}\nСервер: ${deal.buyer_server}\nВремя: ${deal.preferred_delivery_time} МСК`;
+      const idButton = document.createElement("button");
+      idButton.type = "button";
+      idButton.className = "deal-delivery__copy-id";
+      idButton.dataset.copyGameId = deal.buyer_game_id;
+      idButton.textContent = `ID: ${deal.buyer_game_id}  ⧉`;
+      panel.append(title, copy, idButton);
       return;
     }
     if (!isBuyer) {
@@ -2006,24 +2028,16 @@ async function hideCurrentConversation() {
       return;
     }
 
-    title.textContent = "🚗 Получение автомобиля";
-    copy.textContent = "Чтобы продавец смог передать вам машину, укажите игровой ID и удобное время.";
+    title.textContent = "✅ Машина куплена";
+    copy.textContent = "Укажите данные, чтобы продавец смог передать вам автомобиль.";
     const form = document.createElement("form");
     form.className = "deal-delivery__form";
     form.innerHTML = `
-      <label>Ваш игровой ID<input name="buyer_game_id" type="text" maxlength="128" autocomplete="off" placeholder="Введите ID" required></label>
-      <fieldset><legend>Когда вам удобно получить автомобиль?</legend>
-        <label><input type="radio" name="delivery_window" value="now" checked> Сейчас</label>
-        <label><input type="radio" name="delivery_window" value="today"> Сегодня</label>
-        <label><input type="radio" name="delivery_window" value="scheduled"> Выбрать время</label>
-      </fieldset>
-      <label class="deal-delivery__time" hidden>Удобное время<input name="preferred_time" type="time"></label>
+      <label>Игровой ID<input name="buyer_game_id" type="text" inputmode="numeric" maxlength="128" autocomplete="off" placeholder="12345678" required></label>
+      <label>Сервер<input name="buyer_server" type="text" maxlength="128" autocomplete="off" placeholder="Введите сервер" required></label>
+      <label class="deal-delivery__time">Удобное время сегодня<input name="preferred_time" type="time" required></label>
+      <small>Время указывается по МСК</small>
       <button type="submit">Отправить продавцу</button>`;
-    form.addEventListener("change", () => {
-      const scheduled = form.elements.delivery_window.value === "scheduled";
-      form.querySelector(".deal-delivery__time").hidden = !scheduled;
-      form.elements.preferred_time.required = scheduled;
-    });
     form.addEventListener("submit", submitDealDeliveryDetails);
     panel.append(title, copy, form);
   }
@@ -2033,7 +2047,9 @@ async function hideCurrentConversation() {
     const form = event.currentTarget;
     const dealId = state.currentConversation?.deal?.id;
     const gameId = form.elements.buyer_game_id.value.trim();
-    if (!dealId || !gameId) return notify("Укажите игровой ID");
+    const server = form.elements.buyer_server.value.trim();
+    const preferredTime = form.elements.preferred_time.value;
+    if (!dealId || !gameId || !server || !preferredTime) return notify("Заполните игровой ID, сервер и время");
     const button = form.querySelector("button[type=submit]");
     button.disabled = true;
     try {
@@ -2041,8 +2057,8 @@ async function hideCurrentConversation() {
         method: "PUT",
         body: JSON.stringify({
           buyer_game_id: gameId,
-          delivery_window: form.elements.delivery_window.value,
-          preferred_time: form.elements.preferred_time.value || null,
+          buyer_server: server,
+          preferred_time: preferredTime,
         }),
       });
       state.currentConversation.deal = updated;
@@ -2052,6 +2068,21 @@ async function hideCurrentConversation() {
       notify(error.message);
       button.disabled = false;
     }
+  }
+
+  async function copyBuyerGameId(value) {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
+      else {
+        const input = document.createElement("textarea");
+        input.value = value; input.setAttribute("readonly", ""); input.style.position = "fixed"; input.style.opacity = "0";
+        document.body.append(input); input.select();
+        const copied = document.execCommand("copy");
+        input.remove();
+        if (!copied) throw new Error("copy_failed");
+      }
+      notify("✅ ID скопирован");
+    } catch (_error) { notify("Не удалось скопировать ID"); }
   }
 
   function renderOffers() {
@@ -2078,7 +2109,7 @@ async function hideCurrentConversation() {
     if (!deal || ["completed", "cancelled"].includes(deal.status)) return;
     const isBuyer = deal.buyer_id === state.me.user.id;
     const isSeller = deal.seller_id === state.me.user.id;
-    const hasDeliveryDetails = Boolean(deal.buyer_game_id && deal.preferred_delivery_time);
+    const hasDeliveryDetails = Boolean(deal.buyer_game_id && deal.buyer_server && deal.preferred_delivery_time && deal.delivery_timezone);
     if (isSeller && hasDeliveryDetails && ["paid", "seller_contacted"].includes(deal.status)) {
       const transfer = document.createElement("button");
       transfer.className = "deal-confirm";
@@ -2196,8 +2227,12 @@ async function hideCurrentConversation() {
     const visualHeight = Number(viewport?.height);
     const telegramHeight = Number(telegram?.viewportHeight);
     const fullHeight = Math.max(window.innerHeight, telegramHeight || 0, visualHeight || 0);
-    const chatInputFocused = document.activeElement === document.getElementById("chatInput");
-    const keyboardOpen = chatInputFocused && visualHeight > 0 && fullHeight - visualHeight > 80;
+    const activeField = document.activeElement;
+    const chatFieldFocused = Boolean(
+      activeField?.closest?.(".chat-view")
+      && ["INPUT", "TEXTAREA", "SELECT"].includes(activeField.tagName)
+    );
+    const keyboardOpen = chatFieldFocused && visualHeight > 0 && fullHeight - visualHeight > 80;
     const height = keyboardOpen ? visualHeight : fullHeight;
     const width = Number(viewport?.width) > 0 ? Number(viewport.width) : window.innerWidth;
     document.documentElement.style.setProperty("--chat-viewport-height", `${Math.round(height)}px`);

@@ -1036,22 +1036,18 @@ async def save_deal_delivery_details(
     buyer: User,
     deal_id: uuid.UUID,
     buyer_game_id: str,
-    delivery_window: str,
-    preferred_time: str | None,
+    buyer_server: str,
+    preferred_time: str,
 ) -> Deal:
-    labels = {"now": "Сейчас", "today": "Сегодня"}
-    if delivery_window == "scheduled":
-        if not preferred_time:
-            raise HTTPException(status_code=422, detail="Выберите удобное время")
-        delivery_label = f"Сегодня, {preferred_time}"
-    else:
-        delivery_label = labels.get(delivery_window)
-        if not delivery_label:
-            raise HTTPException(status_code=422, detail="Выберите удобное время передачи")
-
     clean_game_id = buyer_game_id.strip()
+    clean_server = buyer_server.strip()
     if not clean_game_id:
         raise HTTPException(status_code=422, detail="Укажите игровой ID")
+    if not clean_server:
+        raise HTTPException(status_code=422, detail="Укажите сервер")
+    if not preferred_time:
+        raise HTTPException(status_code=422, detail="Выберите удобное время")
+    delivery_label = f"Сегодня, {preferred_time}"
 
     async with session.begin():
         deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
@@ -1063,12 +1059,19 @@ async def save_deal_delivery_details(
         if not listing:
             raise HTTPException(status_code=409, detail="Объявление сделки не найдено")
 
-        changed = deal.buyer_game_id != clean_game_id or deal.preferred_delivery_time != delivery_label
+        changed = (
+            deal.buyer_game_id != clean_game_id
+            or deal.buyer_server != clean_server
+            or deal.preferred_delivery_time != delivery_label
+            or deal.delivery_timezone != "Europe/Moscow"
+        )
         conversation = await _ensure_deal_conversation_locked(
             session, deal, listing, unhide_both=True, add_context_if_created=True
         )
         deal.buyer_game_id = clean_game_id
+        deal.buyer_server = clean_server
         deal.preferred_delivery_time = delivery_label
+        deal.delivery_timezone = "Europe/Moscow"
         if changed:
             conversation.last_message_at = datetime.now(UTC)
             session.add(
@@ -1078,7 +1081,8 @@ async def save_deal_delivery_details(
                     body=(
                         "🚗 Данные для передачи\n"
                         f"ID покупателя: {clean_game_id}\n"
-                        f"Удобное время: {delivery_label}"
+                        f"Сервер: {clean_server}\n"
+                        f"Удобное время: {delivery_label} МСК"
                     ),
                     message_type="system",
                 )
@@ -1615,9 +1619,9 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
         if next_status in {"seller_contacted", "transfer_in_progress"} and actor.id != deal.seller_id:
             raise HTTPException(status_code=403, detail="Only the seller can change this status")
         if next_status == "transfer_in_progress" and not (
-            deal.buyer_game_id and deal.preferred_delivery_time
+            deal.buyer_game_id and deal.buyer_server and deal.preferred_delivery_time and deal.delivery_timezone
         ):
-            raise HTTPException(status_code=409, detail="Покупатель ещё не указал игровой ID и время получения")
+            raise HTTPException(status_code=409, detail="Покупатель ещё не указал игровой ID, сервер и время получения")
         deal.status = next_status
         if next_status == "transfer_in_progress":
             now = datetime.now(UTC)
