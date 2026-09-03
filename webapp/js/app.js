@@ -71,7 +71,10 @@
     pendingConversationDeepLink: launchParams.get("conversation_id"),
     pendingListingDeepLink: launchParams.get("conversation_id") ? null : launchParams.get("listing_id"),
     pendingTrainingDeepLink: launchParams.get("training_id") || launchParams.get("startapp") || window.Telegram?.WebApp?.initDataUnsafe?.start_param || null,
+    pendingAdminUserDeepLink: launchParams.get("admin_user_id"),
+    pendingAdminUnpublishSellerDeepLink: launchParams.get("admin_unpublish_seller_id"),
     openingDealDeepLink: false,
+    openingAdminSellerDeepLink: false,
     serverAvailable: true,
   };
 
@@ -394,6 +397,7 @@
     void openDealDeepLink();
     void openConversationDeepLink();
     void openListingDeepLink();
+    void openInactiveSellerAdminDeepLink();
   }
 
   async function authenticateCurrentUser() {
@@ -3640,6 +3644,39 @@ async function hideCurrentConversation() {
     if (!listingId || !state.me) return;
     await openListingDetails(encodeURIComponent(listingId));
     state.pendingListingDeepLink = null;
+  }
+
+  async function openInactiveSellerAdminDeepLink() {
+    const sellerId = state.pendingAdminUnpublishSellerDeepLink || state.pendingAdminUserDeepLink;
+    if (!sellerId || !state.me || state.openingAdminSellerDeepLink) return;
+    state.openingAdminSellerDeepLink = true;
+    try {
+      if (state.me.user.role !== "admin") throw new Error("Требуется роль администратора");
+      const details = await api.request(`/admin/users/${encodeURIComponent(sellerId)}`);
+      await openAdminPanel();
+      switchAdminTab("users");
+      const telegramId = String(details.user.telegram_id);
+      const searchInput = document.querySelector("#adminUserSearch input[name=q]");
+      if (searchInput) searchInput.value = telegramId;
+      await loadAdminUsers(telegramId);
+      if (state.pendingAdminUnpublishSellerDeepLink) {
+        const preview = await api.request(`/admin/users/${encodeURIComponent(sellerId)}/active-listings-count`);
+        const count = Math.max(0, Number(preview.count || 0));
+        if (!count) {
+          notify("У пользователя нет активных объявлений");
+        } else if (await confirmAction(`Снять с публикации ${count} объявлений пользователя?`)) {
+          const result = await api.request(`/admin/users/${encodeURIComponent(sellerId)}/unpublish-active-listings`, { method: "POST" });
+          await Promise.all([loadAdminUsers(telegramId), loadAdminListings(), refreshMarketplace()]);
+          notify(`Снято с публикации: ${result.count}`);
+        }
+      }
+      state.pendingAdminUserDeepLink = null;
+      state.pendingAdminUnpublishSellerDeepLink = null;
+    } catch (error) {
+      notify(error.message || "Не удалось открыть пользователя");
+    } finally {
+      state.openingAdminSellerDeepLink = false;
+    }
   }
 
   function switchAdminTab(tab) {

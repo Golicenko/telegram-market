@@ -15,7 +15,7 @@ from .bot import configure_telegram_webhook
 from .broadcasts import recover_admin_broadcasts
 from .database import engine
 from .frontend import FRONTEND_BUILD, WEBAPP_DIR, versioned_webapp_url
-from .routes import UPLOAD_DIR, recover_deal_purchase_notifications, recover_training_background_jobs, run_deal_transfer_reminder_worker, router
+from .routes import UPLOAD_DIR, recover_deal_purchase_notifications, recover_training_background_jobs, run_deal_transfer_reminder_worker, run_seller_response_timeout_worker, router
 
 
 settings = get_settings()
@@ -56,6 +56,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(run_startup_job("training_recovery", recover_training_background_jobs)),
         asyncio.create_task(run_startup_job("deal_notification_recovery", recover_deal_purchase_notifications)),
         asyncio.create_task(run_startup_job("deal_transfer_reminder_worker", run_deal_transfer_reminder_worker)),
+        asyncio.create_task(run_startup_job("seller_response_timeout_worker", run_seller_response_timeout_worker)),
         asyncio.create_task(run_startup_job("broadcast_recovery", recover_admin_broadcasts)),
     ]
     try:

@@ -368,6 +368,56 @@ async def send_deal_purchase_notification(telegram_id: int, **deal_details) -> b
         return False
 
 
+def inactive_seller_admin_payload(
+    telegram_id: int,
+    *,
+    public_url: str,
+    seller_id: str,
+    seller_name: str,
+    seller_telegram_id: int,
+    deal_id: str,
+) -> dict:
+    base_url = public_url.rstrip("/") + "/"
+    user_url = versioned_webapp_url(
+        f"{base_url}?{urlencode({'admin_user_id': seller_id})}"
+    )
+    unpublish_url = versioned_webapp_url(
+        f"{base_url}?{urlencode({'admin_unpublish_seller_id': seller_id})}"
+    )
+    return {
+        "chat_id": telegram_id,
+        "text": (
+            "⚠️ Неактивный продавец\n\n"
+            f"Продавец: {seller_name}\n"
+            f"Telegram ID: {seller_telegram_id}\n"
+            f"Deal: {deal_id}\n\n"
+            "Не ответил покупателю более 24 часов.\n\n"
+            "Сделка автоматически отменена.\n"
+            "Деньги покупателю возвращены."
+        ),
+        "reply_markup": {
+            "inline_keyboard": [
+                [{"text": "👤 Открыть пользователя", "web_app": {"url": user_url}}],
+                [{"text": "🚫 Снять все объявления", "web_app": {"url": unpublish_url}}],
+            ]
+        },
+    }
+
+
+async def send_inactive_seller_admin_notification(telegram_id: int, **details) -> bool:
+    public_url = get_settings().externally_reachable_url
+    if not public_url:
+        return False
+    try:
+        await call_bot_api(
+            "sendMessage",
+            inactive_seller_admin_payload(telegram_id, public_url=public_url, **details),
+        )
+        return True
+    except HTTPException:
+        return False
+
+
 def deal_transfer_reminder_payload(
     telegram_id: int,
     *,
