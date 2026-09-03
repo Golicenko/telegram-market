@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from app.bot import BroadcastSendResult, deal_purchase_notification_payload, deal_transfer_reminder_payload
 from app.models import Conversation, ConversationMessage, Deal, Listing, User
+from app.schemas import DealDeliveryDetailsCreate
 from app.services import save_deal_delivery_details, set_deal_status
 from app import routes
 
@@ -110,6 +111,35 @@ async def test_delivery_details_are_persisted_on_exact_deal_and_message_is_idemp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("game_id", ["AB123456", "XY987654", "ab123456"])
+async def test_alphanumeric_game_id_is_preserved_exactly(game_id):
+    buyer, _seller, listing, conversation, deal = fixture()
+    session = Session(deal, listing, conversation)
+
+    result = await save_deal_delivery_details(
+        session, buyer, deal.id, game_id, "test server", "19:00"
+    )
+
+    assert result.buyer_game_id == game_id
+    message = next(item for item in session.added if isinstance(item, ConversationMessage))
+    assert f"ID покупателя: {game_id}" in message.body
+
+
+def test_game_id_database_column_is_text():
+    assert Deal.__table__.c.buyer_game_id.type.python_type is str
+
+
+@pytest.mark.parametrize("game_id", ["AB123456", "XY987654", "ab123456"])
+def test_game_id_request_schema_preserves_letters_and_case(game_id):
+    payload = DealDeliveryDetailsCreate(
+        buyer_game_id=game_id,
+        buyer_server="test server",
+        preferred_time="19:00",
+    )
+    assert payload.buyer_game_id == game_id
+
+
+@pytest.mark.asyncio
 async def test_only_exact_deal_buyer_can_store_delivery_details():
     _buyer, _seller, listing, conversation, deal = fixture()
     outsider = User(id=uuid.uuid4(), telegram_id=303, first_name="Other", role="user")
@@ -155,7 +185,7 @@ def test_seller_notification_opens_the_exact_deal():
         deal_id=deal_id,
         public_url="https://market.example/app",
         buyer_name="Максим",
-        buyer_game_id="12345678",
+        buyer_game_id="AB123456",
         buyer_server="test server",
         preferred_delivery_time="Сегодня, 19:00",
         photo_url="/uploads/car.jpg",
@@ -163,7 +193,7 @@ def test_seller_notification_opens_the_exact_deal():
     button_url = payload["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"]
     assert parse_qs(urlparse(button_url).query)["deal_id"] == [deal_id]
     assert payload["caption"].count("Вашу машину купили") == 1
-    assert payload["caption"].count("12345678") == 1
+    assert payload["caption"].count("AB123456") == 1
     assert "@" not in payload["caption"]
     assert payload["photo"] == "https://market.example/uploads/car.jpg"
 
