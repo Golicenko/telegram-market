@@ -46,6 +46,7 @@ class Listing(Base, TimestampMixin):
     price_af_coins: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     delivery_time_estimate: Mapped[str] = mapped_column(String(24), nullable=False, default="up_to_1h")
     views_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content_revision: Mapped[int | None] = mapped_column(BigInteger, index=True)
     pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     pinned_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     reserved_by_deal_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -92,6 +93,19 @@ class ListingLike(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     __table_args__ = (UniqueConstraint("listing_id", "user_id", name="uq_listing_like_listing_user"),)
+
+
+class ContentSeenState(Base, TimestampMixin):
+    __tablename__ = "content_seen_states"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    section: Mapped[str] = mapped_column(String(24), nullable=False)
+    last_seen_revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    __table_args__ = (
+        CheckConstraint("section IN ('training','unique')", name="ck_content_seen_section"),
+        CheckConstraint("last_seen_revision >= 0", name="ck_content_seen_revision"),
+        UniqueConstraint("user_id", "section", name="uq_content_seen_user_section"),
+    )
 
 
 class UploadedImage(Base):
@@ -147,14 +161,27 @@ class TrainingProduct(Base, TimestampMixin):
     availability: Mapped[str] = mapped_column(String(24), nullable=False, default="available")
     published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    views_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content_revision: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     __table_args__ = (
         CheckConstraint("product_type IN ('personal','automatic')", name="ck_training_products_type"),
         CheckConstraint("availability IN ('available','unavailable','coming_soon')", name="ck_training_products_availability"),
         CheckConstraint("price_af_coins >= 0", name="ck_training_products_price"),
+        CheckConstraint("views_count >= 0", name="ck_training_products_views_nonnegative"),
         UniqueConstraint("admin_id", "client_request_id", name="uq_training_product_admin_request"),
         Index("ix_training_products_public_order", "published", "pinned", "created_at"),
     )
+
+
+class TrainingView(Base):
+    __tablename__ = "training_views"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("training_products.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    viewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    __table_args__ = (UniqueConstraint("product_id", "user_id", name="uq_training_view_product_user"),)
 
 
 class TrainingMaterial(Base, TimestampMixin):

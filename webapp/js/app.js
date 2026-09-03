@@ -12,6 +12,7 @@
     regular: [],
     unique: [],
     training: [],
+    contentUnseen: { training: { unseen_count: 0, marker: 0 }, unique: { unseen_count: 0, marker: 0 } },
     trainingPurchases: [],
     selectedTraining: null,
     adminTraining: [],
@@ -84,6 +85,8 @@
     uniqueEmpty: document.getElementById("uniqueEmptyState"),
     trainingCards: document.getElementById("trainingCards"),
     trainingEmpty: document.getElementById("trainingEmptyState"),
+    trainingContentBadge: document.getElementById("trainingContentBadge"),
+    uniqueContentBadge: document.getElementById("uniqueContentBadge"),
     personalTrainingPurchases: document.getElementById("personalTrainingPurchases"),
     automaticTrainingPurchases: document.getElementById("automaticTrainingPurchases"),
     adminTrainingStats: document.getElementById("adminTrainingStats"),
@@ -420,6 +423,7 @@
     regular: async () => { state.regular = safeArray(await api.request("/listings?type=regular")); },
     unique: async () => { state.unique = safeArray(await api.request("/listings?type=unique")); },
     training: async () => { state.training = safeArray(await api.request(state.me?.user.role === "admin" ? "/admin/training" : "/training")); },
+    contentUnseen: async () => { state.contentUnseen = await api.request("/content/unseen"); },
     trainingPurchases: async () => { state.trainingPurchases = safeArray(await api.request("/training/mine")); },
     cart: async () => { state.cart = safeArray(await api.request("/cart")); },
     profile: async () => { state.profile = await api.request("/profile"); },
@@ -699,8 +703,27 @@ function handleClick(event) {
     elements.shell.classList.toggle("is-focused", ["add", "topup", "cart", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin"].includes(viewName));
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (state.serverAvailable && ["market", "unique", "training", "profile", "cart"].includes(viewName)) {
-      try { await refreshMarketplace(); } catch (error) { notify(error.message); }
+      try {
+        if (["unique", "training"].includes(viewName)) await openContentSection(viewName);
+        else await refreshMarketplace();
+      } catch (error) { notify(error.message); }
     }
+  }
+
+  async function openContentSection(section) {
+    const snapshot = await api.request("/content/unseen");
+    state.contentUnseen = snapshot;
+    renderContentBadges();
+    await refreshMarketplace();
+    if (state.failedOptional.has(section)) {
+      throw new Error(section === "training" ? "Не удалось загрузить обучение" : "Не удалось загрузить уникальные машины");
+    }
+    const result = await api.request(`/content/${section}/mark-seen`, {
+      method: "POST",
+      body: JSON.stringify({ marker: Number(snapshot?.[section]?.marker || 0) }),
+    });
+    state.contentUnseen[section] = result;
+    renderContentBadges();
   }
   async function refreshUnreadMessages() {
   if (!state.serverAvailable || document.hidden) return;
@@ -900,6 +923,17 @@ function handleClick(event) {
     renderProfile();
     renderBalance();
     renderAdvertisement();
+    renderContentBadges();
+  }
+
+  function renderContentBadges() {
+    [["training", elements.trainingContentBadge], ["unique", elements.uniqueContentBadge]].forEach(([section, badge]) => {
+      if (!badge) return;
+      const count = Math.max(0, Number(state.contentUnseen?.[section]?.unseen_count || 0));
+      badge.hidden = count === 0;
+      badge.textContent = count > 99 ? "99+" : String(count);
+      badge.parentElement?.setAttribute("aria-label", count ? `${count} новых` : "Новых публикаций нет");
+    });
   }
 
   function renderAdvertisement() {
@@ -2335,12 +2369,20 @@ async function hideCurrentConversation() {
       document.getElementById("trainingDetailType").textContent = trainingTypeLabel(product.product_type);
       document.getElementById("trainingDetailAvailability").textContent = trainingAvailabilityLabel(product.availability);
       document.getElementById("trainingDetailPrice").textContent = formatNumber(product.price_af_coins);
+      document.getElementById("trainingDetailViews").textContent = `👁 ${Number(product.views_count || 0)} просмотров`;
       const video = document.getElementById("trainingDetailVideo"); video.hidden = !product.promo_video_url; if (product.promo_video_url) video.src = product.promo_video_url;
       const purchase = state.trainingPurchases.find((item) => String(item.product_id) === String(product.id));
       const buyButton = document.getElementById("trainingBuyButton");
       buyButton.disabled = Boolean(purchase) || product.availability !== "available" || state.me?.user.id === product.admin_id;
       buyButton.textContent = purchase ? "Уже куплено" : product.availability === "available" ? "Купить обучение" : trainingAvailabilityLabel(product.availability);
       state.previousView = "training"; await navigate("training-detail");
+      if (state.me?.user.id !== product.admin_id) {
+        try {
+          const engagement = await api.request(`/training/${product.id}/view`, { method: "POST" });
+          product.views_count = Number(engagement.views_count || 0);
+          document.getElementById("trainingDetailViews").textContent = `👁 ${product.views_count} просмотров`;
+        } catch (error) { reportClientError("training_view", error); }
+      }
       return true;
     } catch (error) {
       if (Number(error?.status) === 404) {
@@ -3297,8 +3339,8 @@ async function hideCurrentConversation() {
       const card = document.createElement("article"); card.className = "training-admin-card";
       const image = document.createElement("img"); image.src = absoluteMediaUrl(product.cover_url); image.alt = "";
       const copy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = product.title;
-      const meta = document.createElement("small"); meta.textContent = `${trainingTypeLabel(product.product_type)} · ${formatDate(product.created_at)}`;
-      const facts = document.createElement("span"); facts.textContent = `${formatNumber(product.price_af_coins)} AF · покупок ${product.purchase_count} · доход ${formatNumber(product.revenue_af_coins)} AF`;
+      const meta = document.createElement("small"); meta.textContent = `${trainingTypeLabel(product.product_type)} · ${product.published_at ? `опубликовано ${formatDate(product.published_at)}` : `создано ${formatDate(product.created_at)}`}`;
+      const facts = document.createElement("span"); facts.textContent = `${formatNumber(product.price_af_coins)} AF · просмотров ${Number(product.views_count || 0)} · покупок ${product.purchase_count} · доход ${formatNumber(product.revenue_af_coins)} AF`;
       const flags = document.createElement("em"); flags.textContent = [product.published && !product.archived ? "Опубликовано" : "Скрыто", product.pinned ? "Закреплено" : null].filter(Boolean).join(" · "); copy.append(title, meta, facts, flags);
       const actions = document.createElement("div"); actions.className = "admin-record__actions";
       const definitions = [

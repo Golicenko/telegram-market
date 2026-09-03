@@ -274,6 +274,8 @@ class TrainingProductOut(ORMModel):
     availability: str
     published: bool
     pinned: bool
+    views_count: int
+    published_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -384,6 +386,25 @@ class TrainingAdminStatsOut(BaseModel):
     total_revenue_af_coins: Decimal
     personal_sales: int
     automatic_sales: int
+
+
+class ContentUnseenSection(BaseModel):
+    unseen_count: int
+    marker: int
+
+
+class ContentUnseenOut(BaseModel):
+    training: ContentUnseenSection
+    unique: ContentUnseenSection
+
+
+class ContentMarkSeenCreate(BaseModel):
+    marker: int = Field(ge=0)
+
+
+class TrainingViewOut(BaseModel):
+    views_count: int
+    view_recorded: bool
 
 
 class TrainingPurchaseStatusUpdate(BaseModel):

@@ -38,7 +38,7 @@ from .bot import (
 )
 from .config import Settings, get_settings
 from .database import SessionLocal, get_session
-from .models import AccountListing, AdminAction, AdminBroadcast, Advertisement, CartItem, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, ListingLike, ListingView, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportCaseEvent, SupportMessage, SupportTicket, TrainingInboxUpload, TrainingMaterial, TrainingMaterialDelivery, TrainingProduct, TrainingPurchase, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
+from .models import AccountListing, AdminAction, AdminBroadcast, Advertisement, CartItem, ContentSeenState, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, ListingLike, ListingView, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportCaseEvent, SupportMessage, SupportTicket, TrainingInboxUpload, TrainingMaterial, TrainingMaterialDelivery, TrainingProduct, TrainingPurchase, TrainingView, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
 from .schemas import (
     AccountListingCreate,
     AccountListingOut,
@@ -50,6 +50,8 @@ from .schemas import (
     AdminWithdrawalOut,
     BalanceAdjustmentCreate,
     ClientDiagnosticCreate,
+    ContentMarkSeenCreate,
+    ContentUnseenOut,
     ConversationMessageOut,
     ConversationMessageCreate,
     CounterOfferCreate,
@@ -90,6 +92,7 @@ from .schemas import (
     TrainingMaterialUpdate,
     TrainingProductOut,
     TrainingProductUpdate,
+    TrainingViewOut,
     TrainingPurchaseAdminOut,
     TrainingPurchaseOut,
     TrainingPurchaseStatusUpdate,
@@ -1363,7 +1366,7 @@ async def my_training_purchases(user: User = Depends(get_current_user), session:
 
 
 @router.get("/training/{product_id}", response_model=TrainingProductOut)
-async def get_training_product(product_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
+async def get_training_product(product_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     product = await session.scalar(select(TrainingProduct).where(
         TrainingProduct.id == product_id,
         TrainingProduct.published.is_(True),
@@ -1372,6 +1375,82 @@ async def get_training_product(product_id: uuid.UUID, session: AsyncSession = De
     if not product:
         raise HTTPException(status_code=404, detail="Обучение не найдено")
     return product
+
+
+@router.post("/training/{product_id}/view", response_model=TrainingViewOut)
+async def record_training_view(product_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    product = await session.scalar(select(TrainingProduct).where(
+        TrainingProduct.id == product_id,
+        TrainingProduct.published.is_(True),
+        TrainingProduct.deleted_at.is_(None),
+    ).with_for_update())
+    if not product:
+        raise HTTPException(status_code=404, detail="Обучение не найдено")
+    if product.admin_id == user.id:
+        return TrainingViewOut(views_count=product.views_count, view_recorded=False)
+    now = datetime.now(UTC)
+    inserted_id = await session.scalar(
+        pg_insert(TrainingView).values(product_id=product.id, user_id=user.id, viewed_at=now)
+        .on_conflict_do_nothing(index_elements=[TrainingView.product_id, TrainingView.user_id])
+        .returning(TrainingView.id)
+    )
+    recorded = inserted_id is not None
+    if not recorded:
+        previous = await session.scalar(select(TrainingView).where(
+            TrainingView.product_id == product.id, TrainingView.user_id == user.id
+        ).with_for_update())
+        if previous and previous.viewed_at <= now - timedelta(hours=24):
+            previous.viewed_at = now
+            recorded = True
+    if recorded:
+        product.views_count += 1
+    await session.commit()
+    return TrainingViewOut(views_count=product.views_count, view_recorded=recorded)
+
+
+async def content_unseen_section(session: AsyncSession, user_id: uuid.UUID, section: str) -> dict:
+    state = await session.scalar(select(ContentSeenState).where(
+        ContentSeenState.user_id == user_id, ContentSeenState.section == section
+    ))
+    last_seen = int(state.last_seen_revision if state else 0)
+    if section == "training":
+        visible = (TrainingProduct.published.is_(True), TrainingProduct.deleted_at.is_(None), TrainingProduct.content_revision.is_not(None))
+        model = TrainingProduct
+    else:
+        visible = (Listing.listing_type == "unique", Listing.status.in_(["active", "reserved"]), Listing.deleted_at.is_(None), Listing.content_revision.is_not(None))
+        model = Listing
+    marker = int(await session.scalar(select(func.coalesce(func.max(model.content_revision), 0)).where(*visible)) or 0)
+    unseen = int(await session.scalar(select(func.count(model.id)).where(*visible, model.content_revision > last_seen)) or 0)
+    return {"unseen_count": unseen, "marker": marker}
+
+
+@router.get("/content/unseen", response_model=ContentUnseenOut)
+async def get_content_unseen(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    return ContentUnseenOut(
+        training=await content_unseen_section(session, user.id, "training"),
+        unique=await content_unseen_section(session, user.id, "unique"),
+    )
+
+
+@router.post("/content/{section}/mark-seen")
+async def mark_content_seen(section: str, payload: ContentMarkSeenCreate, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    if section not in {"training", "unique"}:
+        raise HTTPException(status_code=404, detail="Раздел не найден")
+    current = await content_unseen_section(session, user.id, section)
+    marker = min(int(payload.marker), int(current["marker"]))
+    await session.execute(
+        pg_insert(ContentSeenState)
+        .values(user_id=user.id, section=section, last_seen_revision=marker)
+        .on_conflict_do_update(
+            index_elements=[ContentSeenState.user_id, ContentSeenState.section],
+            set_={
+                "last_seen_revision": func.greatest(ContentSeenState.last_seen_revision, marker),
+                "updated_at": datetime.now(UTC),
+            },
+        )
+    )
+    await session.commit()
+    return await content_unseen_section(session, user.id, section)
 
 
 @router.post("/training/{product_id}/purchase-intent", status_code=409)

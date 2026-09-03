@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-1ec3c16feb5f" />
-    <link rel="stylesheet" href="css/style.css?v=af-1ec3c16feb5f" />
+    <meta name="autoflow-build" content="af-7d6d7dae2a7f" />
+    <link rel="stylesheet" href="css/style.css?v=af-7d6d7dae2a7f" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-1ec3c16feb5f" defer></script>
-    <script src="js/app.js?v=af-1ec3c16feb5f" defer></script>
+    <script src="js/api.js?v=af-7d6d7dae2a7f" defer></script>
+    <script src="js/app.js?v=af-7d6d7dae2a7f" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -95,7 +95,7 @@
           <div class="empty-state empty-state--tall" id="trainingEmptyState"><img class="training-identity" src="images/gg-training-icon.jpg" alt="" aria-hidden="true" /><h2>Обучений пока нет</h2><p>Новые программы появятся здесь</p></div>
         </section>
 
-        <section class="view training-detail" data-view="training-detail" aria-labelledby="trainingDetailTitle" hidden><div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><span class="premium-mark">PREMIUM</span></div><img class="training-detail__cover" id="trainingDetailCover" alt="Обложка обучения" /><div class="training-detail__body"><span class="training-type" id="trainingDetailType"></span><h1 id="trainingDetailTitle"></h1><p id="trainingDetailDescription"></p><div class="training-detail__meta"><span id="trainingDetailAvailability"></span><strong><span id="trainingDetailPrice">0</span> AF Coins</strong></div><video id="trainingDetailVideo" controls playsinline hidden></video><button class="publish-button" id="trainingBuyButton" type="button">Купить обучение</button><p class="commission-note">Покупка оплачивается внутренними AF Coins. Telegram Stars используются только для пополнения баланса; заказ и доступ хранятся на сервере.</p></div></section>
+        <section class="view training-detail" data-view="training-detail" aria-labelledby="trainingDetailTitle" hidden><div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><span class="premium-mark">PREMIUM</span></div><img class="training-detail__cover" id="trainingDetailCover" alt="Обложка обучения" /><div class="training-detail__body"><span class="training-type" id="trainingDetailType"></span><h1 id="trainingDetailTitle"></h1><p id="trainingDetailDescription"></p><div class="training-detail__meta"><span id="trainingDetailAvailability"></span><strong><span id="trainingDetailPrice">0</span> AF Coins</strong></div><div class="training-detail__views" id="trainingDetailViews">👁 0 просмотров</div><video id="trainingDetailVideo" controls playsinline hidden></video><button class="publish-button" id="trainingBuyButton" type="button">Купить обучение</button><p class="commission-note">Покупка оплачивается внутренними AF Coins. Telegram Stars используются только для пополнения баланса; заказ и доступ хранятся на сервере.</p></div></section>
 
         <section class="view profile-view" data-view="profile" aria-labelledby="profileTitle" hidden>
           <div class="screen-heading"><h1 id="profileTitle">Профиль</h1><button class="settings-button" id="settingsButton" type="button" aria-label="Настройки">⚙</button></div>
@@ -259,7 +259,7 @@
         </section>
       </main>
 
-      <nav class="bottom-nav" id="bottomNav" aria-label="Основная навигация"><button class="nav-item" type="button" data-nav-target="unique"><span class="nav-icon">◇</span><span>Уникальные</span></button><button class="nav-item" type="button" data-nav-target="training"><img class="gg-nav-icon" src="images/gg-training-icon.jpg" alt="" aria-hidden="true" /><span>Обучение</span></button><button class="nav-market is-active" type="button" data-nav-target="market" aria-current="page"><span>★</span><small>Market</small></button><button class="nav-item" type="button" data-nav-target="profile"><span class="nav-icon">♟</span><span>Профиль</span></button><button class="nav-item" type="button" data-nav-target="more"><span class="nav-icon nav-grid">▪▪<br />▪▪</span><span>Ещё</span></button></nav>
+      <nav class="bottom-nav" id="bottomNav" aria-label="Основная навигация"><button class="nav-item" type="button" data-nav-target="unique"><span class="nav-icon-wrap"><span class="nav-icon">◇</span><span class="content-badge" id="uniqueContentBadge" hidden></span></span><span>Уникальные</span></button><button class="nav-item" type="button" data-nav-target="training"><span class="nav-icon-wrap"><img class="gg-nav-icon" src="images/gg-training-icon.jpg" alt="" aria-hidden="true" /><span class="content-badge" id="trainingContentBadge" hidden></span></span><span>Обучение</span></button><button class="nav-market is-active" type="button" data-nav-target="market" aria-current="page"><span>★</span><small>Market</small></button><button class="nav-item" type="button" data-nav-target="profile"><span class="nav-icon">♟</span><span>Профиль</span></button><button class="nav-item" type="button" data-nav-target="more"><span class="nav-icon nav-grid">▪▪<br />▪▪</span><span>Ещё</span></button></nav>
     </div>
 
     <dialog class="modal" id="infoModal"><div class="modal-head"><div><span class="eyebrow">О приложении</span><h2>AUTOFLOW MARKET</h2></div><button type="button" data-close-dialog="infoModal" aria-label="Закрыть">×</button></div><p>AUTOFLOW MARKET — удобная площадка внутри Telegram для размещения и поиска автомобильных предложений. Вы оплачиваете, но продавец не получит деньги, пока вы не подтвердите, что всё получили. Все объявления, операции и статусы сделки сохраняются в истории.</p><p>AF Coins, купленные через Telegram Stars, можно тратить внутри сервиса, но нельзя выводить. Для вывода доступны только AF Coins, заработанные после продаж. При завершённой сделке продавец получает 70% цены, комиссия платформы составляет 30%.</p><p class="security-note">Никому не передавайте пароль, коды подтверждения или доступ к Telegram. Перед подтверждением сделки убедитесь, что получили именно заявленный товар.</p><button class="publish-button" type="button" data-close-dialog="infoModal">Понятно</button></dialog>
