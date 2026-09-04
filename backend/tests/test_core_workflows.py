@@ -13,11 +13,13 @@ from pydantic import ValidationError
 from starlette.requests import Request
 
 from app.auth import get_current_user, require_admin, validate_init_data
+from app import routes
 from app.config import Settings
 from app.models import Deal, Listing, ListingImage, StarPayment, StarPaymentIntent, User, Wallet, WalletTransaction
 from app.schemas import ListingCreate
 from app.services import (
     charge_listing_promotion,
+    create_star_payment_intent,
     create_withdrawal,
     create_listing,
     hold_for_purchase,
@@ -78,6 +80,7 @@ def test_server_commission_is_single_70_30_formula():
 
 def test_minimum_topup_is_ten_stars():
     assert Settings(bot_token="123456:TEST_TOKEN").star_topup_min == 10
+    assert Settings(bot_token="123456:TEST_TOKEN").listing_promotion_cost_af_coins == 5
 
 
 def test_purchase_hold_preserves_fund_origin_and_refund():
@@ -125,9 +128,14 @@ class FakeSession:
         self.added.append(value)
 
     async def flush(self):
-        return None
+        for value in self.added:
+            if hasattr(value, "id") and value.id is None:
+                value.id = uuid.uuid4()
 
     async def refresh(self, _value):
+        return None
+
+    async def commit(self):
         return None
 
 
@@ -181,7 +189,7 @@ def test_listing_idempotency_migration_is_additive():
 
 
 @pytest.mark.asyncio
-async def test_promotion_costs_15_and_retry_does_not_charge_twice():
+async def test_promotion_costs_5_and_retry_does_not_charge_twice():
     user_id = uuid.uuid4()
     user = User(id=user_id, telegram_id=8, first_name="Seller", role="user")
     wallet = Wallet(user_id=user_id, purchased_balance=Decimal("100"), earned_balance=0, purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=0, version=0)
@@ -193,10 +201,140 @@ async def test_promotion_costs_15_and_retry_does_not_charge_twice():
     session = FakeSession([wallet])
     await charge_listing_promotion(session, user, listing)
     await charge_listing_promotion(session, user, listing)
-    assert wallet.available_balance == Decimal("85.00")
+    assert wallet.available_balance == Decimal("95.00")
     charges = [item for item in session.added if isinstance(item, WalletTransaction)]
     assert len(charges) == 1
-    assert charges[0].amount == Decimal("-15.00")
+    assert charges[0].amount == Decimal("-5.00")
+
+
+@pytest.mark.asyncio
+async def test_regular_listing_creation_and_five_af_pin_are_atomic_and_idempotent():
+    seller = User(id=uuid.uuid4(), telegram_id=81, first_name="Seller", role="user")
+    wallet = Wallet(
+        user_id=seller.id, purchased_balance=Decimal("5"), earned_balance=0,
+        purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=0, version=0,
+    )
+    request_id = uuid.uuid4()
+    payload = ListingCreate(
+        client_request_id=request_id, brand="Pinned car", power_hp=100, max_speed_kph=200,
+        description="Описание", price_af_coins=10, image_urls=["/api/media/car"],
+        promote_for_24h=True,
+    )
+    first_session = FakeSession([None, wallet])
+    listing = await create_listing(first_session, seller, payload, listing_type="regular", pinned=True)
+
+    assert listing.status == "active"
+    assert listing.pinned is True
+    assert listing.pinned_until is not None and listing.pinned_until.tzinfo is not None
+    remaining_seconds = (listing.pinned_until - time_to_datetime(time.time())).total_seconds()
+    assert 86395 <= remaining_seconds <= 86400
+    assert wallet.available_balance == Decimal("0.00")
+    charges = [item for item in first_session.added if isinstance(item, WalletTransaction)]
+    assert len(charges) == 1
+    assert charges[0].amount == Decimal("-5.00")
+    assert charges[0].external_reference == f"listing-promotion:{listing.id}:initial"
+
+    retry_session = FakeSession([listing])
+    assert await create_listing(retry_session, seller, payload, listing_type="regular", pinned=True) is listing
+    assert wallet.available_balance == Decimal("0.00")
+    assert not [item for item in retry_session.added if isinstance(item, WalletTransaction)]
+
+
+@pytest.mark.asyncio
+async def test_regular_listing_pin_shortfall_does_not_publish_or_debit():
+    seller = User(id=uuid.uuid4(), telegram_id=82, first_name="Seller", role="user")
+    wallet = Wallet(
+        user_id=seller.id, purchased_balance=Decimal("2"), earned_balance=0,
+        purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=0, version=0,
+    )
+    payload = ListingCreate(
+        client_request_id=uuid.uuid4(), brand="Car", power_hp=100, max_speed_kph=200,
+        description="Описание", price_af_coins=10, image_urls=["/api/media/car"],
+        promote_for_24h=True,
+    )
+    session = FakeSession([None, wallet])
+
+    with pytest.raises(HTTPException) as captured:
+        await create_listing(session, seller, payload, listing_type="regular", pinned=True)
+
+    assert captured.value.status_code == 402
+    assert captured.value.detail["required_af_coins"] == "5.00"
+    assert captured.value.detail["available_af_coins"] == "2.00"
+    assert captured.value.detail["missing_af_coins"] == "3.00"
+    assert wallet.available_balance == Decimal("2")
+    assert not [item for item in session.added if isinstance(item, (Listing, WalletTransaction))]
+
+
+@pytest.mark.asyncio
+async def test_listing_promotion_shortfall_allows_exact_three_xtr_intent():
+    seller = User(id=uuid.uuid4(), telegram_id=83, first_name="Seller", role="user")
+    wallet = Wallet(
+        user_id=seller.id, purchased_balance=Decimal("2"), earned_balance=0,
+        purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=0, version=0,
+    )
+    created = []
+
+    async def invoice_factory(amount, payload):
+        created.append((amount, payload))
+        return "https://t.me/$promotion"
+
+    intent = await create_star_payment_intent(
+        FakeSession([wallet]), seller, 999, invoice_factory, "listing_promotion_topup",
+    )
+
+    assert intent.xtr_amount == 3
+    assert intent.purpose == "listing_promotion_topup"
+    assert created[0][0] == 3
+
+
+@pytest.mark.asyncio
+async def test_expired_pin_is_removed_without_deleting_listing():
+    listing = Listing(
+        id=uuid.uuid4(), seller_id=uuid.uuid4(), listing_type="regular", status="active",
+        brand="Car", model="", power_hp=100, max_speed_kph=200, description="Описание",
+        price_af_coins=10, pinned=True, pinned_until=time_to_datetime(time.time() - 60), views_count=0,
+    )
+
+    class ExpirationSession:
+        committed = False
+
+        async def execute(self, statement):
+            assert "pinned_until" in str(statement)
+            listing.pinned = False
+            listing.pinned_until = None
+            return type("Result", (), {"rowcount": 1})()
+
+        async def commit(self):
+            self.committed = True
+
+    session = ExpirationSession()
+    await routes.expire_promotions(session)
+    assert session.committed is True
+    assert listing.status == "active"
+    assert listing.pinned is False
+    assert listing.pinned_until is None
+
+
+def test_listing_form_uses_new_prices_explicit_pin_choice_and_shortfall_resume():
+    root = Path(__file__).parents[2]
+    html = (root / "webapp" / "index.html").read_text(encoding="utf-8")
+    script = (root / "webapp" / "js" / "app.js").read_text(encoding="utf-8")
+    migration = (
+        root / "backend" / "migrations" / "versions" / "0032_listing_promotion_topup.py"
+    ).read_text(encoding="utf-8")
+    for amount in (10, 25, 30, 50, 70, 100):
+        assert f'data-price="{amount}"' in html
+    for old_amount in (150, 200, 300, 400, 500):
+        assert f'data-price="{old_amount}"' not in html
+    assert "AF Coins используются для покупок внутри AutoFlow. 1 ⭐ = 1 AF." in html
+    assert 'name="promote_for_24h" type="checkbox" checked' in html
+    assert "Закрепить за 5 AF" in html and "Опубликовать бесплатно" in html
+    assert "chooseInitialPromotion()" in script
+    assert "payload.promote_for_24h = shouldPromote" in script
+    assert 'purpose: "listing_promotion_topup"' in script
+    assert "payListingPromotionShortfall(flow)" in script
+    assert "listing_promotion_topup" in migration
+    assert "drop_table" not in migration
 
 
 @pytest.mark.asyncio

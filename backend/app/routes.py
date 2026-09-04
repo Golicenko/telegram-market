@@ -1427,7 +1427,13 @@ async def add_regular_listing(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    listing = await create_listing(session, user, payload, listing_type="regular")
+    listing = await create_listing(
+        session,
+        user,
+        payload,
+        listing_type="regular",
+        pinned=payload.promote_for_24h,
+    )
     return await listing_out(session, listing)
 
 

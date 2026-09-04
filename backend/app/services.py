@@ -153,6 +153,29 @@ async def create_listing(
             if listing is None:
                 now = datetime.now(UTC)
                 admin_pinned = seller.role == "admin" and listing_type == "unique" and pinned
+                paid_pinned = listing_type == "regular" and pinned
+                promotion_wallet = None
+                promotion_cost = money(settings.listing_promotion_cost_af_coins)
+                promotion_before = None
+                if paid_pinned:
+                    promotion_wallet = await session.scalar(
+                        select(Wallet).where(Wallet.user_id == seller.id).with_for_update()
+                    )
+                    available = money(promotion_wallet.available_balance if promotion_wallet else Decimal("0"))
+                    if available < promotion_cost:
+                        missing = money(promotion_cost - available)
+                        raise HTTPException(
+                            status_code=402,
+                            detail={
+                                "code": "insufficient_af_coins",
+                                "purpose": "listing_promotion",
+                                "message": "Недостаточно AF Coins для закрепления",
+                                "available_af_coins": str(available),
+                                "required_af_coins": str(promotion_cost),
+                                "missing_af_coins": str(missing),
+                            },
+                        )
+                    promotion_before = wallet_snapshot(promotion_wallet)
                 listing = Listing(
                     seller_id=seller.id,
                     client_request_id=request_id,
@@ -165,14 +188,29 @@ async def create_listing(
                     description=payload.description.strip(),
                     price_af_coins=money(payload.price_af_coins),
                     delivery_time_estimate=payload.delivery_time_estimate,
-                    pinned=admin_pinned,
-                    pinned_until=now + timedelta(hours=settings.listing_promotion_hours) if admin_pinned else None,
+                    pinned=admin_pinned or paid_pinned,
+                    pinned_until=now + timedelta(hours=settings.listing_promotion_hours) if admin_pinned or paid_pinned else None,
                     content_revision=await session.scalar(select(func.nextval("content_publication_revision_seq"))) if listing_type == "unique" else None,
                 )
                 session.add(listing)
                 await session.flush()
                 for position, url in enumerate(payload.image_urls):
                     session.add(ListingImage(listing_id=listing.id, url=url, position=position))
+                if paid_pinned and promotion_wallet and promotion_before:
+                    before_available, before_frozen = promotion_before
+                    debit_spendable(promotion_wallet, promotion_cost)
+                    promotion_wallet.version += 1
+                    session.add(
+                        wallet_transaction(
+                            promotion_wallet,
+                            "listing_promotion",
+                            -promotion_cost,
+                            before_available,
+                            before_frozen,
+                            f"Закрепление объявления до {listing.pinned_until.isoformat()}",
+                            external_reference=f"listing-promotion:{listing.id}:initial",
+                        )
+                    )
                 if listing_type == "unique":
                     session.add(AdminAction(admin_id=seller.id, action="create_unique_listing", target_type="listing", target_id=listing.id))
     except IntegrityError:
@@ -200,15 +238,29 @@ async def charge_listing_promotion(session: AsyncSession, actor: User, listing: 
         raise HTTPException(status_code=409, detail="Можно закрепить только активное непроданное объявление")
     if listing.pinned and listing.pinned_until and listing.pinned_until > now:
         return
-    listing.pinned = True
-    listing.pinned_until = now + timedelta(hours=settings.listing_promotion_hours)
     if actor.role == "admin" and listing.listing_type == "unique":
+        listing.pinned = True
+        listing.pinned_until = now + timedelta(hours=settings.listing_promotion_hours)
         session.add(AdminAction(admin_id=actor.id, action="pin_listing_free", target_type="listing", target_id=listing.id))
         return
     cost = money(settings.listing_promotion_cost_af_coins)
     wallet = await session.scalar(select(Wallet).where(Wallet.user_id == actor.id).with_for_update())
-    if not wallet or wallet.available_balance < cost:
-        raise HTTPException(status_code=402, detail="Недостаточно AF Coins. Пополните баланс, чтобы закрепить объявление.")
+    available = money(wallet.available_balance if wallet else Decimal("0"))
+    if not wallet or available < cost:
+        missing = money(cost - available)
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "insufficient_af_coins",
+                "purpose": "listing_promotion",
+                "message": "Недостаточно AF Coins для закрепления",
+                "available_af_coins": str(available),
+                "required_af_coins": str(cost),
+                "missing_af_coins": str(missing),
+            },
+        )
+    listing.pinned = True
+    listing.pinned_until = now + timedelta(hours=settings.listing_promotion_hours)
     before_available, before_frozen = wallet_snapshot(wallet)
     debit_spendable(wallet, cost)
     wallet.version += 1
@@ -2261,7 +2313,16 @@ async def create_star_payment_intent(
         amount = max(settings.star_topup_min, int(missing.to_integral_value(rounding=ROUND_CEILING)))
         context = {"listing_ids": [str(item) for item in cart_listing_ids], "required_af_coins": str(missing)}
         await session.commit()
-    minimum = 1 if purpose == "training_topup" else settings.star_topup_min
+    elif purpose == "listing_promotion_topup":
+        wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
+        available = money(wallet.available_balance if wallet else Decimal("0"))
+        missing = money(Decimal(settings.listing_promotion_cost_af_coins) - available)
+        if missing <= 0:
+            raise HTTPException(status_code=409, detail="Средств уже достаточно, повторите публикацию")
+        amount = int(missing.to_integral_value(rounding=ROUND_CEILING))
+        context = {"required_af_coins": str(missing), "purpose": "listing_promotion"}
+        await session.commit()
+    minimum = 1 if purpose in {"training_topup", "listing_promotion_topup"} else settings.star_topup_min
     if amount < minimum or amount > settings.star_topup_max:
         raise HTTPException(
             status_code=400,

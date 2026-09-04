@@ -607,8 +607,8 @@ class StarPaymentIntent(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
-        CheckConstraint("(purpose IN ('listing_checkout','training_checkout','training_topup') AND xtr_amount >= 1) OR (purpose NOT IN ('listing_checkout','training_checkout','training_topup') AND xtr_amount BETWEEN 10 AND 1000)", name="ck_star_payment_intent_amount"),
-        CheckConstraint("purpose IN ('topup','cart_checkout','listing_checkout','training_checkout','training_topup')", name="ck_star_payment_intent_purpose"),
+        CheckConstraint("(purpose IN ('listing_checkout','training_checkout','training_topup','listing_promotion_topup') AND xtr_amount >= 1) OR (purpose NOT IN ('listing_checkout','training_checkout','training_topup','listing_promotion_topup') AND xtr_amount BETWEEN 10 AND 1000)", name="ck_star_payment_intent_amount"),
+        CheckConstraint("purpose IN ('topup','cart_checkout','listing_checkout','training_checkout','training_topup','listing_promotion_topup')", name="ck_star_payment_intent_purpose"),
         CheckConstraint("status IN ('pending','paid','cancelled','expired')", name="ck_star_payment_intent_status"),
         CheckConstraint("checkout_status IN ('not_requested','pending','completed','listing_unavailable','failed')", name="ck_star_payment_intent_checkout_status"),
         CheckConstraint("missing_af_coins IS NULL OR missing_af_coins > 0", name="ck_star_payment_intent_missing"),
