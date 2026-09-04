@@ -78,6 +78,7 @@ class ListingCreate(BaseModel):
         pattern="^(up_to_15m|up_to_30m|up_to_1h|up_to_3h|up_to_6h|up_to_12h|up_to_24h)$",
     )
     image_urls: list[str] = Field(min_length=1, max_length=10)
+    promote_for_24h: bool = False
 
     @field_validator("brand")
     @classmethod
@@ -510,7 +511,7 @@ class NotificationOut(ORMModel):
 
 class StarPaymentIntentCreate(BaseModel):
     amount: int = Field(ge=1, le=1000)
-    purpose: str = Field(default="topup", pattern="^(topup|cart_checkout|training_topup)$")
+    purpose: str = Field(default="topup", pattern="^(topup|cart_checkout|training_topup|listing_promotion_topup)$")
     training_product_id: uuid.UUID | None = None
 
 

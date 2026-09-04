@@ -15,7 +15,7 @@ test("regular and unique cards expose the same server-backed purchase action", (
 });
 
 test("purchase flow uses direct checkout and an exact listing-bound top-up intent", () => {
-  const purchase = source.slice(source.indexOf("async function buyNowFlow"), source.indexOf("function showPurchaseSuccess"));
+  const purchase = source.slice(source.indexOf("async function executeSafeListingPurchase"), source.indexOf("async function payListingPromotionShortfall"));
   assert.match(purchase, /`\/listings\/\$\{flow\.listing\.id\}\/purchase`/);
   assert.match(purchase, /error\.detail\?\.code === "insufficient_af_coins"/);
   assert.match(purchase, /error\.detail\.missing_af_coins/);

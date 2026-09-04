@@ -892,9 +892,39 @@ function handleClick(event) {
     document.getElementById("listingType").value = mode;
     document.getElementById("addTitle").textContent = mode === "unique" ? "Добавить уникальную машину" : "Добавить автомобиль";
     document.getElementById("publicationNote").textContent = mode === "unique" ? "Уникальная машина публикуется администратором бесплатно." : "Публикация, редактирование и удаление объявлений всегда бесплатны.";
-    document.getElementById("promoteLabel").textContent = mode === "unique" ? "📌 Закрепить объявление бесплатно" : "📌 Закрепить объявление — 15 AF Coins";
-    document.getElementById("promotionNote").hidden = mode === "unique";
+    configurePromotionOption(mode === "unique");
+    elements.carForm.elements.promote_for_24h.checked = true;
     openSecondary("add");
+  }
+
+  function configurePromotionOption(freeAdminPromotion) {
+    document.getElementById("promoteLabel").textContent = "✨ Закрепить объявление";
+    document.getElementById("promotePrice").textContent = freeAdminPromotion ? "Бесплатно" : "5 AF";
+    document.getElementById("promotionNote").textContent = "Объявление будет находиться выше остальных в течение 24 часов.";
+  }
+
+  function chooseInitialPromotion() {
+    const modal = document.getElementById("promotionChoiceModal");
+    const paid = document.getElementById("promotionChoicePaid");
+    const free = document.getElementById("promotionChoiceFree");
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (choice) => {
+        if (settled) return;
+        settled = true;
+        paid.removeEventListener("click", choosePaid);
+        free.removeEventListener("click", chooseFree);
+        modal.removeEventListener("cancel", chooseFree);
+        if (modal.open) modal.close();
+        resolve(choice);
+      };
+      const choosePaid = () => finish(true);
+      const chooseFree = (event) => { event?.preventDefault?.(); finish(false); };
+      paid.addEventListener("click", choosePaid);
+      free.addEventListener("click", chooseFree);
+      modal.addEventListener("cancel", chooseFree);
+      openDialog(modal);
+    });
   }
 
   async function openSupport() {
@@ -1094,7 +1124,7 @@ function handleClick(event) {
     if (isOwner) {
       const ownerActions = document.createElement("div"); ownerActions.className = "owner-actions";
       const edit = document.createElement("button"); edit.dataset.editListing = listing.id; edit.textContent = "Изменить";
-      const promote = document.createElement("button"); promote.dataset.promoteListing = listing.id; promote.textContent = listing.pinned ? "Закреплено" : (state.me.user.role === "admin" && listing.listing_type === "unique" ? "Закрепить бесплатно" : "Закрепить · 15 AF"); promote.disabled = listing.pinned || listing.status !== "active";
+      const promote = document.createElement("button"); promote.dataset.promoteListing = listing.id; promote.textContent = listing.pinned ? "Закреплено" : (state.me.user.role === "admin" && listing.listing_type === "unique" ? "Закрепить бесплатно" : "Закрепить · 5 AF"); promote.disabled = listing.pinned || listing.status !== "active";
       const remove = document.createElement("button"); remove.dataset.deleteListing = listing.id; remove.textContent = "Удалить"; remove.className = "is-danger";
       ownerActions.append(edit, promote, remove); actions.append(ownerActions);
     }
@@ -1242,6 +1272,7 @@ function handleClick(event) {
   async function runPurchaseFlowAction() {
     const flow = state.purchaseFlow;
     if (!flow || flow.busy) return;
+    if (flow.kind === "listing-promotion-topup") return payListingPromotionShortfall(flow);
     if (flow.kind === "offer-topup") {
       const input = document.getElementById("topupAmount");
       if (input) input.value = String(flow.topupAmount);
@@ -1314,6 +1345,83 @@ function handleClick(event) {
       await refreshMarketplace();
     } catch (error) {
       flow.busy = false; elements.purchaseModalAction.disabled = false; elements.purchaseModalAction.textContent = "Повторить"; elements.purchaseModalText.textContent = error.message;
+    }
+  }
+
+  async function payListingPromotionShortfall(flow) {
+    if (!telegram?.initData || typeof telegram.openInvoice !== "function") {
+      elements.purchaseModalNote.textContent = "Откройте AUTOFLOW MARKET внутри Telegram, чтобы пополнить баланс.";
+      return;
+    }
+    flow.busy = true;
+    elements.purchaseModalAction.disabled = true;
+    try {
+      if (!flow.intentId) {
+        elements.purchaseModalAction.textContent = "Создаём счёт…";
+        const amount = Math.ceil(flow.missing);
+        const intent = await api.request("/wallet/star-payments/intent", {
+          method: "POST",
+          body: JSON.stringify({ amount, purpose: "listing_promotion_topup" }),
+        });
+        flow.intentId = intent.id;
+        const invoiceStatus = await new Promise((resolve, reject) => {
+          try { telegram.openInvoice(intent.invoice_url, resolve); }
+          catch (error) { reject(error); }
+        });
+        if (["cancelled", "failed"].includes(invoiceStatus)) {
+          flow.busy = false;
+          flow.intentId = null;
+          elements.purchaseModalAction.disabled = false;
+          elements.purchaseModalAction.textContent = `Пополнить ${amount} AF`;
+          elements.purchaseModalNote.textContent = "Оплата не завершена. Объявление и баланс не изменены.";
+          return;
+        }
+      }
+      elements.purchaseModalTitle.textContent = "⏳ Платёж подтверждается";
+      elements.purchaseModalText.textContent = "Не закрывайте приложение. Обычно это занимает несколько секунд.";
+      elements.purchaseModalAction.textContent = "Проверяем…";
+      const payment = await waitForStarPayment(flow.intentId);
+      if (payment?.status !== "paid") {
+        flow.busy = false;
+        elements.purchaseModalAction.disabled = false;
+        elements.purchaseModalAction.textContent = "Проверить снова";
+        elements.purchaseModalNote.textContent = "Баланс изменится только после подтверждения backend.";
+        return;
+      }
+      state.me = await api.request("/me");
+      renderBalance();
+      elements.purchaseModalTitle.textContent = "✅ AF Coins зачислены";
+      elements.purchaseModalText.textContent = flow.submission ? "Публикуем и закрепляем объявление…" : "Закрепляем объявление…";
+      let listing;
+      if (flow.submission) {
+        listing = await api.request(flow.submission.path, {
+          method: flow.submission.method,
+          body: JSON.stringify(flow.submission.payload),
+        });
+      } else {
+        listing = await api.request(`/listings/${flow.listingId}/promote`, { method: "POST" });
+      }
+      if (elements.purchaseModal?.open) elements.purchaseModal.close();
+      state.purchaseFlow = null;
+      if (flow.submission) await finishListingSubmission(flow.submission);
+      else {
+        await refreshMarketplace();
+        notify(`Объявление закреплено до ${formatDate(listing.pinned_until)}`);
+      }
+    } catch (error) {
+      flow.busy = false;
+      elements.purchaseModalAction.disabled = false;
+      if (Number(error.status) === 402 && error.detail?.purpose === "listing_promotion") {
+        flow.missing = Number(error.detail.missing_af_coins || flow.missing || 0);
+        flow.intentId = null;
+        elements.purchaseModalTitle.textContent = "Недостаточно AF Coins";
+        elements.purchaseModalText.textContent = `Для закрепления не хватает ${formatNumber(flow.missing)} AF.`;
+        elements.purchaseModalAction.textContent = `Пополнить ${Math.ceil(flow.missing)} AF`;
+        elements.purchaseModalNote.textContent = "Баланс изменился до завершения публикации. Можно доплатить новую точную разницу.";
+        return;
+      }
+      elements.purchaseModalAction.textContent = flow.intentId ? "Повторить публикацию" : `Пополнить ${Math.ceil(flow.missing)} AF`;
+      elements.purchaseModalNote.textContent = error.message;
     }
   }
 
@@ -1422,6 +1530,7 @@ function handleClick(event) {
     const button = form.querySelector("button[type=submit]");
     if (button.disabled) return;
     const originalButtonText = button.textContent;
+    let listingSubmission = null;
     button.disabled = true;
     try {
       const payload = {
@@ -1443,6 +1552,13 @@ function handleClick(event) {
       if (!Number.isFinite(payload.price_af_coins) || payload.price_af_coins < 1) throw new Error("Цена должна быть не меньше 1 AF Coin");
       if (!state.editingListingId && state.photoFiles.length < 1) throw new Error("Добавьте хотя бы одну фотографию автомобиля");
       if (state.photoFiles.length > 10) throw new Error("Можно добавить не более 10 фотографий");
+      const promotionSelected = formData.get("promote_for_24h") === "on";
+      let shouldPromote = promotionSelected;
+      if (promotionSelected && state.listingMode === "regular") {
+        shouldPromote = state.editingListingId
+          ? await confirmAction("Закрепить объявление за 5 AF Coins?")
+          : await chooseInitialPromotion();
+      }
       const imageUrls = [];
       for (const [index, file] of state.photoFiles.entries()) {
         button.textContent = `Загрузка фото ${index + 1} из ${state.photoFiles.length}…`;
@@ -1456,34 +1572,72 @@ function handleClick(event) {
         }
       }
       if (!state.editingListingId || imageUrls.length) payload.image_urls = imageUrls;
-      const promotionSelected = formData.get("promote_for_24h") === "on";
-      const shouldPromote = promotionSelected && (state.listingMode === "unique" || await confirmAction("Закрепить объявление за 15 AF Coins?"));
       const path = state.editingListingId ? `/listings/${state.editingListingId}` : state.listingMode === "unique" ? "/admin/listings/unique" : "/listings";
       if (state.listingMode === "unique") payload.pinned = shouldPromote;
+      else if (!state.editingListingId) payload.promote_for_24h = shouldPromote;
+      listingSubmission = {
+        payload,
+        path,
+        method: state.editingListingId ? "PATCH" : "POST",
+        wasEditing: Boolean(state.editingListingId),
+        targetView: state.listingMode === "unique" ? "unique" : "market",
+      };
       button.textContent = state.editingListingId ? "Сохраняем…" : "Публикуем…";
-      const savedListing = await api.request(path, { method: state.editingListingId ? "PATCH" : "POST", body: JSON.stringify(payload) });
+      const savedListing = await api.request(path, { method: listingSubmission.method, body: JSON.stringify(payload) });
       let promotionError = null;
-      if (shouldPromote && !savedListing.pinned) {
+      if (shouldPromote && !savedListing.pinned && (state.editingListingId || state.listingMode === "unique")) {
         try {
           const promotionPath = state.listingMode === "unique" ? `/admin/listings/${savedListing.id}/promote` : `/listings/${savedListing.id}/promote`;
           await api.request(promotionPath, { method: "POST" });
         } catch (error) { promotionError = error; }
       }
-      form.reset();
-      elements.photoPreview.replaceChildren();
-      state.photoFiles = [];
-      const wasEditing = Boolean(state.editingListingId);
-      state.editingListingId = null;
-      state.pendingListingRequestId = null;
-      await refreshMarketplace();
-      navigate(state.listingMode === "unique" ? "unique" : "market");
-      if (promotionError) notify(`Объявление опубликовано бесплатно, но не закреплено: ${promotionError.message}`);
-      else notify(wasEditing ? "Объявление обновлено бесплатно" : "Объявление опубликовано бесплатно");
+      await finishListingSubmission(listingSubmission, promotionError);
     } catch (error) {
+      if (
+        listingSubmission
+        && listingSubmission.method === "POST"
+        && Number(error.status) === 402
+        && error.detail?.purpose === "listing_promotion"
+      ) {
+        return openListingPromotionTopup(listingSubmission, error);
+      }
       const errorId = error?.photoIndex ? reportClientError("listing_photo_upload", error) : null;
       notify(`${error.message}${errorId ? ` Код: ${errorId}` : ""}`);
     }
     finally { button.disabled = false; button.textContent = originalButtonText; }
+  }
+
+  async function finishListingSubmission(submission, promotionError = null) {
+    elements.carForm.reset();
+    elements.photoPreview.replaceChildren();
+    state.photoFiles = [];
+    state.editingListingId = null;
+    state.pendingListingRequestId = null;
+    await refreshMarketplace();
+    await navigate(submission.targetView);
+    if (promotionError) notify(`Объявление сохранено, но не закреплено: ${promotionError.message}`);
+    else notify(submission.wasEditing ? "Объявление обновлено бесплатно" : "Объявление опубликовано");
+  }
+
+  function openListingPromotionTopup(submission, error, listingId = null) {
+    const available = Number(error.detail?.available_af_coins || 0);
+    const missing = Number(error.detail?.missing_af_coins || 0);
+    state.purchaseFlow = {
+      kind: "listing-promotion-topup",
+      stage: "topup",
+      busy: false,
+      intentId: null,
+      missing,
+      submission,
+      listingId,
+    };
+    elements.purchaseModalTitle.textContent = "Недостаточно AF Coins";
+    elements.purchaseModalText.textContent = `На балансе: ${formatNumber(available)} AF. Для закрепления не хватает ${formatNumber(missing)} AF.`;
+    elements.purchaseModalAmount.replaceChildren(document.createTextNode(`${formatNumber(missing)} `), coin("af-coin--small"));
+    elements.purchaseModalNote.textContent = "После подтверждения оплаты объявление будет опубликовано или закреплено автоматически.";
+    elements.purchaseModalAction.textContent = `Пополнить ${Math.ceil(missing)} AF`;
+    elements.purchaseModalAction.disabled = false;
+    openDialog(elements.purchaseModal);
   }
 
   function findListing(id) { return [...state.regular, ...state.unique, ...(state.profile?.active_listings || [])].find((item) => item.id === id); }
@@ -1579,8 +1733,8 @@ function handleClick(event) {
     document.getElementById("listingType").value = listing.listing_type;
     document.getElementById("addTitle").textContent = "Редактировать объявление";
     const freeAdminPromotion = state.me.user.role === "admin" && listing.listing_type === "unique";
-    document.getElementById("promoteLabel").textContent = freeAdminPromotion ? "📌 Закрепить бесплатно" : "📌 Закрепить — 15 AF Coins";
-    document.getElementById("promotionNote").hidden = freeAdminPromotion;
+    configurePromotionOption(freeAdminPromotion);
+    elements.carForm.elements.promote_for_24h.checked = !listing.pinned;
     openSecondary("add");
   }
 
@@ -1593,9 +1747,14 @@ function handleClick(event) {
   async function promoteListing(id) {
     const source = findListing(id);
     const freeAdminPromotion = state.me?.user.role === "admin" && source?.listing_type === "unique";
-    if (!freeAdminPromotion && !(await confirmAction("Закрепить объявление за 15 AF Coins?"))) return;
+    if (!freeAdminPromotion && !(await confirmAction("Закрепить объявление за 5 AF Coins?"))) return;
     try { const listing = await api.request(freeAdminPromotion ? `/admin/listings/${id}/promote` : `/listings/${id}/promote`, { method: "POST" }); await refreshMarketplace(); notify(`Объявление закреплено до ${formatDate(listing.pinned_until)}`); }
-    catch (error) { notify(error.message); }
+    catch (error) {
+      if (!freeAdminPromotion && Number(error.status) === 402 && error.detail?.purpose === "listing_promotion") {
+        return openListingPromotionTopup(null, error, id);
+      }
+      notify(error.message);
+    }
   }
 
   function previewPhotos(event) {

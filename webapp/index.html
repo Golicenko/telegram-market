@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-2f640db3b302" />
-    <link rel="stylesheet" href="css/style.css?v=af-2f640db3b302" />
+    <meta name="autoflow-build" content="af-30b0438a85d8" />
+    <link rel="stylesheet" href="css/style.css?v=af-30b0438a85d8" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-2f640db3b302" defer></script>
-    <script src="js/app.js?v=af-2f640db3b302" defer></script>
+    <script src="js/api.js?v=af-30b0438a85d8" defer></script>
+    <script src="js/app.js?v=af-30b0438a85d8" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -130,9 +130,8 @@
             <label class="form-row"><span>Макс. скорость</span><input name="max_speed_kph" required type="number" min="1" inputmode="numeric" placeholder="км/ч" /></label>
             <label class="form-row"><span>Обычно передаю за</span><select name="delivery_time_estimate" required><option value="up_to_15m">до 15 минут</option><option value="up_to_30m">до 30 минут</option><option value="up_to_1h" selected>до 1 часа</option><option value="up_to_3h">до 3 часов</option><option value="up_to_6h">до 6 часов</option><option value="up_to_12h">до 12 часов</option><option value="up_to_24h">до 24 часов</option></select></label>
             <label class="form-row form-row--textarea"><span>Описание</span><textarea name="description" required minlength="1" rows="4" placeholder="Опишите автомобиль"></textarea></label>
-            <fieldset class="price-field"><legend>Цена в AF Coins</legend><div class="price-presets"><button type="button" data-price="100">100</button><button type="button" data-price="150">150</button><button type="button" data-price="200">200</button><button type="button" data-price="300">300</button><button type="button" data-price="400">400</button><button type="button" data-price="500">500</button></div><label><span class="af-coin"></span><input id="priceInput" name="price_af_coins" type="number" min="1" required inputmode="numeric" placeholder="Минимум 1" /></label></fieldset>
-            <label class="switch-row" id="promoteRow"><span id="promoteLabel">📌 Закрепить объявление — 15 AF Coins</span><input name="promote_for_24h" type="checkbox" /><i aria-hidden="true"></i></label>
-            <p class="commission-note" id="promotionNote">Закреплённое объявление будет отображаться выше остальных в течение 24 часов. Стоимость услуги — 15 AF Coins.</p>
+            <fieldset class="price-field"><legend>Цена в AF Coins</legend><p class="price-field__help">AF Coins используются для покупок внутри AutoFlow. 1 ⭐ = 1 AF.</p><div class="price-presets"><button type="button" data-price="10">10</button><button type="button" data-price="25">25</button><button type="button" data-price="30">30</button><button type="button" data-price="50">50</button><button type="button" data-price="70">70</button><button type="button" data-price="100">100</button></div><label><span class="af-coin"></span><input id="priceInput" name="price_af_coins" type="number" min="1" required inputmode="numeric" placeholder="Минимум 1" /></label></fieldset>
+            <label class="switch-row promotion-option" id="promoteRow"><span><strong id="promoteLabel">✨ Закрепить объявление</strong><b id="promotePrice">5 AF</b><small id="promotionNote">Объявление будет находиться выше остальных в течение 24 часов.</small></span><input name="promote_for_24h" type="checkbox" checked /><i aria-hidden="true"></i></label>
             <p class="commission-note" id="publicationNote">Публикация, редактирование и удаление объявлений всегда бесплатны.</p>
             <button class="publish-button" type="submit">Опубликовать</button>
           </form>
@@ -265,6 +264,7 @@
 
     <dialog class="modal" id="infoModal"><div class="modal-head"><div><span class="eyebrow">О приложении</span><h2>AUTOFLOW MARKET</h2></div><button type="button" data-close-dialog="infoModal" aria-label="Закрыть">×</button></div><p>AUTOFLOW MARKET — удобная площадка внутри Telegram для размещения и поиска автомобильных предложений. Вы оплачиваете, но продавец не получит деньги, пока вы не подтвердите, что всё получили. Все объявления, операции и статусы сделки сохраняются в истории.</p><p>AF Coins, купленные через Telegram Stars, можно тратить внутри сервиса, но нельзя выводить. Для вывода доступны только AF Coins, заработанные после продаж. При завершённой сделке продавец получает 70% цены, комиссия платформы составляет 30%.</p><p class="security-note">Никому не передавайте пароль, коды подтверждения или доступ к Telegram. Перед подтверждением сделки убедитесь, что получили именно заявленный товар.</p><button class="publish-button" type="button" data-close-dialog="infoModal">Понятно</button></dialog>
     <dialog class="modal purchase-modal" id="purchaseModal"><div class="modal-head"><div><span class="eyebrow">Покупка автомобиля</span><h2 id="purchaseModalTitle">Покупка автомобиля</h2></div><button type="button" data-close-purchase aria-label="Закрыть">×</button></div><p id="purchaseModalText">Цена автомобиля</p><div class="purchase-modal__amount" id="purchaseModalAmount"></div><p class="security-note" id="purchaseModalNote">Деньги будут под защитой до получения автомобиля. Продавец получит их только после вашего подтверждения.</p><button class="publish-button" id="purchaseModalAction" type="button">Подтвердить покупку</button><button class="ghost-button" type="button" data-close-purchase>Отмена</button></dialog>
+    <dialog class="modal promotion-choice-modal" id="promotionChoiceModal"><div class="modal-head"><div><span class="eyebrow">Продвижение</span><h2>Закрепить объявление?</h2></div></div><p>Ваше объявление будет показываться выше остальных в течение 24 часов.</p><div class="purchase-modal__amount">5 <span class="af-coin af-coin--small" aria-label="AF Coins"></span></div><button class="publish-button" id="promotionChoicePaid" type="button">Закрепить за 5 AF</button><button class="ghost-button" id="promotionChoiceFree" type="button">Опубликовать бесплатно</button></dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
      <!-- Плавающая кнопка чата -->
 <button
