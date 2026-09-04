@@ -296,26 +296,40 @@ async def conversation_details(
     viewer: User | None = None,
     allow_admin: bool = False,
     deal_override: Deal | None = None,
+    message_scope: str = "ordinary",
 ) -> dict:
     if viewer and not allow_admin and viewer.id not in {conversation.buyer_id, conversation.seller_id}:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    deal = deal_override or await session.scalar(
-        select(Deal).where(Deal.conversation_id == conversation.id).order_by(Deal.created_at.desc()).limit(1)
-    )
-    if not deal and conversation.deal_id:
-        deal = await session.get(Deal, conversation.deal_id)
+    deal = deal_override
+    if message_scope == "all" and not deal:
+        deal = await session.scalar(
+            select(Deal).where(Deal.conversation_id == conversation.id).order_by(Deal.created_at.desc()).limit(1)
+        )
+        if not deal and conversation.deal_id:
+            deal = await session.get(Deal, conversation.deal_id)
     listing = await session.get(Listing, deal.listing_id if deal else conversation.listing_id)
     other_id = conversation.seller_id if viewer and viewer.id == conversation.buyer_id else conversation.buyer_id
     other = await session.get(User, other_id)
-    offers = list((await session.scalars(select(PriceOffer).where(PriceOffer.conversation_id == conversation.id).order_by(PriceOffer.created_at))).all())
+    offers_query = select(PriceOffer).where(PriceOffer.conversation_id == conversation.id)
+    if message_scope == "ordinary":
+        offers_query = offers_query.where(PriceOffer.listing_id == conversation.listing_id)
+    offers = list((await session.scalars(offers_query.order_by(PriceOffer.created_at))).all())
+    message_filter = [ConversationMessage.conversation_id == conversation.id]
+    if message_scope == "deal":
+        if not deal:
+            raise HTTPException(status_code=404, detail="Deal not found")
+        message_filter.append(ConversationMessage.deal_id == deal.id)
+    elif message_scope == "ordinary":
+        message_filter.append(ConversationMessage.deal_id.is_(None))
     last_message = await session.scalar(
-        select(ConversationMessage).where(ConversationMessage.conversation_id == conversation.id).order_by(ConversationMessage.created_at.desc()).limit(1)
+        select(ConversationMessage).where(*message_filter).order_by(ConversationMessage.created_at.desc()).limit(1)
     )
     unread_count = 0
     if viewer:
         unread_count = int(await session.scalar(
             select(func.count(ConversationMessage.id)).where(
                 ConversationMessage.conversation_id == conversation.id,
+                *(message_filter[1:]),
                 ConversationMessage.sender_id != viewer.id,
                 ConversationMessage.is_read.is_(False),
             )
@@ -336,7 +350,7 @@ async def conversation_details(
         },
         "offers": [PriceOfferOut.model_validate(item) for item in offers],
         "created_at": conversation.created_at,
-        "last_message_at": conversation.last_message_at,
+        "last_message_at": last_message.created_at if last_message else None,
         "last_message": last_message.body if last_message else None,
         "unread_count": unread_count,
     }
@@ -2249,6 +2263,15 @@ async def start_conversation(
 
 @router.get("/conversations")
 async def list_conversations(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    ordinary_last_message_at = (
+        select(func.max(ConversationMessage.created_at))
+        .where(
+            ConversationMessage.conversation_id == Conversation.id,
+            ConversationMessage.deal_id.is_(None),
+        )
+        .correlate(Conversation)
+        .scalar_subquery()
+    )
     values = list(
         (
             await session.scalars(
@@ -2258,9 +2281,9 @@ async def list_conversations(user: User = Depends(get_current_user), session: As
                         and_(Conversation.buyer_id == user.id, Conversation.buyer_hidden_at.is_(None)),
                         and_(Conversation.seller_id == user.id, Conversation.seller_hidden_at.is_(None)),
                     ),
-                    or_(Conversation.last_message_at.is_not(None), Conversation.deal_id.is_not(None)),
+                    ordinary_last_message_at.is_not(None),
                 )
-                .order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc())
+                .order_by(ordinary_last_message_at.desc(), Conversation.created_at.desc())
             )
         ).all()
     )
@@ -2300,6 +2323,7 @@ async def conversation_unread_summary(
             )
             .where(
                 ConversationMessage.conversation_id.in_(conversation_ids),
+                ConversationMessage.deal_id.is_(None),
                 ConversationMessage.sender_id != user.id,
                 ConversationMessage.is_read.is_(False),
             )
@@ -2324,23 +2348,51 @@ async def conversation_unread_summary(
     }
 
 @router.get("/conversations/{conversation_id}")
-async def get_conversation(conversation_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+async def get_conversation(
+    conversation_id: uuid.UUID,
+    deal_id: uuid.UUID | None = Query(default=None),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
     conversation = await session.get(Conversation, conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return await conversation_details(session, conversation, user)
+    deal = await ensure_deal_participant(session, deal_id, user) if deal_id else None
+    if deal and deal.conversation_id != conversation.id:
+        raise HTTPException(status_code=404, detail="Deal conversation not found")
+    return await conversation_details(
+        session,
+        conversation,
+        user,
+        deal_override=deal,
+        message_scope="deal" if deal else "ordinary",
+    )
 
 
 @router.get("/conversations/{conversation_id}/messages", response_model=list[ConversationMessageOut])
-async def get_conversation_messages(conversation_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+async def get_conversation_messages(
+    conversation_id: uuid.UUID,
+    deal_id: uuid.UUID | None = Query(default=None),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
     conversation = await session.get(Conversation, conversation_id)
     if not conversation or user.id not in {conversation.buyer_id, conversation.seller_id}:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return list((await session.scalars(select(ConversationMessage).where(ConversationMessage.conversation_id == conversation.id).order_by(ConversationMessage.created_at))).all())
+    query = select(ConversationMessage).where(ConversationMessage.conversation_id == conversation.id)
+    if deal_id:
+        deal = await ensure_deal_participant(session, deal_id, user)
+        if deal.conversation_id != conversation.id:
+            raise HTTPException(status_code=404, detail="Deal conversation not found")
+        query = query.where(ConversationMessage.deal_id == deal.id)
+    else:
+        query = query.where(ConversationMessage.deal_id.is_(None))
+    return list((await session.scalars(query.order_by(ConversationMessage.created_at))).all())
 
 @router.post("/conversations/{conversation_id}/read", status_code=204)
 async def mark_conversation_as_read(
     conversation_id: uuid.UUID,
+    deal_id: uuid.UUID | None = Query(default=None),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -2355,13 +2407,21 @@ async def mark_conversation_as_read(
             detail="Conversation not found",
         )
 
-    await session.execute(
-        update(ConversationMessage)
-        .where(
+    read_filters = [
             ConversationMessage.conversation_id == conversation.id,
             ConversationMessage.sender_id != user.id,
             ConversationMessage.is_read.is_(False),
-        )
+    ]
+    if deal_id:
+        deal = await ensure_deal_participant(session, deal_id, user)
+        if deal.conversation_id != conversation.id:
+            raise HTTPException(status_code=404, detail="Deal conversation not found")
+        read_filters.append(ConversationMessage.deal_id == deal.id)
+    else:
+        read_filters.append(ConversationMessage.deal_id.is_(None))
+    await session.execute(
+        update(ConversationMessage)
+        .where(*read_filters)
         .values(
             is_read=True,
             read_at=datetime.now(UTC),
@@ -2558,7 +2618,9 @@ async def open_deal_conversation(
 ):
     conversation = await get_or_create_deal_conversation(session, user, deal_id)
     deal = await session.get(Deal, deal_id)
-    return await conversation_details(session, conversation, user, deal_override=deal)
+    return await conversation_details(
+        session, conversation, user, deal_override=deal, message_scope="deal"
+    )
 
 
 @router.put("/deals/{deal_id}/delivery-details", response_model=DealOut)
@@ -2913,6 +2975,24 @@ async def admin_deals(admin: User = Depends(require_admin), session: AsyncSessio
     return list((await session.scalars(select(Deal).order_by(Deal.updated_at.desc()).limit(200))).all())
 
 
+@router.get("/admin/platform-financial-summary")
+async def admin_platform_financial_summary(
+    admin: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Presentation-only platform income; it is not an administrator wallet."""
+    completed_count, commission = (await session.execute(
+        select(
+            func.count(Deal.id),
+            func.coalesce(func.sum(Deal.platform_commission), 0),
+        ).where(Deal.status == "completed")
+    )).one()
+    return {
+        "completed_deals": int(completed_count or 0),
+        "platform_commission_af_coins": Decimal(commission or 0),
+    }
+
+
 @router.post("/admin/deals/{deal_id}/resolve", response_model=DealOut)
 async def admin_resolve_deal(
     deal_id: uuid.UUID,
@@ -2933,7 +3013,7 @@ async def admin_conversation(conversation_id: uuid.UUID, admin: User = Depends(r
     conversation = await session.get(Conversation, conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    details = await conversation_details(session, conversation, admin, allow_admin=True)
+    details = await conversation_details(session, conversation, admin, allow_admin=True, message_scope="all")
     details["messages"] = [ConversationMessageOut.model_validate(item) for item in (await session.scalars(select(ConversationMessage).where(ConversationMessage.conversation_id == conversation.id).order_by(ConversationMessage.created_at))).all()]
     return details
 
@@ -3343,15 +3423,29 @@ async def profile(user: User = Depends(get_current_user), session: AsyncSession 
     sold = list((await session.scalars(select(Listing).where(Listing.seller_id == user.id, Listing.status == "sold").order_by(Listing.sold_at.desc()))).all())
     purchase_deals = list((await session.scalars(select(Deal).where(Deal.buyer_id == user.id, Deal.status == "completed"))).all())
     purchases = [await session.get(Listing, item.listing_id) for item in purchase_deals]
-    active_deals = list((await session.scalars(select(Deal).where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id), Deal.status.not_in(["completed", "cancelled"])))).all())
+    deals = list((await session.scalars(
+        select(Deal)
+        .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
+        .order_by(Deal.updated_at.desc())
+    )).all())
+    active_deals = [item for item in deals if item.status not in {"completed", "cancelled"}]
+    ordinary_last_message_at = (
+        select(func.max(ConversationMessage.created_at))
+        .where(
+            ConversationMessage.conversation_id == Conversation.id,
+            ConversationMessage.deal_id.is_(None),
+        )
+        .correlate(Conversation)
+        .scalar_subquery()
+    )
     conversation_values = list((await session.scalars(
         select(Conversation).where(
             or_(
                 and_(Conversation.buyer_id == user.id, Conversation.buyer_hidden_at.is_(None)),
                 and_(Conversation.seller_id == user.id, Conversation.seller_hidden_at.is_(None)),
             ),
-            or_(Conversation.last_message_at.is_not(None), Conversation.deal_id.is_not(None)),
-        ).order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc())
+            ordinary_last_message_at.is_not(None),
+        ).order_by(ordinary_last_message_at.desc(), Conversation.created_at.desc())
     )).all())
     transactions = list((await session.scalars(select(WalletTransaction).where(WalletTransaction.user_id == user.id).order_by(WalletTransaction.created_at.desc()).limit(100))).all())
     withdrawal_values = list((await session.scalars(select(WithdrawalRequest).where(WithdrawalRequest.user_id == user.id).order_by(WithdrawalRequest.created_at.desc()))).all())
@@ -3362,6 +3456,7 @@ async def profile(user: User = Depends(get_current_user), session: AsyncSession 
         sold_listings=[await listing_out(session, item, user.id) for item in sold],
         purchases=[await listing_out(session, item, user.id) for item in purchases if item],
         active_deals=active_deals,
+        deals=deals,
         conversations=[await conversation_details(session, item, user) for item in conversation_values],
         wallet_transactions=[
             {

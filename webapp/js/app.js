@@ -115,7 +115,6 @@
     adminBalanceResult: document.getElementById("adminBalanceResult"),
     profileActive: document.getElementById("profileActiveCars"),
     profileSold: document.getElementById("profileSoldCars"),
-    profilePurchases: document.getElementById("profilePurchaseCars"),
     history: document.getElementById("operationHistory"),
     withdrawalHistory: document.getElementById("withdrawalHistory"),
     activeDeals: document.getElementById("activeDeals"),
@@ -273,7 +272,6 @@
     document.getElementById("trainingMaterialForm")?.elements.title?.removeAttribute("maxlength");
     document.addEventListener("click", handleClick);
     bind(document.getElementById("infoButton"), "click", () => openDialog(elements.infoModal), "infoButton");
-    bind(document.getElementById("settingsButton"), "click", () => notify("Настройки появятся в следующей версии"), "settingsButton");
     bind(elements.extraFiltersButton, "click", toggleExtraFilters, "extraFiltersButton");
     bind(document.getElementById("resetFiltersButton"), "click", resetFilters, "resetFiltersButton");
     bind(document.getElementById("applyFiltersButton"), "click", renderListings, "applyFiltersButton");
@@ -567,8 +565,9 @@ function handleClick(event) {
     return void notify("Для баннера не указана ссылка");
   }
 
-  if (target.closest("[data-back]")) {
-    return void navigate(state.previousView || "market");
+  const backButton = target.closest("[data-back]");
+  if (backButton) {
+    return void navigate(backButton.dataset.backTarget || state.previousView || "market");
   }
 
     const closeDialog = target.closest("[data-close-dialog]");
@@ -688,7 +687,7 @@ function handleClick(event) {
       view.hidden = !active;
       view.classList.toggle("is-active", active);
     });
-    const navView = ["add", "deal-chat", "listing-detail"].includes(viewName) ? "market" : viewName === "training-detail" || viewName === "training-editor" ? "training" : ["topup", "withdraw"].includes(viewName) ? "profile" : ["admin", "support"].includes(viewName) ? "more" : viewName;
+    const navView = ["add", "deal-chat", "listing-detail"].includes(viewName) ? "market" : viewName === "training-detail" || viewName === "training-editor" ? "training" : ["topup", "withdraw", "admin", "support"].includes(viewName) ? "profile" : viewName;
     elements.navButtons.forEach((button) => {
       const active = button.dataset.navTarget === navView;
       button.classList.toggle("is-active", active);
@@ -781,8 +780,9 @@ function handleClick(event) {
   if (!conversationId) return;
 
   const dealId = state.currentConversation?.deal?.id;
+  const messagePath = `/conversations/${conversationId}/messages${dealId ? `?deal_id=${encodeURIComponent(dealId)}` : ""}`;
   const [messagesResult, dealResult] = await Promise.allSettled([
-    api.request(`/conversations/${conversationId}/messages`),
+    api.request(messagePath),
     dealId ? api.request(`/deals/${dealId}`) : Promise.resolve(null),
   ]);
   if (messagesResult.status === "rejected" && dealResult.status === "rejected") throw messagesResult.reason;
@@ -806,19 +806,20 @@ function handleClick(event) {
     renderConversation();
   }
 
-  await markConversationRead(conversationId);
+  await markConversationRead(conversationId, dealId);
 }
 
-  async function markConversationRead(conversationId) {
+  async function markConversationRead(conversationId, dealId = null) {
   await api.request(
-    `/conversations/${conversationId}/read`,
+    `/conversations/${conversationId}/read${dealId ? `?deal_id=${encodeURIComponent(dealId)}` : ""}`,
     { method: "POST" }
   );
 
-  state.unreadConversations =
-    state.unreadConversations.filter(
+  if (!dealId) {
+    state.unreadConversations = state.unreadConversations.filter(
       (item) => item.conversation_id !== conversationId
     );
+  }
 
   state.totalUnread = state.unreadConversations.reduce(
     (total, item) => total + Number(item.unread_count || 0),
@@ -929,10 +930,31 @@ function handleClick(event) {
   async function openAdminPanel() {
     if (state.me?.user.role !== "admin") return notify("Требуется роль администратора");
     openSecondary("admin");
-    const results = await Promise.allSettled([loadAdminUsers(), loadAdminListings(), loadAdminDeals(), loadAdminWithdrawals(), loadAdminSupport(), loadAdvertisementAdmin(), loadAdminTraining(state.adminTrainingFilter), loadAdminBroadcasts()]);
+    const results = await Promise.allSettled([loadAdminUsers(), loadAdminPlatformSummary(), loadAdminListings(), loadAdminDeals(), loadAdminWithdrawals(), loadAdminSupport(), loadAdvertisementAdmin(), loadAdminTraining(state.adminTrainingFilter), loadAdminBroadcasts()]);
     const rejected = results.filter((result) => result.status === "rejected");
     rejected.forEach((result) => reportClientError("admin_optional", result.reason));
     if (rejected.length) notify("Часть данных админ-панели временно недоступна");
+  }
+
+  async function loadAdminPlatformSummary() {
+    const summary = await api.request("/admin/platform-financial-summary");
+    let card = document.getElementById("adminPlatformSummary");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "adminPlatformSummary";
+      card.className = "admin-platform-summary";
+      const usersPanel = document.querySelector('[data-admin-panel="users"]');
+      const balancePanel = usersPanel?.querySelector(".admin-balance-panel");
+      if (balancePanel) balancePanel.insertAdjacentElement("afterend", card);
+    }
+    if (!card) return;
+    const title = document.createElement("strong");
+    title.textContent = "Комиссия платформы";
+    const amount = document.createElement("b");
+    amount.textContent = `+${formatNumber(summary.platform_commission_af_coins)} AF`;
+    const note = document.createElement("small");
+    note.textContent = `${Number(summary.completed_deals || 0)} завершённых сделок · отдельный учёт платформы`;
+    card.replaceChildren(title, amount, note);
   }
 
   function applyRole() {
@@ -1738,18 +1760,14 @@ function handleClick(event) {
     if (!profile) return;
     document.getElementById("activeCount").textContent = profile.active_listings.length;
     document.getElementById("soldCount").textContent = profile.sold_listings.length;
-    document.getElementById("purchaseCount").textContent = profile.purchases.length;
     renderMiniListings(elements.profileActive, profile.active_listings, "Активных объявлений пока нет", true);
     renderMiniListings(elements.profileSold, profile.sold_listings, "Проданных товаров пока нет");
-    renderMiniListings(elements.profilePurchases, profile.purchases, "Покупок пока нет");
     renderHistory(profile.wallet_transactions);
     renderWithdrawalHistory(profile.withdrawals);
-    renderDeals(profile.active_deals);
+    renderDeals(profile.deals || profile.active_deals || []);
     renderConversations(profile.conversations || []);
     renderTrainingLibrary();
     document.getElementById("frozenBalance").textContent = Number(profile.wallet.frozen_balance).toFixed(2);
-    document.getElementById("purchasedBalance").textContent = Number(profile.wallet.purchased_balance).toFixed(2);
-    document.getElementById("earnedBalance").textContent = Number(profile.wallet.earned_balance).toFixed(2);
   }
 
   function renderTrainingLibrary() {
@@ -1810,8 +1828,9 @@ function handleClick(event) {
   }
 
   function renderHistory(transactions) {
-    document.getElementById("historyEmpty").hidden = transactions.length > 0;
-    elements.history.replaceChildren(...transactions.map((item) => {
+    const presentation = transactions.flatMap(presentWalletTransaction);
+    document.getElementById("historyEmpty").hidden = presentation.length > 0;
+    elements.history.replaceChildren(...presentation.map((item) => {
       const row = document.createElement("div"); row.className = "history-item";
       const copy = document.createElement("div");
       const title = document.createElement("strong"); title.textContent = item.description;
@@ -1821,6 +1840,29 @@ function handleClick(event) {
       amount.append(document.createTextNode(`${Number(item.amount) > 0 ? "+" : ""}${formatNumber(item.amount)} `), coin("af-coin--small"));
       row.append(copy, amount); return row;
     }));
+  }
+
+  function presentWalletTransaction(item) {
+    const hiddenTypes = new Set(["platform_commission", "purchase_completed", "dispute_completed", "training_purchase_completed"]);
+    if (hiddenTypes.has(item.type)) return [];
+    const labels = {
+      protection_hold: "🚗 Покупка автомобиля",
+      sale_income: "💰 Продажа автомобиля",
+      star_payment_credit: "⭐ Пополнение",
+      refund: "↩️ Возврат",
+      seller_timeout_refund: "↩️ Возврат",
+      dispute_refund: "↩️ Возврат",
+      training_purchase: "🎓 Покупка обучения",
+      training_purchase_reserved: "🎓 Покупка обучения",
+      training_sale: "🎓 Продажа обучения",
+      listing_promotion: "✨ Закрепление объявления",
+      withdrawal_reserved: "Вывод средств — на проверке",
+      withdrawal_paid: "Вывод средств — выплачено",
+      withdrawal_rejected: "↩️ Возврат заявки на вывод",
+      withdrawal_cancelled: "↩️ Возврат заявки на вывод",
+      admin_adjustment: "Корректировка баланса",
+    };
+    return [{ ...item, description: labels[item.type] || "Операция с AF Coins" }];
   }
 
   function renderWithdrawalHistory(withdrawals) {
@@ -1881,7 +1923,7 @@ function renderConversations(conversations) {
     const time = document.createElement("time"); time.textContent = formatMessageTime(conversation.last_message_at);
     primary.append(name, time);
     const secondary = document.createElement("span"); secondary.className = "conversation-secondary";
-    const preview = document.createElement("span"); preview.className = "conversation-preview"; preview.textContent = conversation.last_message || "Сделка создана";
+    const preview = document.createElement("span"); preview.className = "conversation-preview"; preview.textContent = conversation.last_message || "Переписка";
     const username = document.createElement("span"); username.className = "conversation-username"; username.textContent = conversation.counterparty.username ? `@${conversation.counterparty.username}` : "";
     secondary.append(preview, username);
     open.append(avatar, primary, secondary);
@@ -1939,7 +1981,6 @@ async function hideCurrentConversation() {
   function toggleProfileSection(section) {
     elements.profileActive.hidden = section !== "active";
     elements.profileSold.hidden = section !== "sold";
-    elements.profilePurchases.hidden = section !== "purchases";
   }
 
   async function startConversation(listingId) {
@@ -1956,11 +1997,13 @@ async function hideCurrentConversation() {
     catch (error) { notify(error.message); }
   }
 
-  async function openConversation(id, prefetched = null, returnView = null) {
+  async function openConversation(id, prefetched = null, returnView = null, dealId = null) {
     try {
+      const requestedDealId = dealId || prefetched?.deal?.id || null;
+      const scopeQuery = requestedDealId ? `?deal_id=${encodeURIComponent(requestedDealId)}` : "";
       const [conversationResult, messagesResult] = await Promise.allSettled([
-        prefetched ? Promise.resolve(prefetched) : api.request(`/conversations/${id}`),
-        api.request(`/conversations/${id}/messages`),
+        prefetched ? Promise.resolve(prefetched) : api.request(`/conversations/${id}${scopeQuery}`),
+        api.request(`/conversations/${id}/messages${scopeQuery}`),
       ]);
       if (conversationResult.status === "rejected") throw conversationResult.reason;
       const conversation = conversationResult.value;
@@ -1972,8 +2015,8 @@ async function hideCurrentConversation() {
       renderConversation();
       await navigate("deal-chat");
       try {
-        await markConversationRead(id);
-        state.messages = safeArray(await api.request(`/conversations/${id}/messages`));
+        await markConversationRead(id, requestedDealId);
+        state.messages = safeArray(await api.request(`/conversations/${id}/messages${scopeQuery}`));
         renderConversation();
       } catch (error) {
         reportClientError("conversation_read_refresh", error);
@@ -1985,7 +2028,7 @@ async function hideCurrentConversation() {
   async function openDealConversation(dealId) {
     try {
       const conversation = await api.request(`/deals/${dealId}/conversation`, { method: "POST" });
-      return await openConversation(conversation.id, conversation);
+      return await openConversation(conversation.id, conversation, null, dealId);
     } catch (error) { notify(error.message); return false; }
   }
 
@@ -1998,7 +2041,7 @@ async function hideCurrentConversation() {
     const avatarFallback = document.getElementById("chatAvatarFallback"); const avatarImage = document.getElementById("chatAvatarImage");
     avatarFallback.textContent = (other.name || other.username || "A").slice(0, 1).toUpperCase();
     avatarImage.hidden = !other.photo_url; avatarFallback.hidden = Boolean(other.photo_url); if (other.photo_url) avatarImage.src = other.photo_url;
-    document.getElementById("chatHideButton").hidden = !details.id;
+    document.getElementById("chatHideButton").hidden = !details.id || Boolean(details.deal);
     elements.chatListing.replaceChildren();
     if (details.listing.images?.[0]) { const image = document.createElement("img"); image.src = absoluteMediaUrl(details.listing.images[0]); image.alt = listingTitle(details.listing); elements.chatListing.append(image); }
     const listingCopy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = listingTitle(details.listing);
@@ -2142,7 +2185,7 @@ async function hideCurrentConversation() {
         }),
       });
       state.currentConversation.deal = updated;
-      state.messages = await api.request(`/conversations/${state.currentConversation.id}/messages`);
+      state.messages = await api.request(`/conversations/${state.currentConversation.id}/messages?deal_id=${encodeURIComponent(dealId)}`);
       renderConversation();
     } catch (error) {
       notify(error.message);
@@ -2239,7 +2282,7 @@ async function hideCurrentConversation() {
     if (!id) return;
     if (action === "support") return openDealSupport(id);
     const endpoint = action === "seller-contacted" ? "seller-contacted" : action === "transfer" ? "transfer" : action === "confirm" ? "confirm" : action === "cancel" ? "cancel" : "dispute";
-    try { await api.request(`/deals/${id}/${endpoint}`, { method: "POST" }); await openConversation(state.currentConversation.id); await refreshMarketplace(); }
+    try { await api.request(`/deals/${id}/${endpoint}`, { method: "POST" }); await openDealConversation(id); await refreshMarketplace(); }
     catch (error) { notify(error.message); }
   }
 
