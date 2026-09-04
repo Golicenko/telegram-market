@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-30b0438a85d8" />
-    <link rel="stylesheet" href="css/style.css?v=af-30b0438a85d8" />
+    <meta name="autoflow-build" content="af-22ea28a31e95" />
+    <link rel="stylesheet" href="css/style.css?v=af-22ea28a31e95" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-30b0438a85d8" defer></script>
-    <script src="js/app.js?v=af-30b0438a85d8" defer></script>
+    <script src="js/api.js?v=af-22ea28a31e95" defer></script>
+    <script src="js/app.js?v=af-22ea28a31e95" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -35,7 +35,7 @@
         <section class="view is-active" data-view="market" aria-labelledby="marketTitle">
           <div class="sync-status" id="syncStatus" role="status" hidden><span id="syncStatusText">Часть данных временно недоступна</span><button id="syncRetry" type="button">Обновить</button></div>
           <a class="ad-banner" id="marketAdvertisement" data-ad-banner aria-label="Открыть рекламную ссылку" target="_blank" rel="noopener noreferrer" hidden><img id="marketAdvertisementImage" alt="Реклама" /></a>
-          <div class="section-title-row"><h1 id="marketTitle">Сортировка</h1><button class="cart-shortcut" type="button" data-open-cart aria-label="Открыть корзину"><span aria-hidden="true">🛒</span><span class="cart-badge" data-cart-count hidden>0</span></button></div>
+          <div class="section-title-row"><h1 id="marketTitle">Сортировка</h1></div>
 
           <div class="market-tools">
             <div class="filters" aria-label="Фильтры Market">
@@ -117,7 +117,7 @@
 
         <section class="view" data-view="more" aria-labelledby="moreTitle" hidden>
           <div class="compact-page-title"><span class="eyebrow">AutoFlow</span><h1 id="moreTitle">Ещё</h1></div>
-          <div class="more-menu"><button type="button" data-open-cart><span>🛒</span><strong>Корзина</strong><b data-cart-count>0</b></button><button type="button" data-open-topup><span class="af-coin"></span><strong>Пополнить AF Coins</strong><b>›</b></button><button type="button" data-open-support><span>?</span><strong>Поддержка</strong><b>›</b></button><button type="button" data-open-info><span>i</span><strong>Информация</strong><b>›</b></button><button type="button" data-open-admin data-admin-only hidden><span>⚙</span><strong>Администрирование</strong><b>›</b></button></div><output class="frontend-build-info" id="frontendBuildInfo" aria-live="polite"><strong>Build: source-20260824-cache1</strong><small>URL определяется…</small></output>
+          <div class="more-menu"><button type="button" data-open-topup><span class="af-coin"></span><strong>Пополнить AF Coins</strong><b>›</b></button><button type="button" data-open-support><span>?</span><strong>Поддержка</strong><b>›</b></button><button type="button" data-open-info><span>i</span><strong>Информация</strong><b>›</b></button><button type="button" data-open-admin data-admin-only hidden><span>⚙</span><strong>Администрирование</strong><b>›</b></button></div><output class="frontend-build-info" id="frontendBuildInfo" aria-live="polite"><strong>Build: source-20260824-cache1</strong><small>URL определяется…</small></output>
         </section>
 
         <section class="view form-view" data-view="add" aria-labelledby="addTitle" hidden>
@@ -232,10 +232,6 @@
     по правилам сервиса.
   </p>
 </dialog>
-
-        <section class="view form-view" data-view="cart" aria-labelledby="cartTitle" hidden>
-          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="cartTitle">Корзина</h1><span class="cart-heading-icon">🛒</span></div><div class="compact-cart-list" id="cartList"></div><div class="empty-state empty-state--tall" id="cartEmptyState"><div class="empty-cart">⌑</div><h2>Корзина пуста</h2><p>Добавьте автомобиль из каталога</p></div><div class="cart-summary" id="cartSummary" hidden><div><span>Итого</span><strong><span id="cartTotal">0</span> <i class="af-coin"></i></strong></div><button class="publish-button" id="checkoutButton" type="button">Купить</button><button class="topup-inline" id="cartTopupButton" type="button" data-open-topup hidden>Недостаточно средств — пополнить</button></div>
-        </section>
 
         <section class="view chat-view" data-view="deal-chat" aria-labelledby="chatTitle" hidden>
           <div class="chat-header"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><div class="chat-avatar" id="chatAvatar"><span id="chatAvatarFallback">A</span><img id="chatAvatarImage" alt="" hidden /></div><div class="chat-header__identity"><h1 id="chatName">Пользователь</h1><small id="chatActivity">Активность неизвестна</small></div><button class="chat-hide" id="chatHideButton" type="button">Скрыть чат</button></div><div class="chat-status" id="chatStatus">Переписка</div><button class="chat-listing" id="chatListing" type="button"></button><div class="offer-panel" id="offerPanel"></div><div class="deal-delivery" id="dealDeliveryPanel"></div><div class="messages" id="dealMessages" aria-live="polite"></div><div class="chat-compose"><div class="deal-controls" id="dealControls"></div><form class="chat-form" id="chatForm"><textarea id="chatInput" maxlength="4000" rows="1" placeholder="Сообщение" required></textarea><button type="submit" aria-label="Отправить">➤</button></form></div>

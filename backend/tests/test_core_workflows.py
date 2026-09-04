@@ -83,6 +83,12 @@ def test_minimum_topup_is_ten_stars():
     assert Settings(bot_token="123456:TEST_TOKEN").listing_promotion_cost_af_coins == 5
 
 
+def test_legacy_cart_routes_are_kept_only_as_deprecated_compatibility_api():
+    cart_routes = [route for route in routes.router.routes if route.path.startswith("/api/cart")]
+    assert {route.path for route in cart_routes} == {"/api/cart", "/api/cart/items/{listing_id}", "/api/cart/checkout"}
+    assert all(route.deprecated is True for route in cart_routes)
+
+
 def test_purchase_hold_preserves_fund_origin_and_refund():
     wallet = Wallet(
         user_id=uuid.uuid4(), purchased_balance=Decimal("70"), earned_balance=Decimal("50"),

@@ -31,7 +31,6 @@
     pendingTrainingRequestId: null,
     pendingTrainingCoverUrl: null,
     trainingCoverObjectUrl: null,
-    cart: [],
     advertisement: null,
     supportTickets: [],
     adminSupportFilter: "active",
@@ -52,7 +51,6 @@
     totalUnread: 0,
     messagePollingId: null,
     messagePollingFailureReported: false,
-    pendingCheckoutTopup: false,
     activeTopupIntentId: null,
     confirmedTopupPayments: new Set(),
     adminBalanceUser: null,
@@ -109,9 +107,6 @@
     photoPreview: document.getElementById("photoPreview"),
     brandInput: document.getElementById("brandInput"),
     priceInput: document.getElementById("priceInput"),
-    cartList: document.getElementById("cartList"),
-    cartEmpty: document.getElementById("cartEmptyState"),
-    cartSummary: document.getElementById("cartSummary"),
     infoModal: document.getElementById("infoModal"),
     toast: document.getElementById("toast"),
     paymentResult: document.getElementById("paymentResult"),
@@ -292,7 +287,6 @@
     bind(elements.brandInput, "input", updateBrandSuggestions, "brandInput");
     bind(elements.carPhotos, "change", previewPhotos, "carPhotos");
     bind(elements.carForm, "submit", submitListing, "carForm");
-    bind(document.getElementById("checkoutButton"), "click", checkout, "checkoutButton");
     bind(document.getElementById("topupForm"), "submit", requestStarInvoice, "topupForm");
     bind(elements.chatForm, "submit", sendChatMessage, "chatForm");
     bind(document.getElementById("chatHideButton"), "click", hideCurrentConversation, "chatHideButton");
@@ -430,7 +424,6 @@
     training: async () => { state.training = safeArray(await api.request(state.me?.user.role === "admin" ? "/admin/training" : "/training")); },
     contentUnseen: async () => { state.contentUnseen = await api.request("/content/unseen"); },
     trainingPurchases: async () => { state.trainingPurchases = safeArray(await api.request("/training/mine")); },
-    cart: async () => { state.cart = safeArray(await api.request("/cart")); },
     profile: async () => { state.profile = await api.request("/profile"); },
     advertisement: async () => { state.advertisement = await api.request("/advertisement", { timeoutMs: 8000 }); },
     notifications: async () => { state.notifications = safeArray(await api.request("/notifications")); },
@@ -470,7 +463,7 @@
 
   async function refreshMarketplace() {
     if (!state.serverAvailable) return;
-    await loadOptionalData(["regular", "unique", "training", "trainingPurchases", "cart", "profile", "advertisement"], { allowRecovery: false });
+    await loadOptionalData(["regular", "unique", "training", "trainingPurchases", "profile", "advertisement"], { allowRecovery: false });
   }
 
   function hasTelegramLaunchHint() {
@@ -510,10 +503,6 @@ function handleClick(event) {
 
   if (target.closest("[data-open-training]")) {
     return void openTrainingEditor();
-  }
-
-  if (target.closest("[data-open-cart]")) {
-    return void openSecondary("cart");
   }
 
   if (target.closest("[data-open-topup]")) {
@@ -586,8 +575,6 @@ function handleClick(event) {
     if (closeDialog) return void document.getElementById(closeDialog.dataset.closeDialog).close();
     const preset = target.closest("[data-price]");
     if (preset) return void selectPrice(preset);
-    const cartToggle = target.closest("[data-cart-toggle]");
-    if (cartToggle) return void toggleCart(cartToggle.dataset.cartToggle);
     const listingLike = target.closest("[data-listing-like]");
     if (listingLike) return void toggleListingLike(listingLike.dataset.listingLike);
     const buyNow = target.closest("[data-buy-now]");
@@ -606,8 +593,6 @@ function handleClick(event) {
     if (listingCard && !target.closest("button,a,input,select,textarea,label")) {
       return void openListingDetails(listingCard.dataset.listingCard);
     }
-    const cartRemove = target.closest("[data-cart-remove]");
-    if (cartRemove) return void removeFromCart(cartRemove.dataset.cartRemove);
     const profileTab = target.closest("[data-profile-tab]");
     if (profileTab) return void switchProfileTab(profileTab.dataset.profileTab);
     const profileSection = target.closest("[data-profile-section]");
@@ -703,15 +688,15 @@ function handleClick(event) {
       view.hidden = !active;
       view.classList.toggle("is-active", active);
     });
-    const navView = ["add", "cart", "deal-chat", "listing-detail"].includes(viewName) ? "market" : viewName === "training-detail" || viewName === "training-editor" ? "training" : ["topup", "withdraw"].includes(viewName) ? "profile" : ["admin", "support"].includes(viewName) ? "more" : viewName;
+    const navView = ["add", "deal-chat", "listing-detail"].includes(viewName) ? "market" : viewName === "training-detail" || viewName === "training-editor" ? "training" : ["topup", "withdraw"].includes(viewName) ? "profile" : ["admin", "support"].includes(viewName) ? "more" : viewName;
     elements.navButtons.forEach((button) => {
       const active = button.dataset.navTarget === navView;
       button.classList.toggle("is-active", active);
       active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
     });
-    elements.shell.classList.toggle("is-focused", ["add", "topup", "cart", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin"].includes(viewName));
+    elements.shell.classList.toggle("is-focused", ["add", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin"].includes(viewName));
     window.scrollTo({ top: 0, behavior: "smooth" });
-    if (state.serverAvailable && ["market", "unique", "training", "profile", "cart"].includes(viewName)) {
+    if (state.serverAvailable && ["market", "unique", "training", "profile"].includes(viewName)) {
       try {
         if (["unique", "training"].includes(viewName)) await openContentSection(viewName);
         else await refreshMarketplace();
@@ -877,7 +862,7 @@ function handleClick(event) {
   switchProfileTab("chats");
   }
   function openSecondary(viewName) {
-    state.previousView = ["add", "topup", "cart", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin"].includes(state.currentView) ? "market" : state.currentView;
+    state.previousView = ["add", "topup", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin"].includes(state.currentView) ? "market" : state.currentView;
     navigate(viewName);
   }
 
@@ -958,7 +943,6 @@ function handleClick(event) {
   function renderAll() {
     renderListings();
     renderTraining();
-    renderCart();
     renderProfile();
     renderBalance();
     renderAdvertisement();
@@ -1096,28 +1080,11 @@ function handleClick(event) {
     engagement.append(views, like);
     const actions = document.createElement("div");
     actions.className = "card-actions";
-    const openButton = document.createElement("button");
-    openButton.className = "card-message";
-    openButton.dataset.openListing = listing.id;
-    openButton.textContent = "Открыть";
-    actions.append(openButton);
-    const inCart = state.cart.some((item) => item.id === listing.id);
-    const cartButton = document.createElement("button");
-    cartButton.className = `card-cart${inCart ? " is-added" : ""}`;
-    cartButton.dataset.cartToggle = listing.id;
-    cartButton.textContent = inCart ? "✓ В корзине" : "🛒 В корзину";
-    cartButton.disabled = listing.status !== "active";
-    if (!isOwner) actions.append(cartButton);
-    if (!isOwner) {
-      const chat = document.createElement("button");
-      chat.className = "card-message"; chat.dataset.chatListing = listing.id; chat.textContent = "Написать продавцу";
-      actions.append(chat);
-    }
     if (!isOwner) {
       const buy = document.createElement("button");
       buy.className = "card-buy";
       buy.dataset.buyNow = listing.id;
-      buy.textContent = `Купить за ${formatNumber(effectivePrice)} AF Coins`;
+      buy.textContent = listing.status === "active" ? `Купить за ${formatNumber(effectivePrice)} AF` : "Продано";
       buy.disabled = listing.status !== "active";
       actions.append(buy);
     }
@@ -1235,16 +1202,6 @@ function handleClick(event) {
       return card;
     }));
     elements.trainingEmpty.hidden = state.training.length > 0;
-  }
-
-  async function toggleCart(id) {
-    if (!state.serverAvailable) return notify("Сервер недоступен");
-    try {
-      const exists = state.cart.some((item) => item.id === id);
-      await api.request(`/cart/items/${id}`, { method: exists ? "DELETE" : "POST" });
-      state.cart = await api.request("/cart");
-      renderAll();
-    } catch (error) { notify(error.message); }
   }
 
   async function buyNowFlow(id) {
@@ -1440,86 +1397,6 @@ function handleClick(event) {
   function showPurchaseSuccess(title, message) {
     elements.successTitle.textContent = title; elements.successText.textContent = message; elements.successOverlay.hidden = false;
     window.setTimeout(() => { elements.successOverlay.hidden = true; }, 2200);
-  }
-
-  async function removeFromCart(id) {
-    try {
-      await api.request(`/cart/items/${id}`, { method: "DELETE" });
-      state.cart = await api.request("/cart");
-      renderCart();
-      renderListings();
-    } catch (error) { notify(error.message); }
-  }
-
-  function renderCart() {
-    document.querySelectorAll("[data-cart-count]").forEach((node) => {
-      node.textContent = String(state.cart.length);
-      if (node.classList.contains("cart-badge")) node.hidden = state.cart.length === 0;
-    });
-    elements.cartEmpty.hidden = state.cart.length > 0;
-    elements.cartSummary.hidden = state.cart.length === 0;
-    elements.cartList.replaceChildren(...state.cart.map(createCartRow));
-    const available = state.cart.filter((item) => item.status === "active");
-    const total = available.reduce((sum, item) => sum + Number(item.effective_price_af_coins ?? item.price_af_coins), 0);
-    document.getElementById("cartTotal").textContent = formatNumber(total);
-    document.getElementById("checkoutButton").hidden = available.length === 0;
-    document.getElementById("cartTopupButton").hidden = true;
-  }
-
-  function createCartRow(listing) {
-    const row = document.createElement("article");
-    row.className = `compact-cart-item${listing.status === "sold" ? " is-sold" : ""}`;
-    const visual = document.createElement("div");
-    visual.className = "compact-cart-item__image";
-    if (listing.images?.[0]) {
-      const image = document.createElement("img");
-      image.src = absoluteMediaUrl(listing.images[0]);
-      image.alt = listingTitle(listing);
-      visual.append(image);
-    }
-    const copy = document.createElement("div");
-    copy.className = "compact-cart-item__copy";
-    const title = document.createElement("strong");
-    title.textContent = listingTitle(listing);
-    const price = document.createElement("span");
-    price.append(document.createTextNode(`${formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins)} `), coin("af-coin--small"));
-    const status = document.createElement("small");
-    status.textContent = listing.status === "sold" ? "Уже продано" : statusLabel(listing.status);
-    copy.append(title, price, status);
-    const remove = document.createElement("button");
-    remove.className = "compact-cart-item__remove";
-    remove.dataset.cartRemove = listing.id;
-    remove.textContent = "×";
-    remove.setAttribute("aria-label", "Удалить");
-    row.append(visual, copy, remove);
-    return row;
-  }
-
-  async function checkout() {
-    try {
-      const deals = await api.request("/cart/checkout", { method: "POST" });
-      await refreshMarketplace();
-      const [onlyDeal] = deals;
-      if (deals.length === 1) return await finishListingPurchase(onlyDeal);
-      showPurchaseSuccess("✅ Покупки успешно оплачены", `Создано сделок: ${deals.length}`);
-      switchProfileTab("deals");
-      await navigate("profile");
-    } catch (error) {
-      if (error.status === 402) {
-        state.pendingCheckoutTopup = true;
-        const missing = Number(String(error.message).match(/[\d.,]+/)?.[0]?.replace(",", ".") || 0);
-        const topupButton = document.getElementById("cartTopupButton");
-        topupButton.hidden = false;
-        topupButton.textContent = missing > 0
-          ? `Пополнить ${Math.ceil(missing)} Stars и продолжить покупку`
-          : "Пополнить баланс и продолжить покупку";
-        if (missing > 0) document.getElementById("topupAmount").value = String(Math.max(10, Math.ceil(missing)));
-        notify(missing > 0 ? `Не хватает ${formatNumber(missing)} AF Coins` : "Недостаточно средств");
-      } else {
-        notify(error.message);
-        await refreshMarketplace().catch((refreshError) => reportClientError("refresh_after_checkout", refreshError));
-      }
-    }
   }
 
   async function submitListing(event) {
@@ -2519,7 +2396,7 @@ async function hideCurrentConversation() {
     button.disabled = true;
     try {
       const amount = Number(document.getElementById("topupAmount").value);
-      const purpose = state.pendingCheckoutTopup ? "cart_checkout" : "topup";
+      const purpose = "topup";
       const intent = await api.request("/wallet/star-payments/intent", { method: "POST", body: JSON.stringify({ amount, purpose }) });
       state.activeTopupIntentId = intent.id;
       renderPaymentStatus("invoice_open");
@@ -2529,16 +2406,13 @@ async function hideCurrentConversation() {
       });
       if (invoiceStatus === "cancelled") {
         renderPaymentStatus("cancelled");
-        state.pendingCheckoutTopup = false;
         return;
       }
       if (invoiceStatus === "failed") {
         renderPaymentStatus("failed");
-        state.pendingCheckoutTopup = false;
         return;
       }
       await checkStarPaymentStatus(intent.id, { automatic: true, purpose });
-      state.pendingCheckoutTopup = false;
     } catch (error) {
       renderPaymentStatus(state.activeTopupIntentId ? "verification_error" : "request_error", state.activeTopupIntentId);
     } finally { button.disabled = false; }
@@ -2562,7 +2436,6 @@ async function hideCurrentConversation() {
         renderBalance();
         state.confirmedTopupPayments.add(intentId);
         renderPaymentStatus("confirmed");
-        if ((options.purpose || payment.purpose) === "cart_checkout") await navigate("market");
         return;
       }
       if (["cancelled", "failed", "expired"].includes(payment.status)) {
