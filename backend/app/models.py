@@ -436,6 +436,11 @@ class ConversationMessage(Base):
         nullable=True,
         index=True,
     )
+    price_offer_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("price_offers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     sender_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"),

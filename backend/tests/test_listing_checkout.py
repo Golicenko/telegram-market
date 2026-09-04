@@ -119,6 +119,27 @@ async def test_missing_thirty_af_coins_is_reported_by_backend():
 
 
 @pytest.mark.asyncio
+async def test_accepted_offer_is_rechecked_when_buyer_spent_balance_before_purchase():
+    buyer, seller = make_user(1), make_user(2)
+    listing, wallet = make_listing(seller.id), make_wallet(buyer.id, 20)
+    conversation = Conversation(
+        id=uuid.uuid4(), listing_id=listing.id, buyer_id=buyer.id, seller_id=seller.id,
+        accepted_price_af_coins=Decimal("75"),
+    )
+    session = FakeSession([listing, conversation, wallet])
+
+    with pytest.raises(HTTPException) as error:
+        await purchase_listing(session, buyer, listing.id)
+
+    assert error.value.status_code == 402
+    assert error.value.detail["price_af_coins"] == "75.00"
+    assert error.value.detail["available_af_coins"] == "20.00"
+    assert error.value.detail["missing_af_coins"] == "55.00"
+    assert wallet.available_balance == Decimal("20")
+    assert not [item for item in session.added if isinstance(item, (Deal, WalletTransaction))]
+
+
+@pytest.mark.asyncio
 async def test_listing_invoice_can_be_exactly_three_xtr_below_normal_minimum():
     buyer, seller = make_user(1), make_user(2)
     listing, wallet = make_listing(seller.id), make_wallet(buyer.id, 97)
