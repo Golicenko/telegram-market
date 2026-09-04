@@ -978,6 +978,7 @@ async def get_or_create_conversation(
             raise HTTPException(status_code=400, detail="You cannot start a conversation with yourself")
         conversation = await session.scalar(
             select(Conversation).where(
+                Conversation.conversation_type == "dialog",
                 or_(
                     and_(Conversation.buyer_id == buyer.id, Conversation.seller_id == listing.seller_id),
                     and_(Conversation.buyer_id == listing.seller_id, Conversation.seller_id == buyer.id),
@@ -1010,6 +1011,39 @@ async def get_or_create_conversation(
     return conversation, seller, listing
 
 
+async def get_or_create_negotiation_conversation(
+    session: AsyncSession, buyer: User, listing_id: uuid.UUID
+) -> tuple[Conversation, User, Listing]:
+    """Return the active item-specific negotiation thread, never the permanent dialog."""
+    async with session.begin():
+        listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
+        if not listing or listing.status != "active" or listing.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Listing not found")
+        if listing.seller_id == buyer.id:
+            raise HTTPException(status_code=400, detail="You cannot negotiate with yourself")
+        conversation = await session.scalar(
+            select(Conversation).where(
+                Conversation.conversation_type == "deal",
+                Conversation.listing_id == listing.id,
+                Conversation.buyer_id == buyer.id,
+                Conversation.seller_id == listing.seller_id,
+                Conversation.deal_id.is_(None),
+                Conversation.archived_at.is_(None),
+            ).with_for_update()
+        )
+        if not conversation:
+            conversation = Conversation(
+                listing_id=listing.id,
+                buyer_id=buyer.id,
+                seller_id=listing.seller_id,
+                conversation_type="deal",
+            )
+            session.add(conversation)
+            await session.flush()
+        seller = await session.get(User, listing.seller_id)
+    return conversation, seller, listing
+
+
 async def _ensure_deal_conversation_locked(
     session: AsyncSession,
     deal: Deal,
@@ -1021,13 +1055,17 @@ async def _ensure_deal_conversation_locked(
     conversation = None
     if deal.conversation_id:
         conversation = await session.get(Conversation, deal.conversation_id)
+        if conversation and conversation.conversation_type != "deal":
+            conversation = None
     if not conversation:
         conversation = await session.scalar(
             select(Conversation).where(
-                or_(
-                    and_(Conversation.buyer_id == deal.buyer_id, Conversation.seller_id == deal.seller_id),
-                    and_(Conversation.buyer_id == deal.seller_id, Conversation.seller_id == deal.buyer_id),
-                )
+                Conversation.conversation_type == "deal",
+                Conversation.listing_id == listing.id,
+                Conversation.buyer_id == deal.buyer_id,
+                Conversation.seller_id == deal.seller_id,
+                Conversation.deal_id.is_(None),
+                Conversation.archived_at.is_(None),
             ).with_for_update()
         )
     created = conversation is None
@@ -1036,6 +1074,7 @@ async def _ensure_deal_conversation_locked(
             listing_id=listing.id,
             buyer_id=deal.buyer_id,
             seller_id=deal.seller_id,
+            conversation_type="deal",
         )
         session.add(conversation)
         await session.flush()
@@ -1163,6 +1202,12 @@ async def send_conversation_message(
         conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id).with_for_update())
         if not conversation or sender.id not in {conversation.buyer_id, conversation.seller_id}:
             raise HTTPException(status_code=404, detail="Conversation not found")
+        if conversation.archived_at is not None:
+            raise HTTPException(status_code=409, detail="Эта ветка сделки уже закрыта")
+        if conversation.conversation_type == "dialog" and deal_id is not None:
+            raise HTTPException(status_code=409, detail="Обычный диалог не связан со сделкой")
+        if conversation.conversation_type == "deal" and conversation.deal_id and deal_id != conversation.deal_id:
+            raise HTTPException(status_code=409, detail="Укажите конкретную сделку для этого чата")
         existing = await session.scalar(
             select(ConversationMessage).where(
                 ConversationMessage.conversation_id == conversation.id,
@@ -1229,6 +1274,8 @@ async def create_price_offer(session: AsyncSession, actor: User, conversation_id
         conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id).with_for_update())
         if not conversation or actor.id not in {conversation.buyer_id, conversation.seller_id}:
             raise HTTPException(status_code=404, detail="Conversation not found")
+        if conversation.conversation_type != "deal" or conversation.archived_at is not None:
+            raise HTTPException(status_code=409, detail="Предложение цены доступно только в ветке конкретного автомобиля")
         if conversation.deal_id:
             deal = await session.get(Deal, conversation.deal_id)
             if deal and deal.status not in {"completed", "cancelled"}:
@@ -1309,6 +1356,16 @@ async def respond_price_offer(session: AsyncSession, actor: User, offer_id: uuid
                 )
                 .values(status="countered", responded_at=datetime.now(UTC))
             )
+        else:
+            remaining = await session.scalar(
+                select(func.count(PriceOffer.id)).where(
+                    PriceOffer.conversation_id == conversation.id,
+                    PriceOffer.id != offer.id,
+                    PriceOffer.status.in_(["pending", "accepted"]),
+                )
+            )
+            if not remaining:
+                conversation.archived_at = datetime.now(UTC)
         conversation.last_message_at = datetime.now(UTC)
         session.add(
             ConversationMessage(
@@ -1360,20 +1417,17 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
                 await session.scalars(
                     select(Conversation)
                     .where(
-                        or_(
-                            and_(Conversation.buyer_id == buyer.id, Conversation.seller_id.in_([item.seller_id for item in ordered])),
-                            and_(Conversation.seller_id == buyer.id, Conversation.buyer_id.in_([item.seller_id for item in ordered])),
-                        )
+                        Conversation.conversation_type == "deal",
+                        Conversation.buyer_id == buyer.id,
+                        Conversation.listing_id.in_(listing_ids),
+                        Conversation.deal_id.is_(None),
+                        Conversation.archived_at.is_(None),
                     )
                     .with_for_update()
                 )
             ).all()
         )
-        conversations_by_seller = {
-            (item.seller_id if item.buyer_id == buyer.id else item.buyer_id): item
-            for item in conversations
-        }
-        conversations_by_listing = {item.id: conversations_by_seller.get(item.seller_id) for item in ordered}
+        conversations_by_listing = {item.listing_id: item for item in conversations}
         effective_prices = {
             item.id: money(conversations_by_listing[item.id].accepted_price_af_coins)
             if conversations_by_listing.get(item.id)
@@ -1411,7 +1465,12 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
             await session.flush()
             conversation = conversations_by_listing.get(listing.id)
             if not conversation:
-                conversation = Conversation(listing_id=listing.id, buyer_id=buyer.id, seller_id=listing.seller_id)
+                conversation = Conversation(
+                    listing_id=listing.id,
+                    buyer_id=buyer.id,
+                    seller_id=listing.seller_id,
+                    conversation_type="deal",
+                )
                 session.add(conversation)
                 await session.flush()
                 conversations_by_listing[listing.id] = conversation
@@ -1465,10 +1524,12 @@ async def _effective_listing_price(session: AsyncSession, buyer: User, listing: 
     conversation = await session.scalar(
         select(Conversation)
         .where(
-            or_(
-                and_(Conversation.buyer_id == buyer.id, Conversation.seller_id == listing.seller_id),
-                and_(Conversation.buyer_id == listing.seller_id, Conversation.seller_id == buyer.id),
-            )
+            Conversation.conversation_type == "deal",
+            Conversation.listing_id == listing.id,
+            Conversation.buyer_id == buyer.id,
+            Conversation.seller_id == listing.seller_id,
+            Conversation.deal_id.is_(None),
+            Conversation.archived_at.is_(None),
         )
         .with_for_update()
     )
@@ -1523,13 +1584,19 @@ async def _purchase_locked_listing(
     session.add(deal)
     await session.flush()
     if not conversation:
-        conversation = Conversation(listing_id=listing.id, buyer_id=buyer.id, seller_id=listing.seller_id)
+        conversation = Conversation(
+            listing_id=listing.id,
+            buyer_id=buyer.id,
+            seller_id=listing.seller_id,
+            conversation_type="deal",
+        )
         session.add(conversation)
         await session.flush()
     else:
         conversation.listing_id = listing.id
         conversation.accepted_price_af_coins = None
     conversation.deal_id = deal.id
+    conversation.archived_at = None
     deal.conversation_id = conversation.id
     conversation.buyer_hidden_at = None
     conversation.seller_hidden_at = None
@@ -1881,6 +1948,10 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
         deal.status = "completed"
         deal.buyer_confirmed_at = now
         deal.completed_at = now
+        if deal.conversation_id:
+            conversation = await session.get(Conversation, deal.conversation_id)
+            if conversation:
+                conversation.archived_at = now
         listing.status = "sold"
         listing.sold_at = now
         listing.reserved_by_deal_id = None
@@ -1947,6 +2018,10 @@ async def cancel_deal(session: AsyncSession, actor: User, deal_id: uuid.UUID) ->
             transaction_type="refund",
             description="Защищённые средства возвращены после отмены сделки",
         )
+        if deal.conversation_id:
+            conversation = await session.get(Conversation, deal.conversation_id)
+            if conversation:
+                conversation.archived_at = deal.cancelled_at
         other_id = deal.seller_id if actor.id == deal.buyer_id else deal.buyer_id
         await create_notification(
             session,
@@ -2000,6 +2075,10 @@ async def auto_cancel_unanswered_deal(
             description="100% защищённых средств возвращены: продавец не ответил в течение 24 часов",
             external_reference=f"seller-timeout-refund:{deal.id}",
         )
+        if deal.conversation_id:
+            conversation = await session.get(Conversation, deal.conversation_id)
+            if conversation:
+                conversation.archived_at = current_time
         deal.seller_timeout_processed_at = current_time
         deal.seller_timeout_notification_status = "pending"
         await create_notification(
@@ -2115,6 +2194,10 @@ async def resolve_dispute(
             session.add(wallet_transaction(buyer_wallet, "platform_commission", -deal.platform_commission, buyer_wallet.available_balance, buyer_wallet.frozen_balance, f"Комиссия платформы {100 - get_settings().seller_payout_percent}% после решения спора", deal_id=deal.id))
             buyer_body = "Сделка завершена решением администратора"
             seller_body = f"Сделка завершена, начислено {deal.seller_payout} AF Coins"
+        if deal.conversation_id:
+            conversation = await session.get(Conversation, deal.conversation_id)
+            if conversation:
+                conversation.archived_at = now
         session.add(AdminAction(admin_id=admin.id, action=f"resolve_dispute_{outcome}", target_type="deal", target_id=deal.id, reason=reason))
         if support_ticket:
             previous_status = support_ticket.status

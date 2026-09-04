@@ -676,6 +676,7 @@ class ProfileOut(BaseModel):
     purchases: list[ListingOut]
     active_deals: list[DealOut]
     deals: list[DealOut]
+    deal_threads: list[dict]
     conversations: list[dict]
     wallet_transactions: list[dict]
     withdrawals: list[WithdrawalOut]

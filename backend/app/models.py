@@ -400,19 +400,31 @@ class Conversation(Base, TimestampMixin):
     listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"), nullable=False, index=True)
     buyer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     seller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    conversation_type: Mapped[str] = mapped_column(String(16), nullable=False, default="dialog", server_default="dialog", index=True)
     deal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("deals.id", ondelete="SET NULL"), unique=True)
     accepted_price_af_coins: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     buyer_hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     seller_hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     __table_args__ = (
         Index(
-            "uq_conversations_participant_pair",
+            "uq_conversations_dialog_participant_pair",
             sql_text("LEAST(buyer_id, seller_id)"),
             sql_text("GREATEST(buyer_id, seller_id)"),
             unique=True,
+            postgresql_where=sql_text("conversation_type = 'dialog'"),
+        ),
+        Index(
+            "uq_conversations_active_negotiation",
+            "listing_id",
+            "buyer_id",
+            "seller_id",
+            unique=True,
+            postgresql_where=sql_text("conversation_type = 'deal' AND deal_id IS NULL AND archived_at IS NULL"),
         ),
         CheckConstraint("buyer_id <> seller_id", name="ck_conversation_distinct_participants"),
+        CheckConstraint("conversation_type IN ('dialog','deal')", name="ck_conversation_type"),
         CheckConstraint("accepted_price_af_coins IS NULL OR accepted_price_af_coins >= 1", name="ck_conversation_accepted_price"),
     )
 
