@@ -101,11 +101,11 @@ test("does not automatically retry non-idempotent POST requests", async () => {
   assert.equal(calls, 1);
 });
 
-test("a cart timeout is bounded and reported without exposing secrets", async () => {
+test("a secondary request timeout is bounded and reported without exposing secrets", async () => {
   const { api, warnings } = loadApi((_url, options) => new Promise((_resolve, reject) => {
     options.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
   }), "auth_date=1&user=%7B%22id%22%3A7%7D&hash=private-value");
-  await assert.rejects(api.request("/cart", { timeoutMs: 8, retries: 0 }), (error) => error.errorType === "timeout");
+  await assert.rejects(api.request("/profile", { timeoutMs: 8, retries: 0 }), (error) => error.errorType === "timeout");
   assert.equal(warnings.length, 1);
   assert.equal(JSON.stringify(warnings).includes("private-value"), false);
 });

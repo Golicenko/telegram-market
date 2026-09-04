@@ -22,7 +22,7 @@ test("public likes wait for the idempotent backend response", () => {
 });
 
 test("purchase and deal copy uses clear human language", () => {
-  assert.match(app, /Купить за \$\{formatNumber\(effectivePrice\)\} AF Coins/);
+  assert.match(app, /Купить за \$\{formatNumber\(effectivePrice\)\} AF/);
   assert.match(app, /Подтвердить покупку/);
   assert.match(app, /Деньги будут под защитой до получения автомобиля/);
   assert.match(app, /✅ Покупка завершена/);

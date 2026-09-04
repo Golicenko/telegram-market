@@ -14,6 +14,23 @@ test("regular and unique cards expose the same server-backed purchase action", (
   assert.doesNotMatch(cardRenderer, /listing_type\s*===\s*"unique"[\s\S]{0,120}dataset\.buyNow/);
 });
 
+test("market has no cart UI and buyer cards expose only one primary action", () => {
+  const cardRenderer = source.slice(source.indexOf("function createListingCard"), source.indexOf("function observeVisibleListingCards"));
+  assert.doesNotMatch(html, /data-view="cart"|data-open-cart|data-cart-count|Корзина/);
+  assert.doesNotMatch(source, /state\.cart|dataset\.cartToggle|\/cart\/items|function renderCart|function checkout/);
+  assert.doesNotMatch(cardRenderer, /dataset\.chatListing|dataset\.openListing|dataset\.cartToggle/);
+  assert.match(cardRenderer, /buy\.dataset\.buyNow = listing\.id/);
+  assert.match(cardRenderer, /Купить за \$\{formatNumber\(effectivePrice\)\} AF/);
+  assert.match(css, /\.card-actions\{display:grid;grid-template-columns:minmax\(0,1fr\)/);
+});
+
+test("listing details keep primary, secondary and negotiation actions vertically separated", () => {
+  assert.match(html, /class="listing-page__buy"[^>]*>Купить</);
+  assert.match(html, /class="listing-page__message"[^>]*>Написать продавцу</);
+  assert.match(html, /class="listing-page__negotiate"[^>]*>Предложить свою цену</);
+  assert.match(css, /\.listing-page__actions\{display:grid;gap:8px\}/);
+});
+
 test("purchase flow uses direct checkout and an exact listing-bound top-up intent", () => {
   const purchase = source.slice(source.indexOf("async function executeSafeListingPurchase"), source.indexOf("async function payListingPromotionShortfall"));
   assert.match(purchase, /`\/listings\/\$\{flow\.listing\.id\}\/purchase`/);

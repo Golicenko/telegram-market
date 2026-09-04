@@ -15,7 +15,7 @@ test("critical bootstrap only authenticates and loads the current user", () => {
 
 test("secondary endpoints are isolated with allSettled", () => {
   const optional = source.slice(source.indexOf("const optionalLoaders"), source.indexOf("function handleClick"));
-  for (const endpoint of ["/listings?type=regular", "/listings?type=unique", "/training", "/cart", "/profile", "/advertisement", "/notifications"]) {
+  for (const endpoint of ["/listings?type=regular", "/listings?type=unique", "/training", "/profile", "/advertisement", "/notifications"]) {
     assert.match(optional, new RegExp(endpoint.replace(/[?]/g, "\\?")));
   }
   assert.match(optional, /Promise\.allSettled/);

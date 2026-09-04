@@ -2171,7 +2171,7 @@ async def remove_training_product(product_id: uuid.UUID, admin: User = Depends(r
     await delete_training_product(session, admin, product_id)
 
 
-@router.get("/cart", response_model=list[ListingOut])
+@router.get("/cart", response_model=list[ListingOut], deprecated=True)
 async def get_cart(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     listing_ids = list((await session.scalars(select(CartItem.listing_id).where(CartItem.user_id == user.id).order_by(CartItem.created_at))).all())
     if not listing_ids:
@@ -2181,7 +2181,7 @@ async def get_cart(user: User = Depends(get_current_user), session: AsyncSession
     return [await listing_out(session, by_id[item_id], user.id) for item_id in listing_ids if item_id in by_id]
 
 
-@router.post("/cart/items/{listing_id}", status_code=201)
+@router.post("/cart/items/{listing_id}", status_code=201, deprecated=True)
 async def add_to_cart(listing_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     listing = await session.get(Listing, listing_id)
     if not listing or listing.status != "active":
@@ -2194,13 +2194,13 @@ async def add_to_cart(listing_id: uuid.UUID, user: User = Depends(get_current_us
     return {"ok": True}
 
 
-@router.delete("/cart/items/{listing_id}", status_code=204)
+@router.delete("/cart/items/{listing_id}", status_code=204, deprecated=True)
 async def delete_from_cart(listing_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     await session.execute(delete(CartItem).where(CartItem.user_id == user.id, CartItem.listing_id == listing_id))
     await session.commit()
 
 
-@router.post("/cart/checkout", response_model=list[DealOut])
+@router.post("/cart/checkout", response_model=list[DealOut], deprecated=True)
 async def checkout(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
