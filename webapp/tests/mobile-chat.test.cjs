@@ -40,3 +40,15 @@ test("avatars and usernames have optional fallbacks", () => {
   assert.match(app, /other\.username \?/);
   assert.match(app, /other\.photo_url/);
 });
+
+test("ordinary dialogs and item deal threads render as separate products", () => {
+  assert.match(app, /renderDeals\(profile\.deal_threads \|\| \[\]\)/);
+  assert.match(app, /details\.conversation_type === "deal"/);
+  assert.match(app, /elements\.chatListing\.hidden = !isDealThread/);
+  assert.match(app, /conversation\.conversation_type !== "deal" \|\| conversation\.deal/);
+});
+
+test("promotion choices have equal sizing and a shared golden visual system", () => {
+  assert.match(css, /\.promotion-choice-modal \.publish-button,\.promotion-choice-modal \.ghost-button\{[^}]*width:100%[^}]*min-height:46px[^}]*border-radius:9px/);
+  assert.match(css, /\.promotion-choice-modal \.ghost-button\{[^}]*linear-gradient/);
+});

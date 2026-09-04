@@ -602,6 +602,13 @@ function handleClick(event) {
     }
     const dealChatButton = target.closest("[data-open-deal-chat]");
     if (dealChatButton) return void openDealConversation(dealChatButton.dataset.openDealChat);
+    const dealThreadButton = target.closest("[data-open-deal-thread]");
+    if (dealThreadButton) return void openConversation(
+      dealThreadButton.dataset.openDealThread,
+      null,
+      "profile",
+      dealThreadButton.dataset.dealId || null,
+    );
 
     const hideConversationButton = target.closest("[data-hide-conversation]");
     if (hideConversationButton) {
@@ -1764,7 +1771,7 @@ function handleClick(event) {
     renderMiniListings(elements.profileSold, profile.sold_listings, "Проданных товаров пока нет");
     renderHistory(profile.wallet_transactions);
     renderWithdrawalHistory(profile.withdrawals);
-    renderDeals(profile.deals || profile.active_deals || []);
+    renderDeals(profile.deal_threads || []);
     renderConversations(profile.conversations || []);
     renderTrainingLibrary();
     document.getElementById("frozenBalance").textContent = Number(profile.wallet.frozen_balance).toFixed(2);
@@ -1886,15 +1893,15 @@ function handleClick(event) {
     catch (error) { notify(error.message); }
   }
 
-  function renderDeals(deals) {
-    document.getElementById("dealsEmpty").hidden = deals.length > 0;
-    elements.activeDeals.replaceChildren(...deals.map((deal) => {
+  function renderDeals(threads) {
+    document.getElementById("dealsEmpty").hidden = threads.length > 0;
+    elements.activeDeals.replaceChildren(...threads.map((thread) => {
       const row = document.createElement("article"); row.className = "deal-row";
-      const copy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = `Сделка ${deal.id.slice(0, 8)}`;
-      const date = document.createElement("small"); date.textContent = formatDate(deal.created_at); copy.append(title, date);
+      const copy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = listingTitle(thread.listing);
+      const date = document.createElement("small"); date.textContent = formatDate(thread.last_message_at || thread.created_at); copy.append(title, date);
       const meta = document.createElement("div"); meta.className = "deal-row__meta";
-      const status = document.createElement("b"); status.textContent = dealStatusLabel(deal.status);
-      const chat = document.createElement("button"); chat.type = "button"; chat.dataset.openDealChat = deal.id; chat.textContent = "💬 Открыть чат";
+      const status = document.createElement("b"); status.textContent = thread.deal ? dealStatusLabel(thread.deal.status) : "Торг";
+      const chat = document.createElement("button"); chat.type = "button"; chat.dataset.openDealThread = thread.id; chat.dataset.dealId = thread.deal?.id || ""; chat.textContent = "💬 Открыть";
       meta.append(status, chat); row.append(copy, meta); return row;
     }));
   }
@@ -2037,19 +2044,23 @@ async function hideCurrentConversation() {
     const other = details.counterparty;
     document.getElementById("chatName").textContent = other.name || "Пользователь";
     document.getElementById("chatActivity").textContent = [other.username ? `@${other.username}` : null, other.mini_app_last_active_at ? `в Mini App ${formatMessageTime(other.mini_app_last_active_at)}` : null].filter(Boolean).join(" · ") || "Активность неизвестна";
-    document.getElementById("chatStatus").textContent = details.deal ? dealStatusLabel(details.deal.status) : "Переписка";
+    const isDealThread = details.conversation_type === "deal";
+    document.getElementById("chatStatus").textContent = details.deal ? dealStatusLabel(details.deal.status) : (isDealThread ? "Торг" : "Переписка");
     const avatarFallback = document.getElementById("chatAvatarFallback"); const avatarImage = document.getElementById("chatAvatarImage");
     avatarFallback.textContent = (other.name || other.username || "A").slice(0, 1).toUpperCase();
     avatarImage.hidden = !other.photo_url; avatarFallback.hidden = Boolean(other.photo_url); if (other.photo_url) avatarImage.src = other.photo_url;
-    document.getElementById("chatHideButton").hidden = !details.id || Boolean(details.deal);
+    document.getElementById("chatHideButton").hidden = !details.id || isDealThread;
     elements.chatListing.replaceChildren();
-    if (details.listing.images?.[0]) { const image = document.createElement("img"); image.src = absoluteMediaUrl(details.listing.images[0]); image.alt = listingTitle(details.listing); elements.chatListing.append(image); }
+    elements.chatListing.hidden = !isDealThread;
+    if (isDealThread && details.listing.images?.[0]) { const image = document.createElement("img"); image.src = absoluteMediaUrl(details.listing.images[0]); image.alt = listingTitle(details.listing); elements.chatListing.append(image); }
     const listingCopy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = listingTitle(details.listing);
     const priceValue = details.deal?.price_af_coins ?? details.accepted_price_af_coins ?? details.listing.price_af_coins;
     const price = document.createElement("small"); price.textContent = `${formatNumber(priceValue)} AF Coins`;
     const context = document.createElement("small"); context.textContent = `${details.deal ? dealStatusLabel(details.deal.status) : "Объявление"} · передача ${deliveryTimeLabel(details.listing.delivery_time_estimate)}`;
-    listingCopy.append(title, price, context);
-    const listingAction = document.createElement("span"); listingAction.textContent = "Открыть ›"; elements.chatListing.append(listingCopy, listingAction);
+    if (isDealThread) {
+      listingCopy.append(title, price, context);
+      const listingAction = document.createElement("span"); listingAction.textContent = "Открыть ›"; elements.chatListing.append(listingCopy, listingAction);
+    }
     const renderedMessages = []; let previousDay = "";
     state.messages.forEach((message) => {
       const day = new Date(message.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
@@ -2209,7 +2220,7 @@ async function hideCurrentConversation() {
   }
 
   function renderOffers() {
-    const conversation = state.currentConversation; elements.offerPanel.replaceChildren(); if (!conversation || conversation.deal) return;
+    const conversation = state.currentConversation; elements.offerPanel.replaceChildren(); if (!conversation || conversation.conversation_type !== "deal" || conversation.deal) return;
     const linkedOfferIds = new Set(safeArray(state.messages).map((message) => message.price_offer_id).filter(Boolean).map(String));
     const pending = safeArray(conversation.offers).filter((item) => item.status === "pending" && !linkedOfferIds.has(String(item.id)));
     pending.forEach((offer) => {

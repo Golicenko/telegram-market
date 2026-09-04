@@ -131,6 +131,7 @@ from .services import (
     finish_training_delivery,
     get_or_create_deal_conversation,
     get_or_create_conversation,
+    get_or_create_negotiation_conversation,
     process_successful_payment,
     purchase_listing,
     complete_listing_payment_intent,
@@ -296,11 +297,14 @@ async def conversation_details(
     viewer: User | None = None,
     allow_admin: bool = False,
     deal_override: Deal | None = None,
-    message_scope: str = "ordinary",
+    message_scope: str | None = None,
 ) -> dict:
     if viewer and not allow_admin and viewer.id not in {conversation.buyer_id, conversation.seller_id}:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    message_scope = message_scope or conversation.conversation_type
     deal = deal_override
+    if conversation.conversation_type == "deal" and not deal and conversation.deal_id:
+        deal = await session.get(Deal, conversation.deal_id)
     if message_scope == "all" and not deal:
         deal = await session.scalar(
             select(Deal).where(Deal.conversation_id == conversation.id).order_by(Deal.created_at.desc()).limit(1)
@@ -311,16 +315,19 @@ async def conversation_details(
     other_id = conversation.seller_id if viewer and viewer.id == conversation.buyer_id else conversation.buyer_id
     other = await session.get(User, other_id)
     offers_query = select(PriceOffer).where(PriceOffer.conversation_id == conversation.id)
-    if message_scope == "ordinary":
-        offers_query = offers_query.where(PriceOffer.listing_id == conversation.listing_id)
-    offers = list((await session.scalars(offers_query.order_by(PriceOffer.created_at))).all())
+    offers = [] if conversation.conversation_type == "dialog" else list(
+        (await session.scalars(offers_query.order_by(PriceOffer.created_at))).all()
+    )
     message_filter = [ConversationMessage.conversation_id == conversation.id]
     if message_scope == "deal":
-        if not deal:
-            raise HTTPException(status_code=404, detail="Deal not found")
-        message_filter.append(ConversationMessage.deal_id == deal.id)
-    elif message_scope == "ordinary":
-        message_filter.append(ConversationMessage.deal_id.is_(None))
+        message_filter.append(
+            ConversationMessage.deal_id == deal.id if deal else ConversationMessage.deal_id.is_(None)
+        )
+    elif message_scope in {"ordinary", "dialog"}:
+        message_filter.extend((
+            ConversationMessage.deal_id.is_(None),
+            ConversationMessage.message_type == "text",
+        ))
     last_message = await session.scalar(
         select(ConversationMessage).where(*message_filter).order_by(ConversationMessage.created_at.desc()).limit(1)
     )
@@ -336,6 +343,8 @@ async def conversation_details(
         ) or 0)
     return {
         "id": str(conversation.id),
+        "conversation_type": conversation.conversation_type,
+        "archived_at": conversation.archived_at,
         "listing": await listing_out(session, listing, viewer.id if viewer else None),
         "deal": DealOut.model_validate(deal) if deal else None,
         "buyer_id": str(conversation.buyer_id),
@@ -2268,6 +2277,7 @@ async def list_conversations(user: User = Depends(get_current_user), session: As
         .where(
             ConversationMessage.conversation_id == Conversation.id,
             ConversationMessage.deal_id.is_(None),
+            ConversationMessage.message_type == "text",
         )
         .correlate(Conversation)
         .scalar_subquery()
@@ -2277,6 +2287,7 @@ async def list_conversations(user: User = Depends(get_current_user), session: As
             await session.scalars(
                 select(Conversation)
                 .where(
+                    Conversation.conversation_type == "dialog",
                     or_(
                         and_(Conversation.buyer_id == user.id, Conversation.buyer_hidden_at.is_(None)),
                         and_(Conversation.seller_id == user.id, Conversation.seller_hidden_at.is_(None)),
@@ -2298,6 +2309,7 @@ async def conversation_unread_summary(
         (
             await session.scalars(
                 select(Conversation).where(
+                    Conversation.conversation_type == "dialog",
                     or_(
                         Conversation.buyer_id == user.id,
                         Conversation.seller_id == user.id,
@@ -2324,6 +2336,7 @@ async def conversation_unread_summary(
             .where(
                 ConversationMessage.conversation_id.in_(conversation_ids),
                 ConversationMessage.deal_id.is_(None),
+                ConversationMessage.message_type == "text",
                 ConversationMessage.sender_id != user.id,
                 ConversationMessage.is_read.is_(False),
             )
@@ -2365,7 +2378,7 @@ async def get_conversation(
         conversation,
         user,
         deal_override=deal,
-        message_scope="deal" if deal else "ordinary",
+        message_scope="deal" if conversation.conversation_type == "deal" else "dialog",
     )
 
 
@@ -2385,6 +2398,10 @@ async def get_conversation_messages(
         if deal.conversation_id != conversation.id:
             raise HTTPException(status_code=404, detail="Deal conversation not found")
         query = query.where(ConversationMessage.deal_id == deal.id)
+    elif conversation.conversation_type == "deal" and conversation.deal_id:
+        query = query.where(ConversationMessage.deal_id == conversation.deal_id)
+    elif conversation.conversation_type == "dialog":
+        query = query.where(ConversationMessage.deal_id.is_(None), ConversationMessage.message_type == "text")
     else:
         query = query.where(ConversationMessage.deal_id.is_(None))
     return list((await session.scalars(query.order_by(ConversationMessage.created_at))).all())
@@ -2417,6 +2434,10 @@ async def mark_conversation_as_read(
         if deal.conversation_id != conversation.id:
             raise HTTPException(status_code=404, detail="Deal conversation not found")
         read_filters.append(ConversationMessage.deal_id == deal.id)
+    elif conversation.conversation_type == "deal" and conversation.deal_id:
+        read_filters.append(ConversationMessage.deal_id == conversation.deal_id)
+    elif conversation.conversation_type == "dialog":
+        read_filters.extend((ConversationMessage.deal_id.is_(None), ConversationMessage.message_type == "text"))
     else:
         read_filters.append(ConversationMessage.deal_id.is_(None))
     await session.execute(
@@ -2473,6 +2494,8 @@ async def hide_conversation(
     conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id).with_for_update())
     if not conversation or user.id not in {conversation.buyer_id, conversation.seller_id}:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if conversation.conversation_type != "dialog":
+        raise HTTPException(status_code=409, detail="Ветки сделок нельзя скрывать вручную")
     if user.id == conversation.buyer_id:
         conversation.buyer_hidden_at = datetime.now(UTC)
     else:
@@ -2510,7 +2533,7 @@ async def add_first_price_offer(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    conversation, _, _ = await get_or_create_conversation(session, user, listing_id, create=True)
+    conversation, _, _ = await get_or_create_negotiation_conversation(session, user, listing_id)
     offer, recipient = await create_price_offer(session, user, conversation.id, payload.amount_af_coins)
     if recipient and recipient.bot_started:
         background_tasks.add_task(
@@ -3434,18 +3457,27 @@ async def profile(user: User = Depends(get_current_user), session: AsyncSession 
         .where(
             ConversationMessage.conversation_id == Conversation.id,
             ConversationMessage.deal_id.is_(None),
+            ConversationMessage.message_type == "text",
         )
         .correlate(Conversation)
         .scalar_subquery()
     )
     conversation_values = list((await session.scalars(
         select(Conversation).where(
+            Conversation.conversation_type == "dialog",
             or_(
                 and_(Conversation.buyer_id == user.id, Conversation.buyer_hidden_at.is_(None)),
                 and_(Conversation.seller_id == user.id, Conversation.seller_hidden_at.is_(None)),
             ),
             ordinary_last_message_at.is_not(None),
         ).order_by(ordinary_last_message_at.desc(), Conversation.created_at.desc())
+    )).all())
+    deal_thread_values = list((await session.scalars(
+        select(Conversation).where(
+            Conversation.conversation_type == "deal",
+            Conversation.archived_at.is_(None),
+            or_(Conversation.buyer_id == user.id, Conversation.seller_id == user.id),
+        ).order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc())
     )).all())
     transactions = list((await session.scalars(select(WalletTransaction).where(WalletTransaction.user_id == user.id).order_by(WalletTransaction.created_at.desc()).limit(100))).all())
     withdrawal_values = list((await session.scalars(select(WithdrawalRequest).where(WithdrawalRequest.user_id == user.id).order_by(WithdrawalRequest.created_at.desc()))).all())
@@ -3457,6 +3489,7 @@ async def profile(user: User = Depends(get_current_user), session: AsyncSession 
         purchases=[await listing_out(session, item, user.id) for item in purchases if item],
         active_deals=active_deals,
         deals=deals,
+        deal_threads=[await conversation_details(session, item, user) for item in deal_thread_values],
         conversations=[await conversation_details(session, item, user) for item in conversation_values],
         wallet_transactions=[
             {

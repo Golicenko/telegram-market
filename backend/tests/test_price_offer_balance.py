@@ -62,6 +62,7 @@ def offer_fixture(balance: Decimal):
     )
     conversation = Conversation(
         id=uuid.uuid4(), listing_id=listing.id, buyer_id=buyer.id, seller_id=seller.id,
+        conversation_type="deal",
     )
     wallet = Wallet(
         id=uuid.uuid4(), user_id=buyer.id, purchased_balance=balance, earned_balance=Decimal("0"),

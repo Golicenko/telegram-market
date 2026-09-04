@@ -43,11 +43,14 @@ class FakeSession:
         self.added.append(value)
 
 
-def test_one_conversation_index_is_unique_per_participant_pair():
-    index = next(item for item in Conversation.__table__.indexes if item.name == "uq_conversations_participant_pair")
+def test_only_permanent_dialog_is_unique_per_participant_pair():
+    index = next(item for item in Conversation.__table__.indexes if item.name == "uq_conversations_dialog_participant_pair")
     assert index.unique is True
     expressions = " ".join(str(item) for item in index.expressions)
     assert "LEAST" in expressions and "GREATEST" in expressions
+    assert "conversation_type = 'dialog'" in str(index.dialect_options["postgresql"]["where"])
+    assert "conversation_type" in Conversation.__table__.columns
+    assert "archived_at" in Conversation.__table__.columns
 
 
 def test_message_idempotency_is_enforced_by_database():
@@ -93,7 +96,10 @@ async def test_buyer_and_seller_reopen_the_same_deal_conversation_without_duplic
         brand="BMW M5", model="", power_hp=600, max_speed_kph=300, description="Описание",
         price_af_coins=Decimal("100"), delivery_time_estimate="up_to_30m", views_count=0, pinned=False,
     )
-    conversation = Conversation(id=uuid.uuid4(), listing_id=listing.id, buyer_id=buyer.id, seller_id=seller.id)
+    conversation = Conversation(
+        id=uuid.uuid4(), listing_id=listing.id, buyer_id=buyer.id, seller_id=seller.id,
+        conversation_type="deal",
+    )
     deal = Deal(
         id=uuid.uuid4(), listing_id=listing.id, conversation_id=conversation.id,
         buyer_id=buyer.id, seller_id=seller.id, status="paid", price_af_coins=Decimal("100"),
@@ -135,7 +141,9 @@ def test_frontend_exposes_deal_chat_and_removes_model_filter():
     html = (root / "webapp" / "index.html").read_text(encoding="utf-8")
     script = (root / "webapp" / "js" / "app.js").read_text(encoding="utf-8")
     styles = (root / "webapp" / "css" / "style.css").read_text(encoding="utf-8")
-    assert 'chat.dataset.openDealChat = deal.id' in script
+    assert 'chat.dataset.openDealThread = thread.id' in script
+    assert "renderDeals(profile.deal_threads || [])" in script
+    assert 'details.conversation_type === "deal"' in script
     assert '/deals/${dealId}/conversation' in script
     assert 'id="priceMinFilter"' in html and 'id="priceMaxFilter"' in html
     assert 'id="modelFilter"' not in html and 'name="model"' not in html
@@ -144,6 +152,7 @@ def test_frontend_exposes_deal_chat_and_removes_model_filter():
     assert "visualViewport" in script
     assert "deal_id: dealId" in script
     assert "openDealConversation(message.deal_id)" in script
+    assert ".promotion-choice-modal .publish-button,.promotion-choice-modal .ghost-button" in styles
 
 
 class EmptyScalarResult:
@@ -212,6 +221,11 @@ def test_ordinary_dialogs_and_each_deal_use_separate_message_scopes():
     assert "ConversationMessage.deal_id == deal.id" in routes_source
     assert 'deal.status not in {"completed", "cancelled"}' in services_source
     assert "delete(ConversationMessage)" not in routes_source + services_source
+    assert 'Conversation.conversation_type == "dialog"' in routes_source
+    assert 'Conversation.conversation_type == "deal"' in services_source
+    migration = (root / "migrations" / "versions" / "0033_separate_dialog_deal_threads.py").read_text(encoding="utf-8")
+    assert "UPDATE conversation_messages SET conversation_id" in migration
+    assert "DELETE FROM" not in migration.upper()
 
 
 def test_profile_keeps_completed_deals_and_platform_commission_is_presented_positive():
