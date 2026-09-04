@@ -203,6 +203,52 @@ def test_read_state_and_completed_chat_are_kept_on_backend():
     assert "delete(Conversation)" not in routes_source + services_source
 
 
+def test_ordinary_dialogs_and_each_deal_use_separate_message_scopes():
+    root = Path(__file__).parents[1]
+    routes_source = (root / "app" / "routes.py").read_text(encoding="utf-8")
+    services_source = (root / "app" / "services.py").read_text(encoding="utf-8")
+    assert 'message_scope="deal"' in routes_source
+    assert "ConversationMessage.deal_id.is_(None)" in routes_source
+    assert "ConversationMessage.deal_id == deal.id" in routes_source
+    assert 'deal.status not in {"completed", "cancelled"}' in services_source
+    assert "delete(ConversationMessage)" not in routes_source + services_source
+
+
+def test_profile_keeps_completed_deals_and_platform_commission_is_presented_positive():
+    root = Path(__file__).parents[1]
+    routes_source = (root / "app" / "routes.py").read_text(encoding="utf-8")
+    schemas_source = (root / "app" / "schemas.py").read_text(encoding="utf-8")
+    assert "deals: list[DealOut]" in schemas_source
+    assert 'Deal.status == "completed"' in routes_source
+    assert "func.sum(Deal.platform_commission)" in routes_source
+    assert '"platform_commission_af_coins": Decimal(commission or 0)' in routes_source
+
+
+class FinancialSummaryResult:
+    def one(self):
+        return 3, Decimal("90")
+
+
+class FinancialSummarySession:
+    async def execute(self, statement):
+        self.statement = statement
+        return FinancialSummaryResult()
+
+
+@pytest.mark.asyncio
+async def test_admin_platform_summary_reports_commission_as_positive_platform_income():
+    session = FinancialSummarySession()
+    result = await routes.admin_platform_financial_summary(
+        admin=User(id=uuid.uuid4(), telegram_id=1, first_name="Admin", role="admin"),
+        session=session,
+    )
+    assert result == {
+        "completed_deals": 3,
+        "platform_commission_af_coins": Decimal("90"),
+    }
+    assert "deals.status" in str(session.statement)
+
+
 def test_price_offer_accepts_one_af_and_is_database_backed():
     assert PriceOfferCreate(amount_af_coins=Decimal("1")).amount_af_coins == Decimal("1")
     check = next(item for item in PriceOffer.__table__.constraints if item.name == "ck_price_offers_min_price")

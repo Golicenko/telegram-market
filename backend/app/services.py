@@ -1077,10 +1077,6 @@ async def get_or_create_deal_conversation(
             listing,
             unhide_both=False,
         )
-        if actor.id == conversation.buyer_id:
-            conversation.buyer_hidden_at = None
-        else:
-            conversation.seller_hidden_at = None
     return conversation
 
 
@@ -1119,7 +1115,7 @@ async def save_deal_delivery_details(
             or deal.delivery_timezone != "Europe/Moscow"
         )
         conversation = await _ensure_deal_conversation_locked(
-            session, deal, listing, unhide_both=True, add_context_if_created=True
+            session, deal, listing, unhide_both=False, add_context_if_created=True
         )
         deal.buyer_game_id = clean_game_id
         deal.buyer_server = clean_server
@@ -1211,10 +1207,11 @@ async def send_conversation_message(
         )
         session.add(message)
         conversation.last_message_at = now
-        if recipient_id == conversation.buyer_id:
-            conversation.buyer_hidden_at = None
-        else:
-            conversation.seller_hidden_at = None
+        if deal_id is None:
+            if recipient_id == conversation.buyer_id:
+                conversation.buyer_hidden_at = None
+            else:
+                conversation.seller_hidden_at = None
         await create_notification(
             session,
             recipient_id,
@@ -1234,7 +1231,7 @@ async def create_price_offer(session: AsyncSession, actor: User, conversation_id
             raise HTTPException(status_code=404, detail="Conversation not found")
         if conversation.deal_id:
             deal = await session.get(Deal, conversation.deal_id)
-            if deal and deal.status not in {"cancelled"}:
+            if deal and deal.status not in {"completed", "cancelled"}:
                 raise HTTPException(status_code=409, detail="Price cannot be negotiated after purchase")
         normalized_amount = money(amount)
         if actor.id == conversation.buyer_id:
@@ -1583,7 +1580,7 @@ async def purchase_listing(session: AsyncSession, buyer: User, listing_id: uuid.
         if listing.status == "reserved" and listing.reserved_by_deal_id:
             existing = await session.scalar(select(Deal).where(Deal.id == listing.reserved_by_deal_id).with_for_update())
             if existing and existing.buyer_id == buyer.id and existing.status not in {"completed", "cancelled"}:
-                await _ensure_deal_conversation_locked(session, existing, listing, unhide_both=True)
+                await _ensure_deal_conversation_locked(session, existing, listing, unhide_both=False)
                 seller = await session.get(User, existing.seller_id)
                 return existing, seller.telegram_id if seller and seller.bot_started else None, False
         deal, seller_telegram_id = await _purchase_locked_listing(session, buyer, listing)
