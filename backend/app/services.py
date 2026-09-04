@@ -1184,6 +1184,24 @@ async def create_price_offer(session: AsyncSession, actor: User, conversation_id
             deal = await session.get(Deal, conversation.deal_id)
             if deal and deal.status not in {"cancelled"}:
                 raise HTTPException(status_code=409, detail="Price cannot be negotiated after purchase")
+        normalized_amount = money(amount)
+        if actor.id == conversation.buyer_id:
+            wallet = await session.scalar(
+                select(Wallet).where(Wallet.user_id == actor.id).with_for_update()
+            )
+            available = money(wallet.available_balance if wallet else Decimal("0"))
+            if normalized_amount > available:
+                missing = money(normalized_amount - available)
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "code": "insufficient_af_coins",
+                        "message": "Недостаточно AF Coins",
+                        "available_af_coins": str(available),
+                        "required_af_coins": str(normalized_amount),
+                        "missing_af_coins": str(missing),
+                    },
+                )
         if parent_offer_id:
             parent = await session.scalar(select(PriceOffer).where(PriceOffer.id == parent_offer_id).with_for_update())
             if not parent or parent.conversation_id != conversation.id or parent.status != "pending" or parent.offered_by_id == actor.id:
@@ -1194,7 +1212,7 @@ async def create_price_offer(session: AsyncSession, actor: User, conversation_id
             conversation_id=conversation.id,
             listing_id=conversation.listing_id,
             offered_by_id=actor.id,
-            amount_af_coins=money(amount),
+            amount_af_coins=normalized_amount,
             status="pending",
             parent_offer_id=parent_offer_id,
         )
@@ -1204,6 +1222,7 @@ async def create_price_offer(session: AsyncSession, actor: User, conversation_id
         session.add(
             ConversationMessage(
                 conversation_id=conversation.id,
+                price_offer_id=offer.id,
                 sender_id=actor.id,
                 body=f"Предложена цена {offer.amount_af_coins} AF Coins",
                 message_type="offer",

@@ -59,6 +59,7 @@ def test_message_idempotency_is_enforced_by_database():
         "conversation_id", "sender_id", "client_message_id"
     ]
     assert "deal_id" in ConversationMessage.__table__.columns
+    assert "price_offer_id" in ConversationMessage.__table__.columns
 
 
 def test_client_message_id_is_required_and_long_messages_are_supported():
@@ -246,3 +247,22 @@ def test_listing_details_is_a_real_view_and_draft_offer_has_listing_endpoint():
     assert "listingDetailsModal" not in script
     assert "`/conversations/listing/${sourceListingId}/offers`" in script
     assert "conversationId ? `/conversations/${conversationId}/offers`" in script
+
+
+def test_price_offer_is_rendered_as_a_structured_chat_card_with_topup_recovery():
+    root = Path(__file__).parents[2]
+    script = (root / "webapp" / "js" / "app.js").read_text(encoding="utf-8")
+    styles = (root / "webapp" / "css" / "style.css").read_text(encoding="utf-8")
+    migration = (
+        root / "backend" / "migrations" / "versions" / "0031_price_offer_message_link.py"
+    ).read_text(encoding="utf-8")
+    assert 'message.message_type === "offer"' in script
+    assert 'item.id) === String(message.price_offer_id' in script
+    assert 'heading.textContent = "💰 Предложение цены"' in script
+    assert 'status.textContent = "❌ Предложение отклонено"' in script
+    assert 'status.textContent = `✅ Предложение принято — ${formatNumber(amount)} AF`' in script
+    assert 'flow.kind === "offer-topup"' in script
+    assert 'elements.purchaseModalAction.textContent = `Пополнить ${topupAmount} AF`' in script
+    assert ".message.is-offer" in styles
+    assert "price_offer_id" in migration
+    assert "drop_table" not in migration

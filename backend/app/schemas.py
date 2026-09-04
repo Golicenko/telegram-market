@@ -428,6 +428,7 @@ class ConversationMessageOut(ORMModel):
     id: uuid.UUID
     conversation_id: uuid.UUID
     deal_id: uuid.UUID | None = None
+    price_offer_id: uuid.UUID | None = None
     sender_id: uuid.UUID
     body: str
     message_type: str

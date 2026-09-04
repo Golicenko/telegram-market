@@ -1242,6 +1242,12 @@ function handleClick(event) {
   async function runPurchaseFlowAction() {
     const flow = state.purchaseFlow;
     if (!flow || flow.busy) return;
+    if (flow.kind === "offer-topup") {
+      const input = document.getElementById("topupAmount");
+      if (input) input.value = String(flow.topupAmount);
+      closePurchaseFlow();
+      return openSecondary("topup");
+    }
     if (flow.kind === "training") {
       if (flow.stage === "confirm") return executeTrainingPurchase(flow);
       if (flow.stage === "topup") return payTrainingShortfall(flow);
@@ -1969,8 +1975,11 @@ async function hideCurrentConversation() {
     state.messages.forEach((message) => {
       const day = new Date(message.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
       if (day !== previousDay) { const divider = document.createElement("div"); divider.className = "message-day"; divider.textContent = day; renderedMessages.push(divider); previousDay = day; }
-      const bubble = document.createElement("div"); bubble.className = `message${message.sender_id === state.me.user.id ? " is-own" : ""}${message.message_type === "system" ? " is-system" : ""}`;
-      bubble.append(document.createTextNode(message.body)); const meta = document.createElement("small"); meta.className = "message-meta"; const time = document.createElement("span"); time.textContent = formatMessageTime(message.created_at); meta.append(time);
+      const isOffer = message.message_type === "offer";
+      const bubble = document.createElement("div"); bubble.className = `message${message.sender_id === state.me.user.id ? " is-own" : ""}${message.message_type === "system" ? " is-system" : ""}${isOffer ? " is-offer" : ""}`;
+      if (isOffer) renderOfferMessage(bubble, message);
+      else bubble.append(document.createTextNode(message.body));
+      const meta = document.createElement("small"); meta.className = "message-meta"; const time = document.createElement("span"); time.textContent = formatMessageTime(message.created_at); meta.append(time);
       if (message.sender_id === state.me.user.id && message.message_type !== "system") { const receipt = document.createElement("span"); receipt.className = "message-receipt"; receipt.textContent = message.is_read ? "✓✓" : "✓"; receipt.title = message.is_read ? "Прочитано" : "Получено сервером"; meta.append(receipt); }
       bubble.append(meta); renderedMessages.push(bubble);
     });
@@ -1979,6 +1988,37 @@ async function hideCurrentConversation() {
     renderOffers();
     renderDealControls();
     requestAnimationFrame(() => { elements.dealMessages.scrollTop = elements.dealMessages.scrollHeight; });
+  }
+
+  function renderOfferMessage(bubble, message) {
+    const offer = safeArray(state.currentConversation?.offers).find(
+      (item) => String(item.id) === String(message.price_offer_id || ""),
+    );
+    const fallbackAmount = String(message.body || "").match(/[\d]+(?:[.,][\d]+)?/)?.[0]?.replace(",", ".");
+    const amount = offer?.amount_af_coins ?? fallbackAmount ?? "—";
+    const heading = document.createElement("strong");
+    heading.className = "offer-message__title";
+    heading.textContent = "💰 Предложение цены";
+    const price = document.createElement("span");
+    price.className = "offer-message__price";
+    price.textContent = `${formatNumber(amount)} AF`;
+    const status = document.createElement("span");
+    status.className = "offer-message__status";
+    if (offer?.status === "accepted") status.textContent = `✅ Предложение принято — ${formatNumber(amount)} AF`;
+    else if (offer?.status === "rejected") status.textContent = "❌ Предложение отклонено";
+    else if (offer?.status === "countered") status.textContent = "↪️ Отправлено встречное предложение";
+    else status.textContent = "Ожидается ответ продавца";
+    bubble.append(heading, price, status);
+    if (offer?.status === "pending" && offer.offered_by_id !== state.me.user.id) {
+      const actions = document.createElement("div");
+      actions.className = "offer-message__actions";
+      const accept = document.createElement("button");
+      accept.type = "button"; accept.dataset.offerAction = "accept"; accept.dataset.offerId = offer.id; accept.textContent = "Принять";
+      const reject = document.createElement("button");
+      reject.type = "button"; reject.dataset.offerAction = "reject"; reject.dataset.offerId = offer.id; reject.textContent = "Отклонить";
+      actions.append(accept, reject);
+      bubble.append(actions);
+    }
   }
 
   function renderDealDeliveryPanel() {
@@ -2091,7 +2131,8 @@ async function hideCurrentConversation() {
 
   function renderOffers() {
     const conversation = state.currentConversation; elements.offerPanel.replaceChildren(); if (!conversation || conversation.deal) return;
-    const pending = safeArray(conversation.offers).filter((item) => item.status === "pending");
+    const linkedOfferIds = new Set(safeArray(state.messages).map((message) => message.price_offer_id).filter(Boolean).map(String));
+    const pending = safeArray(conversation.offers).filter((item) => item.status === "pending" && !linkedOfferIds.has(String(item.id)));
     pending.forEach((offer) => {
       const row = document.createElement("div"); row.className = "offer-panel__row"; row.dataset.offerId = offer.id;
       const text = document.createElement("span"); text.append(document.createTextNode(`Предложение: ${formatNumber(offer.amount_af_coins)} `), coin("af-coin--small")); row.append(text);
@@ -2275,7 +2316,23 @@ async function hideCurrentConversation() {
       await openConversation(offer.conversation_id, null, listingId ? "listing-detail" : null);
       notify("Предложение отправлено продавцу");
     }
-    catch (error) { notify(error.message); }
+    catch (error) {
+      if (Number(error.status) === 402 && error.detail?.code === "insufficient_af_coins") {
+        const available = Number(error.detail.available_af_coins || 0);
+        const missing = Number(error.detail.missing_af_coins || 0);
+        const minimumTopup = Number(document.getElementById("topupAmount")?.min || 1);
+        const topupAmount = Math.max(minimumTopup, Math.ceil(missing));
+        state.purchaseFlow = { kind: "offer-topup", stage: "topup", busy: false, missing, topupAmount };
+        elements.purchaseModalTitle.textContent = "Недостаточно AF Coins";
+        elements.purchaseModalText.textContent = `На балансе: ${formatNumber(available)} AF. Для предложения ${formatNumber(amount)} AF не хватает ${formatNumber(missing)} AF.`;
+        elements.purchaseModalAmount.replaceChildren(document.createTextNode(`${formatNumber(missing)} `), coin("af-coin--small"));
+        elements.purchaseModalNote.textContent = "При создании предложения деньги не списываются. Пополнение использует существующую оплату через Telegram Stars.";
+        elements.purchaseModalAction.textContent = `Пополнить ${topupAmount} AF`;
+        elements.purchaseModalAction.disabled = false;
+        return openDialog(elements.purchaseModal);
+      }
+      notify(error.message);
+    }
   }
 
   async function runOfferAction(button) {
