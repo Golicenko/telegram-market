@@ -1,6 +1,6 @@
 """Separate permanent dialogs from item-specific deal threads.
 
-Revision ID: 0033_separate_dialog_deal_threads
+Revision ID: 0033_dialog_deal_threads
 Revises: 0032_listing_promotion_topup
 """
 
@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0033_separate_dialog_deal_threads"
+revision = "0033_dialog_deal_threads"
 down_revision = "0032_listing_promotion_topup"
 branch_labels = None
 depends_on = None
