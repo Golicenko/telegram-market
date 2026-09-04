@@ -1,4 +1,5 @@
 import uuid
+import ast
 from decimal import Decimal
 from pathlib import Path
 
@@ -226,6 +227,29 @@ def test_ordinary_dialogs_and_each_deal_use_separate_message_scopes():
     migration = (root / "migrations" / "versions" / "0033_separate_dialog_deal_threads.py").read_text(encoding="utf-8")
     assert "UPDATE conversation_messages SET conversation_id" in migration
     assert "DELETE FROM" not in migration.upper()
+
+
+def test_every_alembic_revision_fits_the_standard_version_table_column():
+    versions = Path(__file__).parents[1] / "migrations" / "versions"
+    for migration in versions.glob("*.py"):
+        tree = ast.parse(migration.read_text(encoding="utf-8"))
+        revision = next(
+            (
+                ast.literal_eval(node.value)
+                for node in tree.body
+                if (
+                    isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == "revision" for target in node.targets)
+                )
+                or (
+                    isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                    and node.target.id == "revision"
+                )
+            ),
+            None,
+        )
+        assert revision and len(revision) <= 32, f"{migration.name}: Alembic revision exceeds VARCHAR(32)"
 
 
 def test_profile_keeps_completed_deals_and_platform_commission_is_presented_positive():
