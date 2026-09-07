@@ -40,6 +40,7 @@ from .bot import (
 from .config import Settings, get_settings
 from .database import SessionLocal, get_session
 from .chat_access import ACTIVE_DEAL_STATUSES, active_thread_clause, require_active_chat
+from .inactivity import process_unanswered_dialog, record_buyer_request, record_seller_response
 from .models import AccountListing, AdminAction, AdminBroadcast, Advertisement, CartItem, ContentSeenState, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, ListingLike, ListingView, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportCaseEvent, SupportMessage, SupportTicket, TrainingInboxUpload, TrainingMaterial, TrainingMaterialDelivery, TrainingProduct, TrainingPurchase, TrainingView, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
 from .schemas import (
     AccountListingCreate,
@@ -652,86 +653,32 @@ async def notify_deal_purchase_seller(deal_id: uuid.UUID) -> None:
 
 
 async def notify_seller_timeout_cancellation(deal_id: uuid.UUID) -> None:
-    """Send each timeout notice at most once after an atomic refund."""
-    buyer_telegram_id: int | None = None
-    seller_telegram_id: int | None = None
-    seller_details: dict | None = None
-    administrator_ids: set[int] = set()
+    """Retire the legacy grouped sender; delivery now belongs to Notification rows."""
     async with SessionLocal() as session:
         async with session.begin():
             deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
-            now = datetime.now(UTC)
-            if (
-                not deal
-                or deal.seller_timeout_notification_status not in {"pending", "failed"}
-                or int(deal.seller_timeout_notification_attempts or 0) >= get_settings().deal_notification_max_attempts
-                or (
-                    deal.seller_timeout_notification_next_attempt_at
-                    and deal.seller_timeout_notification_next_attempt_at > now
-                )
-            ):
-                return
-            deal.seller_timeout_notification_status = "sending"
-            deal.seller_timeout_notification_claimed_at = now
-            deal.seller_timeout_notification_attempts = int(deal.seller_timeout_notification_attempts or 0) + 1
-            deal.seller_timeout_notification_next_attempt_at = None
-            buyer = await session.get(User, deal.buyer_id)
-            seller = await session.get(User, deal.seller_id)
-            administrators = list((await session.scalars(
-                select(User).where(User.role == "admin", User.bot_started.is_(True))
-            )).all())
-            if buyer and buyer.bot_started:
-                buyer_telegram_id = buyer.telegram_id
-            if seller and seller.bot_started:
-                seller_telegram_id = seller.telegram_id
-            administrator_ids.update(item.telegram_id for item in administrators)
-            configured_admin_id = get_settings().admin_id
-            if configured_admin_id:
-                administrator_ids.add(configured_admin_id)
-            if seller:
-                seller_details = {
-                    "seller_id": str(seller.id),
-                    "seller_name": " ".join(filter(None, [seller.first_name, seller.last_name])) or "Продавец",
-                    "seller_telegram_id": seller.telegram_id,
-                    "deal_id": str(deal.id),
-                }
-
-    results: list[bool] = []
-    if buyer_telegram_id is not None:
-        results.append(await send_bot_notification(
-            buyer_telegram_id,
-            "↩️ Сделка отменена\n\nПродавец не ответил в течение 24 часов.\n\nВсе средства возвращены на ваш баланс.",
-        ))
-    if seller_telegram_id is not None:
-        results.append(await send_bot_notification(
-            seller_telegram_id,
-            "⚠️ Сделка отменена\n\nВы не ответили покупателю в течение 24 часов.\n\n"
-            "Сделка была автоматически отменена, а деньги возвращены покупателю.\n\n"
-            "Ваши активные объявления могут быть сняты с публикации администратором.",
-        ))
-    if seller_details:
-        for telegram_id in administrator_ids:
-            results.append(await send_inactive_seller_admin_notification(telegram_id, **seller_details))
-
-    delivered = all(results) if results else True
-    async with SessionLocal() as session:
-        async with session.begin():
-            deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
-            if not deal or deal.seller_timeout_notification_status != "sending":
-                return
-            deal.seller_timeout_notification_status = "sent" if delivered else "failed"
-            deal.seller_timeout_notification_sent_at = datetime.now(UTC) if delivered else None
-            deal.seller_timeout_notification_error = None if delivered else "Telegram не принял одно или несколько уведомлений"
-            deal.seller_timeout_notification_next_attempt_at = (
-                None
-                if delivered
-                else deal_notification_retry_at(deal.seller_timeout_notification_attempts)
-            )
-
+            if deal and deal.seller_timeout_notification_status in {"pending", "sending", "failed"}:
+                deal.seller_timeout_notification_status = "not_required"
+                deal.seller_timeout_notification_error = "Групповая повторная отправка отключена; см. notifications"
 
 async def recover_seller_response_timeouts() -> None:
     """Resume deadlines from PostgreSQL after deploys and process due refunds."""
     now = datetime.now(UTC)
+    async with SessionLocal() as session:
+        ordinary_ids = list((await session.scalars(select(Conversation.id).where(
+            Conversation.deal_id.is_(None), Conversation.archived_at.is_(None),
+            Conversation.conversation_type == "deal",
+            select(PriceOffer.id).where(PriceOffer.conversation_id == Conversation.id,
+                PriceOffer.offered_by_id == Conversation.buyer_id, PriceOffer.status == "pending",
+                PriceOffer.created_at <= now - timedelta(seconds=get_settings().seller_response_timeout_seconds),
+            ).correlate(Conversation).exists(),
+        ).limit(100))).all())
+    for conversation_id in ordinary_ids:
+        try:
+            async with SessionLocal() as session:
+                await process_unanswered_dialog(session, conversation_id, now)
+        except Exception as exc:
+            deal_notification_logger.error("dialog_inactivity_failed conversation_id=%s error_type=%s", conversation_id, type(exc).__name__)
     stale_cutoff = now - timedelta(seconds=get_settings().deal_notification_claim_timeout_seconds)
     async with SessionLocal() as session:
         async with session.begin():
@@ -745,9 +692,9 @@ async def recover_seller_response_timeouts() -> None:
                     ),
                 )
                 .values(
-                    seller_timeout_notification_status="pending",
-                    seller_timeout_notification_next_attempt_at=now,
-                    seller_timeout_notification_error="Предыдущая отправка прервана перезапуском сервиса",
+                    seller_timeout_notification_status="not_required",
+                    seller_timeout_notification_next_attempt_at=None,
+                    seller_timeout_notification_error="Групповая отправка отключена, повтор не выполняется",
                 )
             )
     async with SessionLocal() as session:
@@ -804,6 +751,7 @@ async def recover_seller_response_timeouts() -> None:
 async def run_seller_response_timeout_worker() -> None:
     """Poll durable deadlines instead of relying on an in-process 24-hour sleep."""
     poll_seconds = get_settings().deal_notification_poll_seconds
+    deal_notification_logger.info("seller_response_timeout_worker_started poll_seconds=%s", poll_seconds)
     while True:
         for job_name, recovery in (
             ("seller_response_timeout", recover_seller_response_timeouts),
@@ -2311,7 +2259,7 @@ async def conversation_unread_summary(
         (
             await session.scalars(
                 select(Conversation).where(
-                    Conversation.conversation_type == "dialog",
+                    or_(Conversation.conversation_type == "dialog", active_thread_clause()),
                     or_(
                         Conversation.buyer_id == user.id,
                         Conversation.seller_id == user.id,
@@ -2337,8 +2285,6 @@ async def conversation_unread_summary(
             )
             .where(
                 ConversationMessage.conversation_id.in_(conversation_ids),
-                ConversationMessage.deal_id.is_(None),
-                ConversationMessage.message_type == "text",
                 ConversationMessage.sender_id != user.id,
                 ConversationMessage.is_read.is_(False),
             )
@@ -2357,10 +2303,30 @@ async def conversation_unread_summary(
             {
                 "conversation_id": conversation_id,
                 "unread_count": unread_count,
+                "conversation_type": next(item.conversation_type for item in conversations if str(item.id) == conversation_id),
             }
             for conversation_id, unread_count in unread_by_conversation.items()
         ],
     }
+
+@router.post("/conversations/{conversation_id}/presence", status_code=204)
+async def conversation_presence(
+    conversation_id: uuid.UUID,
+    visible: bool = Query(default=True),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    conversation = await session.get(Conversation, conversation_id)
+    await require_active_chat(session, conversation, user)
+    values = {"viewing_conversation_id": conversation.id, "chat_presence_at": datetime.now(UTC)} if visible else {
+        "viewing_conversation_id": None, "chat_presence_at": None,
+    }
+    query = update(User).where(User.id == user.id)
+    if not visible:
+        query = query.where(User.viewing_conversation_id == conversation.id)
+    await session.execute(query.values(**values))
+    await session.commit()
+
 
 @router.get("/conversations/{conversation_id}")
 async def get_conversation(
@@ -2414,6 +2380,7 @@ async def get_conversation_messages(
 async def mark_conversation_as_read(
     conversation_id: uuid.UUID,
     deal_id: uuid.UUID | None = Query(default=None),
+    through_message_id: uuid.UUID | None = Query(default=None),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -2435,6 +2402,11 @@ async def mark_conversation_as_read(
             ConversationMessage.is_read.is_(False),
     ]
     await require_active_chat(session, conversation, user)
+    if through_message_id:
+        through = await session.get(ConversationMessage, through_message_id)
+        if not through or through.conversation_id != conversation.id:
+            raise HTTPException(status_code=404, detail="Message not found")
+        read_filters.append(ConversationMessage.created_at <= through.created_at)
     if deal_id:
         deal = await ensure_deal_participant(session, deal_id, user)
         if deal.conversation_id != conversation.id:
@@ -2470,8 +2442,7 @@ async def add_conversation_message(
     message, recipient, created = await send_conversation_message(
         session, user, conversation_id, payload.body, payload.client_message_id, payload.deal_id
     )
-    if created and recipient and recipient.bot_started:
-        background_tasks.add_task(send_bot_notification, recipient.telegram_id, "Новое сообщение в AUTOFLOW MARKET. Откройте приложение, чтобы ответить")
+    # The message and its outbox notice were committed in the same transaction.
     return message
 
 
@@ -2487,8 +2458,7 @@ async def add_first_conversation_message(
     message, recipient, created = await send_conversation_message(
         session, user, conversation.id, payload.body, payload.client_message_id, payload.deal_id
     )
-    if created and recipient and recipient.bot_started:
-        background_tasks.add_task(send_bot_notification, recipient.telegram_id, "Новое сообщение в AUTOFLOW MARKET. Откройте приложение, чтобы ответить")
+    # Durable worker handles delivery, including restart recovery.
     return message
 
 
@@ -2694,21 +2664,30 @@ async def send_message(
     if (
         user.id == deal.seller_id
         and deal.status in {"paid", "seller_contacted"}
-        and deal.delivery_details_submitted_at
+        and deal.seller_response_deadline
         and not deal.seller_responded_at
     ):
         if deal.seller_response_deadline and now >= deal.seller_response_deadline:
             raise HTTPException(status_code=409, detail="Срок ответа истёк. Сделка ожидает автоматической отмены")
         deal.seller_responded_at = now
-    message = DealMessage(deal_id=deal.id, sender_id=user.id, body=payload.body.strip())
+    conversation = await session.scalar(select(Conversation).where(Conversation.id == deal.conversation_id).with_for_update())
+    await require_active_chat(session, conversation, user)
+    if user.id == deal.buyer_id:
+        record_buyer_request(conversation, now, deal)
+    else:
+        record_seller_response(conversation, now)
+    message = DealMessage(id=uuid.uuid4(), deal_id=deal.id, sender_id=user.id, body=payload.body.strip())
     session.add(message)
+    session.add(ConversationMessage(id=message.id, conversation_id=conversation.id, deal_id=deal.id,
+        sender_id=user.id, body=payload.body.strip(), message_type="text"))
+    conversation.last_message_at = now
     recipient_id = deal.seller_id if user.id == deal.buyer_id else deal.buyer_id
-    await create_notification(session, recipient_id, "deal_message", "Новое сообщение по сделке", payload.body[:240], {"deal_id": str(deal.id)})
+    await create_notification(session, recipient_id, "conversation_message", "Новое сообщение по сделке", payload.body[:240],
+        {"deal_id": str(deal.id), "conversation_id": str(conversation.id), "message_id": str(message.id)})
     recipient = await session.get(User, recipient_id)
     await session.commit()
     await session.refresh(message)
-    if recipient:
-        background_tasks.add_task(send_bot_notification, recipient.telegram_id, "Новое сообщение в AUTOFLOW MARKET. Откройте приложение, чтобы ответить")
+    # Legacy clients use the same durable outbox and visible conversation history.
     return message
 
 

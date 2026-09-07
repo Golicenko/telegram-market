@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
 from .chat_access import ACTIVE_DEAL_STATUSES, require_active_chat, require_active_chat_by_id
+from .inactivity import record_buyer_request, record_seller_response, hide_active_listings, offer_response_expired, SELLER_NOTICE, BUYER_NOTICE
 from .models import (
     AccountListing,
     AdminAction,
@@ -124,6 +125,8 @@ def debit_spendable(wallet: Wallet, amount: Decimal) -> tuple[Decimal, Decimal]:
 
 async def create_notification(session: AsyncSession, user_id: uuid.UUID, kind: str, title: str, body: str, payload: dict | None = None) -> Notification:
     notification = Notification(user_id=user_id, notification_type=kind, title=title, body=body, payload=payload or {})
+    if kind in {"conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden"}:
+        notification.delivery_status = "pending"
     session.add(notification)
     return notification
 
@@ -1162,8 +1165,8 @@ async def save_deal_delivery_details(
         deal.buyer_server = clean_server
         deal.preferred_delivery_time = delivery_label
         deal.delivery_timezone = "Europe/Moscow"
+        submitted_at = datetime.now(UTC)
         if deal.delivery_details_submitted_at is None:
-            submitted_at = datetime.now(UTC)
             deal.delivery_details_submitted_at = submitted_at
             deal.seller_response_deadline = submitted_at + timedelta(
                 seconds=get_settings().seller_response_timeout_seconds
@@ -1173,9 +1176,12 @@ async def save_deal_delivery_details(
             deal.seller_purchase_notification_next_attempt_at = datetime.now(UTC)
             deal.seller_purchase_notification_error = None
         if changed:
-            conversation.last_message_at = datetime.now(UTC)
+            conversation.last_message_at = submitted_at
+            record_buyer_request(conversation, conversation.last_message_at, deal)
+            message_id = uuid.uuid4()
             session.add(
                 ConversationMessage(
+                    id=message_id,
                     conversation_id=conversation.id,
                     deal_id=deal.id,
                     sender_id=buyer.id,
@@ -1188,6 +1194,10 @@ async def save_deal_delivery_details(
                     message_type="system",
                 )
             )
+            if deal.seller_purchase_notification_status == "sent":
+                await create_notification(session, deal.seller_id, "conversation_message", "Данные передачи обновлены",
+                    "Покупатель обновил данные передачи автомобиля", {"conversation_id": str(conversation.id),
+                    "deal_id": str(deal.id), "message_id": str(message_id)})
         await session.flush()
     return deal
 
@@ -1248,7 +1258,7 @@ async def send_conversation_message(
                 raise HTTPException(status_code=409, detail="Сделка уже автоматически отменена из-за истечения срока ответа")
             if (
                 deal.status in {"paid", "seller_contacted"}
-                and deal.delivery_details_submitted_at
+                and deal.seller_response_deadline
                 and not deal.seller_responded_at
             ):
                 if deal.seller_response_deadline and now >= deal.seller_response_deadline:
@@ -1257,8 +1267,12 @@ async def send_conversation_message(
                         detail="Срок ответа истёк. Сделка ожидает автоматической отмены",
                     )
                 deal.seller_responded_at = now
+        if sender.id == conversation.buyer_id:
+            record_buyer_request(conversation, now, deal)
+        else:
+            record_seller_response(conversation, now)
         message = ConversationMessage(
-            conversation_id=conversation.id, deal_id=deal_id, sender_id=sender.id, body=body.strip(),
+            id=uuid.uuid4(), conversation_id=conversation.id, deal_id=deal_id, sender_id=sender.id, body=body.strip(),
             message_type="text", client_message_id=client_message_id,
         )
         session.add(message)
@@ -1274,7 +1288,7 @@ async def send_conversation_message(
             "conversation_message",
             "Новое сообщение",
             body.strip()[:240],
-            {"conversation_id": str(conversation.id), "listing_id": str(conversation.listing_id)},
+            {"conversation_id": str(conversation.id), "listing_id": str(conversation.listing_id), "message_id": str(message.id)},
         )
         await session.flush()
     return message, recipient, True
@@ -1312,6 +1326,8 @@ async def _create_price_offer_locked(session: AsyncSession, actor: User, convers
         parent = await session.scalar(select(PriceOffer).where(PriceOffer.id == parent_offer_id).with_for_update())
         if not parent or parent.conversation_id != conversation.id or parent.status != "pending" or parent.offered_by_id == actor.id:
             raise HTTPException(status_code=409, detail="Counter-offer is not allowed")
+        if offer_response_expired(parent, datetime.now(UTC)):
+            raise HTTPException(status_code=409, detail="Срок ответа на предложение истёк")
         parent.status = "countered"
         parent.responded_at = datetime.now(UTC)
     offer = PriceOffer(
@@ -1325,6 +1341,10 @@ async def _create_price_offer_locked(session: AsyncSession, actor: User, convers
     session.add(offer)
     await session.flush()
     conversation.last_message_at = datetime.now(UTC)
+    if actor.id == conversation.buyer_id:
+        record_buyer_request(conversation, conversation.last_message_at)
+    else:
+        record_seller_response(conversation, conversation.last_message_at)
     session.add(
         ConversationMessage(
             conversation_id=conversation.id,
@@ -1365,6 +1385,8 @@ async def respond_price_offer(session: AsyncSession, actor: User, offer_id: uuid
         offer = await session.scalar(select(PriceOffer).where(PriceOffer.id == offer_id).with_for_update().execution_options(populate_existing=True))
         if not offer or offer.status != "pending":
             raise HTTPException(status_code=404, detail="Pending offer not found")
+        if offer_response_expired(offer, datetime.now(UTC)):
+            raise HTTPException(status_code=409, detail="Срок ответа на предложение истёк")
         conversation = await session.scalar(select(Conversation).where(Conversation.id == offer.conversation_id).with_for_update())
         if not conversation or actor.id not in {conversation.buyer_id, conversation.seller_id} or actor.id == offer.offered_by_id:
             raise HTTPException(status_code=403, detail="Only the other participant can respond")
@@ -1372,6 +1394,8 @@ async def respond_price_offer(session: AsyncSession, actor: User, offer_id: uuid
         if conversation.deal_id:
             raise HTTPException(status_code=409, detail="Покупка уже совершена")
         offer.status = "accepted" if accept else "rejected"
+        if actor.id == conversation.seller_id:
+            record_seller_response(conversation, datetime.now(UTC))
         offer.responded_at = datetime.now(UTC)
         if accept:
             listing = await session.scalar(select(Listing).where(Listing.id == offer.listing_id).with_for_update())
@@ -1834,7 +1858,7 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
         if (
             actor.id == deal.seller_id
             and deal.status in {"paid", "seller_contacted"}
-            and deal.delivery_details_submitted_at
+            and deal.seller_response_deadline
             and not deal.seller_responded_at
         ):
             if deal.seller_response_deadline and now >= deal.seller_response_deadline:
@@ -1845,6 +1869,10 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
         ):
             raise HTTPException(status_code=409, detail="Покупатель ещё не указал игровой ID, сервер и время получения")
         deal.status = next_status
+        if actor.id == deal.seller_id and deal.conversation_id:
+            conversation = await session.get(Conversation, deal.conversation_id)
+            if conversation:
+                record_seller_response(conversation, now)
         if next_status == "transfer_in_progress":
             deal.transfer_started_at = now
             if deal.buyer_transfer_reminder_status in {None, "not_scheduled"}:
@@ -2110,14 +2138,19 @@ async def auto_cancel_unanswered_deal(
             conversation = await session.get(Conversation, deal.conversation_id)
             if conversation:
                 conversation.archived_at = current_time
+                conversation.inactivity_status = "processed"
+                conversation.inactivity_processed_at = current_time
+        listing.status = "paused"
+        hidden_ids = await hide_active_listings(session, seller.id)
+        deal.cancellation_reason = "seller_inactive"
         deal.seller_timeout_processed_at = current_time
-        deal.seller_timeout_notification_status = "pending"
+        deal.seller_timeout_notification_status = "not_required"  # Recipient-specific durable outbox replaces grouped retries.
         await create_notification(
             session,
             buyer.id,
             "seller_timeout_refund",
             "↩️ Сделка отменена",
-            "Продавец не ответил в течение 24 часов. Все средства возвращены на ваш баланс.",
+            BUYER_NOTICE,
             {"deal_id": str(deal.id)},
         )
         await create_notification(
@@ -2125,8 +2158,8 @@ async def auto_cancel_unanswered_deal(
             seller.id,
             "seller_timeout_cancelled",
             "⚠️ Сделка отменена",
-            "Вы не ответили покупателю в течение 24 часов. Деньги возвращены покупателю.",
-            {"deal_id": str(deal.id)},
+            SELLER_NOTICE,
+            {"deal_id": str(deal.id), "reason": "seller_inactive", "listing_ids": [str(listing.id), *hidden_ids], "processed_at": current_time.isoformat()},
         )
         administrators = list((await session.scalars(select(User).where(User.role == "admin"))).all())
         for administrator in administrators:

@@ -151,6 +151,7 @@ class DealOut(ORMModel):
     preferred_delivery_time: str | None
     delivery_timezone: str | None
     seller_response_deadline: datetime | None
+    cancellation_reason: str | None = None
     seller_responded_at: datetime | None
     transfer_started_at: datetime | None
     completed_at: datetime | None

@@ -722,6 +722,7 @@ function handleClick(event) {
   async function navigate(viewName, options = {}) {
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
+    if (state.currentView === "deal-chat" && viewName !== "deal-chat") releaseChatPresence();
     if (viewName !== state.currentView && !options.back) {
       if (primaryViews.has(viewName)) state.navigationStack = [];
       else state.navigationStack.push({
@@ -786,6 +787,11 @@ function handleClick(event) {
     state.unreadConversations = summary.conversations || [];
 
     renderUnreadBadge();
+    if (state.currentView === "profile") {
+      if (state.totalUnread !== previousTotal) state.profile = await api.request("/profile");
+      renderConversations(state.profile?.conversations || []);
+      renderDeals(state.profile?.deal_threads || []);
+    }
 
     if (state.totalUnread > previousTotal) {
       showNewMessageNotification();
@@ -809,9 +815,19 @@ function handleClick(event) {
   const count = state.totalUnread;
 
   elements.chatUnreadBadge.textContent =
-    count > 99 ? "99+" : String(count);
+    count > 9 ? "9+" : String(count);
 
   elements.chatUnreadBadge.hidden = count === 0;
+  for (const [tab, type] of [["chats", "dialog"], ["deals", "deal"]]) {
+    const button = document.querySelector(`[data-profile-tab="${tab}"]`);
+    if (!button) continue;
+    let badge = button.querySelector(".conversation-unread");
+    const unread = state.unreadConversations.filter(item => (item.conversation_type || "dialog") === type)
+      .reduce((sum, item) => sum + Number(item.unread_count || 0), 0);
+    if (!unread) { badge?.remove(); continue; }
+    if (!badge) { badge = document.createElement("span"); badge.className = "conversation-unread"; button.append(badge); }
+    badge.textContent = unread > 9 ? "9+" : String(unread);
+  }
 }
 
   function showNewMessageNotification() {
@@ -872,24 +888,30 @@ function handleClick(event) {
 }
 
   async function markConversationRead(conversationId, dealId = null) {
+  if (document.hidden || state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId) return;
+  await api.request(`/conversations/${conversationId}/presence`, { method: "POST" });
+  const through = state.messages[state.messages.length - 1]?.id;
+  if (!through) return;
+  const query = new URLSearchParams({ through_message_id: through });
+  if (dealId) query.set("deal_id", dealId);
   await api.request(
-    `/conversations/${conversationId}/read${dealId ? `?deal_id=${encodeURIComponent(dealId)}` : ""}`,
+    `/conversations/${conversationId}/read?${query}`,
     { method: "POST" }
   );
 
-  if (!dealId) {
-    state.unreadConversations = state.unreadConversations.filter(
-      (item) => item.conversation_id !== conversationId
-    );
-  }
-
-  state.totalUnread = state.unreadConversations.reduce(
-    (total, item) => total + Number(item.unread_count || 0),
-    0
-  );
+  const summary = await api.request("/conversations/unread-summary");
+  state.unreadConversations = summary.conversations || [];
+  state.totalUnread = Number(summary.total_unread || 0);
 
   renderUnreadBadge();
 }
+
+  function releaseChatPresence() {
+    const id = state.currentConversation?.id;
+    if (!id) return;
+    void api.request(`/conversations/${id}/presence?visible=false`, { method: "POST" })
+      .catch(error => { if (![404, 409].includes(Number(error.status))) reportClientError("chat_presence_release", error); });
+  }
 
   function startMessagePolling() {
   if (state.messagePollingId) {
@@ -1954,6 +1976,11 @@ function handleClick(event) {
       const row = document.createElement("article"); row.className = "deal-row";
       const copy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = listingTitle(thread.listing);
       const date = document.createElement("small"); date.textContent = formatDate(thread.last_message_at || thread.created_at); copy.append(title, date);
+      const identity = document.createElement("span"); identity.textContent = thread.counterparty?.name || "Пользователь";
+      const preview = document.createElement("small"); preview.textContent = thread.last_message || "Чат сделки";
+      copy.append(identity, preview);
+      const unread = Number(state.unreadConversations.find(item => item.conversation_id === thread.id)?.unread_count || 0);
+      if (unread) { const badge = document.createElement("span"); badge.className = "conversation-unread"; badge.textContent = unread > 9 ? "9+" : String(unread); copy.append(badge); }
       const meta = document.createElement("div"); meta.className = "deal-row__meta";
       const status = document.createElement("b"); status.textContent = thread.deal ? dealStatusLabel(thread.deal.status) : "Торг";
       const chat = document.createElement("button"); chat.type = "button"; chat.dataset.openDealThread = thread.id; chat.dataset.dealId = thread.deal?.id || ""; chat.textContent = "💬 Открыть";
@@ -1994,13 +2021,13 @@ function renderConversations(conversations) {
       (item) => String(item.conversation_id) === String(conversation.id)
     );
     const unreadCount = Number(
-      conversation.unread_count || unreadSummary?.unread_count || 0
+      unreadSummary?.unread_count || 0
     );
 
     if (unreadCount > 0) {
       const badge = document.createElement("span");
       badge.className = "conversation-unread";
-      badge.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+      badge.textContent = unreadCount > 9 ? "9+" : String(unreadCount);
       open.append(badge);
     }
 
@@ -2153,6 +2180,8 @@ async function hideCurrentConversation() {
     if (offer?.status === "accepted") status.textContent = `✅ Предложение принято — ${formatNumber(amount)} AF`;
     else if (offer?.status === "rejected") status.textContent = "❌ Предложение отклонено";
     else if (offer?.status === "countered") status.textContent = "↪️ Отправлено встречное предложение";
+    else if (offer?.status === "cancelled") status.textContent = "Предложение отменено";
+    else if (offer?.status === "expired") status.textContent = "Срок ответа на предложение истёк";
     else status.textContent = "Ожидается ответ продавца";
     bubble.append(heading, price, status);
     if (offer?.status === "pending" && offer.offered_by_id !== state.me.user.id) {
@@ -4069,11 +4098,13 @@ async function hideCurrentConversation() {
     });
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
+        releaseChatPresence();
         state.hiddenAt = Date.now();
         return;
       }
       const inactiveFor = state.hiddenAt ? Date.now() - state.hiddenAt : 0;
       state.hiddenAt = null;
+      void refreshUnreadMessages();
       if (inactiveFor >= 60000 && window.navigator.onLine !== false) void bootstrap({ automatic: true });
     });
     window.addEventListener("pageshow", (event) => {

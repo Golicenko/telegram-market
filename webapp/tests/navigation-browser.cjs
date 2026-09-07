@@ -26,6 +26,8 @@ const server = http.createServer((req,res) => {
     for (const width of [320,360,390,430]) {
       const page = await browser.newPage({viewport:{width,height:844},isMobile:true,hasTouch:true});
       const errors=[];
+      let unreadCount = 2;
+      const receipts = [];
       page.on("pageerror", error => errors.push(error.message));
       await page.addInitScript(() => {
         window.Telegram = {WebApp:{initData:"fixture",ready(){},expand(){},onEvent(){},
@@ -39,7 +41,9 @@ const server = http.createServer((req,res) => {
         if(endpoint==="/me") body={user,wallet};
         else if(endpoint==="/profile") body={user,wallet,active_listings:[],sold_listings:[],purchases:[],active_deals:[],deals:[],deal_threads:[],conversations:[],wallet_transactions:[],withdrawals:[]};
         else if(endpoint==="/content/unseen") body={training:{unseen_count:0,marker:0},unique:{unseen_count:0,marker:0}};
-        else if(endpoint==="/conversations/unread-summary") body={total_unread:0,conversations:[]};
+        else if(endpoint==="/conversations/unread-summary") body={total_unread:unreadCount,conversations:unreadCount ? [{conversation_id:"dialog-1",conversation_type:"dialog",unread_count:unreadCount}] : []};
+        else if(endpoint==="/conversations/dialog-1/messages") body=[1,2].map(n=>({id:"message-"+n,conversation_id:"dialog-1",sender_id:"seller",body:("Message "+n+" ").repeat(80),message_type:"text",is_read:unreadCount===0,created_at:"2026-09-07T12:00:0"+n+"Z"}));
+        else if(endpoint==="/conversations/dialog-1/read") { receipts.push(url.searchParams.get("through_message_id")); unreadCount=0; }
         else if(endpoint==="/listings") body=url.searchParams.get("type")==="regular"?[car]:[];
         else if(endpoint==="/listings/car-1") body=car;
         else if(endpoint==="/conversations/listing/car-1" || endpoint==="/conversations/dialog-1") body=dialog;
@@ -70,7 +74,16 @@ const server = http.createServer((req,res) => {
       await page.locator('[data-view="market"]').waitFor({state:"visible"});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),false);
       assert.deepEqual(errors,[]);
+      unreadCount=2;
+      await page.goto("http://127.0.0.1:"+server.address().port+"/?conversation_id=dialog-1");
+      await page.locator('[data-view="deal-chat"]').waitFor({state:"visible"});
+      await page.waitForFunction(()=>document.querySelector("#chatUnreadBadge").hidden);
+      assert(receipts.includes("message-2"));
+      const history = await page.locator("#dealMessages").evaluate(el=>({top:el.scrollTop,height:el.clientHeight,total:el.scrollHeight}));
+      assert(history.top+history.height>=history.total-2,JSON.stringify(history));
+      assert.deepEqual(errors,[]);
       console.log(width+"px: listing header, safe area, resized chat composer, dialog/back, double tap, overflow OK");
+      console.log(width+"px: exact-chat deep link, read-through receipt, badge cleared, scroll-to-last OK");
       await page.close();
     }
   } finally { await browser.close(); server.close(); }
