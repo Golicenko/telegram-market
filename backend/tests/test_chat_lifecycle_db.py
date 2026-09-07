@@ -12,7 +12,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
-from app.models import User, Listing, Conversation, ConversationMessage, Deal, PriceOffer, Wallet, WalletTransaction, Notification
+from app.models import User, Listing, Conversation, ConversationMessage, Deal, DealEvent, PriceOffer, Wallet, WalletTransaction, Notification
 from app.chat_access import active_thread_clause, require_active_chat
 from app.services import create_listing_price_offer, respond_price_offer, get_or_create_conversation, send_conversation_message, purchase_listing, complete_deal, get_or_create_deal_conversation
 
@@ -54,7 +54,7 @@ class DB:
 def db():
     engine = create_engine("sqlite://")
     # Table constraints are real; PostgreSQL expression indexes are checked separately.
-    models = (User, Listing, Conversation, ConversationMessage, Deal, PriceOffer, Wallet, WalletTransaction, Notification)
+    models = (User, Listing, Conversation, ConversationMessage, Deal, DealEvent, PriceOffer, Wallet, WalletTransaction, Notification)
     with engine.begin() as connection:
         for model in models:
             connection.execute(CreateTable(model.__table__))

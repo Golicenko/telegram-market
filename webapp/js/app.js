@@ -59,6 +59,9 @@
     adminBalanceUser: null,
     adminBalanceDirection: "credit",
     purchaseFlow: null,
+    dealActionPending: false,
+    adminDealControl: null,
+    adminDealRequest: null,
     listingViewObserver: null,
     listingViewTimers: new Map(),
     listingViewRequests: new Set(),
@@ -401,6 +404,21 @@
     void openConversationDeepLink();
     void openListingDeepLink();
     void openInactiveSellerAdminDeepLink();
+    void openSectionDeepLink();
+  }
+
+  async function openSectionDeepLink() {
+    const adminDeal = launchParams.get("admin_deal_id");
+    if (adminDeal) {
+      launchParams.delete("admin_deal_id");
+      if (state.me?.user.role !== "admin") return notify("Доступен только администратору");
+      await openAdminPanel(); await openAdminDealControl(adminDeal); return;
+    }
+    if (["deal_id", "conversation_id", "listing_id", "training_id", "support_deal_id", "support_case", "admin_user_id"].some(key => launchParams.has(key))) return;
+    const view = launchParams.get("view");
+    launchParams.delete("view");
+    if (["profile", "market", "unique", "training", "more", "help", "settings", "topup"].includes(view)) await navigate(view);
+    else if (view === "support") await openSupport();
   }
 
   async function authenticateCurrentUser() {
@@ -504,6 +522,10 @@
 
 function handleClick(event) {
   const target = event.target;
+  const adminDealOpen = target.closest("[data-admin-deal-open]");
+  if (adminDealOpen) return void openAdminDealControl(adminDealOpen.dataset.adminDealOpen);
+  const adminDealAction = target.closest("[data-admin-deal-action]");
+  if (adminDealAction) return void executeAdminDealControl(adminDealAction);
   const helpAnchor = target.closest("[data-help-anchor]");
   if (helpAnchor) {
     event.preventDefault();
@@ -1881,7 +1903,6 @@ function handleClick(event) {
     renderWithdrawalHistory(profile.withdrawals);
     renderDeals(profile.deal_threads || []);
     renderConversations(profile.conversations || []);
-    document.getElementById("frozenBalance").textContent = Number(profile.wallet.frozen_balance).toFixed(2);
   }
 
   function renderTrainingLibrary() {
@@ -2097,8 +2118,10 @@ async function hideCurrentConversation() {
   }
 
   function switchProfileTab(tabName) {
+    // One history entry retains access to existing active deals and operation history.
+    if (tabName === "deals") tabName = "history";
     document.querySelectorAll("[data-profile-tab]").forEach((button) => button.classList.toggle("is-active", button.dataset.profileTab === tabName));
-    document.querySelectorAll("[data-profile-panel]").forEach((panel) => { panel.hidden = panel.dataset.profilePanel !== tabName; });
+    document.querySelectorAll("[data-profile-panel]").forEach((panel) => { panel.hidden = panel.dataset.profilePanel !== tabName && !(tabName === "history" && panel.dataset.profilePanel === "deals"); });
   }
 
   function toggleProfileSection(section) {
@@ -2366,7 +2389,7 @@ async function hideCurrentConversation() {
     const hasDeliveryDetails = Boolean(deal.buyer_game_id && deal.buyer_server && deal.preferred_delivery_time && deal.delivery_timezone);
     if (isSeller && hasDeliveryDetails && ["paid", "seller_contacted"].includes(deal.status)) {
       const transfer = document.createElement("button");
-      transfer.className = "deal-confirm";
+      transfer.className = "deal-confirm deal-transfer-critical";
       transfer.dataset.dealAction = "transfer";
       transfer.textContent = "✅ Машина передана";
       elements.dealControls.append(transfer);
@@ -2399,7 +2422,7 @@ async function hideCurrentConversation() {
       const support = document.createElement("button");
       support.className = "deal-support";
       support.dataset.dealAction = "support";
-      support.textContent = "Написать в поддержку";
+      support.textContent = "Есть проблема";
       elements.dealControls.append(warning, timer, confirm, support);
     }
     if (["paid", "seller_contacted"].includes(deal.status)) {
@@ -2409,15 +2432,39 @@ async function hideCurrentConversation() {
 
   async function runDealAction(action) {
     const id = state.currentConversation?.deal?.id;
-    if (!id) return;
+    if (!id || state.dealActionPending) return;
     if (action === "support") return openDealSupport(id);
+    if (!["seller-contacted", "transfer", "confirm", "cancel"].includes(action)) return;
+    state.dealActionPending = true;
     const endpoint = action === "seller-contacted" ? "seller-contacted" : action === "transfer" ? "transfer" : action === "confirm" ? "confirm" : action === "cancel" ? "cancel" : "dispute";
     try {
+      const confirmation = {
+        transfer: ["Вы уверены, что автомобиль уже передан покупателю? После подтверждения покупателю будет предложено завершить сделку. Деньги пока останутся под защитой.", "Да, автомобиль передан"],
+        confirm: ["Подтверждайте получение только после того, как действительно получили товар. Сделка будет завершена, средства начислены продавцу.", "Да, машина у меня"],
+        cancel: ["Отменить сделку? Защищённые средства вернутся покупателю, чат сделки закроется. Отмена доступна только до передачи.", "Отменить сделку"],
+      }[action];
+      if (confirmation && !(await confirmCriticalAction(...confirmation))) return;
+      if (state.currentConversation?.deal?.id !== id) return;
       const result = await api.request(`/deals/${id}/${endpoint}`, { method: "POST" });
       if (["completed", "cancelled"].includes(result.status)) return await closeDealChat();
       await openDealConversation(id); await refreshMarketplace();
     }
     catch (error) { notify(error.message); }
+    finally { state.dealActionPending = false; }
+  }
+
+  function confirmCriticalAction(message, label) {
+    return new Promise(resolve => {
+      const dialog = document.createElement("dialog"); dialog.className = "modal critical-confirm";
+      const title = document.createElement("h2"); title.textContent = "Подтвердите действие";
+      const text = document.createElement("p"); text.textContent = message;
+      const accept = document.createElement("button"); accept.type = "button"; accept.className = "publish-button"; accept.textContent = label;
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Отмена"; cancel.autofocus = true;
+      accept.addEventListener("click", () => dialog.close("confirmed"), { once: true });
+      cancel.addEventListener("click", () => dialog.close("cancelled"), { once: true });
+      dialog.addEventListener("close", () => { const confirmed = dialog.returnValue === "confirmed"; dialog.remove(); resolve(confirmed); }, { once: true });
+      dialog.append(title, text, cancel, accept); document.body.append(dialog); dialog.showModal(); cancel.focus();
+    });
   }
 
   function openDealSupport(dealId) {
@@ -2652,7 +2699,7 @@ async function hideCurrentConversation() {
       checking: ["is-pending", "⏳ Проверяем платёж…"],
       confirmed: ["is-success", "✅ Оплата подтверждена\nAF Coins зачислены"],
       pending: ["is-pending", "⏳ Платёж подтверждается\nНе закрывайте приложение. Обычно это занимает несколько секунд."],
-      verification_error: ["is-error", "⚠️ Платёж получен, но баланс пока не обновился\nНажмите «Проверить снова» или обратитесь в поддержку."],
+      verification_error: ["is-error", "⚠️ Не удалось проверить платёж\nПолучение оплаты ещё не подтверждено сервером. Нажмите «Проверить снова» или обратитесь в поддержку."],
       request_error: ["is-error", "Не удалось открыть оплату. Попробуйте ещё раз."],
       cancelled: ["is-cancelled", "Оплата не завершена"],
       failed: ["is-cancelled", "Оплата не завершена"],
@@ -2753,13 +2800,13 @@ async function hideCurrentConversation() {
       { id: "sell", title: "Как продать машину", steps: ["Создайте объявление с фотографиями и честным описанием.", "Отвечайте на предложения и сообщения покупателя.", "После оплаты откройте сделку, передайте автомобиль и отметьте передачу."], warning: "Продавец получает 70% цены после завершения сделки; комиссия сервиса — 30%.", action: "Выставить автомобиль", add: true },
       { id: "publish", title: "Как выставить объявление", steps: ["Нажмите «+» в Market.", "Добавьте фотографии, название, характеристики, описание и цену.", "Выберите бесплатную публикацию или отдельно подтвердите закрепление."], warning: "Публикация бесплатная. Платное закрепление стоит 5 AF на 24 часа; списание требует подтверждения.", action: "Добавить автомобиль", add: true },
       { id: "offer", title: "Как предложить свою цену", steps: ["Откройте автомобиль и нажмите «Предложить свою цену».", "Укажите сумму от 1 AF и отправьте предложение.", "Дождитесь принятия или отказа. Принятую цену можно использовать при покупке."], warning: "Доступного баланса должно хватать на предложение. Само предложение не списывает средства. Без решения продавца за 24 часа предложение отменяется.", action: "Выбрать автомобиль", view: "market" },
-      { id: "deal", title: "Как проходит безопасная сделка", steps: ["При покупке средства резервируются сервером.", "Отправьте продавцу ID, сервер и удобное время по МСК.", "Общайтесь внутри сделки. После передачи проверьте автомобиль и подтвердите получение."], warning: "Если есть проблема, не подтверждайте получение — откройте спор или обратитесь в поддержку.", action: "Мои сделки", profile: "deals" },
+      { id: "deal", title: "Как проходит безопасная сделка", steps: ["Купите автомобиль: сервер резервирует средства и создаёт чат сделки.", "Отправьте продавцу игровой ID, сервер и время по МСК.", "Продавец передаёт автомобиль в игре и подтверждает это отдельной кнопкой в сделке.", "Проверьте полученный автомобиль. Если всё хорошо — подтвердите получение. Только тогда продавцу начисляются средства.", "Если есть проблема — создайте обращение через кнопку «Есть проблема» в этой сделке."], warning: "До подтверждения средства остаются под защитой. Напоминания приходят сразу, через 2 и 6 часов, затем раз в 12 часов. После 48 часов ожидания подключается администратор; автоматической выплаты нет.", action: "Мои сделки", profile: "deals" },
       { id: "topup", title: "Как пополнить AF Coins", steps: ["Выберите пакет или введите сумму.", "Оплатите счёт в окне Telegram Stars.", "Дождитесь подтверждения сервера. Новый баланс и операция появятся без перезапуска."], warning: "1 Telegram Star = 1 AF Coin. AF Coins — внутренний баланс сервиса, не личный Stars-баланс. Если проверка задержалась, нажмите «Проверить снова», а не платите повторно.", action: "Пополнить", topup: true },
       { id: "training", title: "Как купить обучение", steps: ["Откройте «Обучение» и прочитайте подробности продукта.", "Подтвердите оплату AF Coins.", "Откройте «Мои покупки» в разделе обучения. Материалы доступны через бота; персональное обучение проводится в личном Telegram-чате преподавателя."], warning: "Повторно покупать курс для получения материалов не нужно. Используйте отдельную кнопку повторной выдачи.", action: "Обучение", view: "training" },
       { id: "message", title: "Как написать продавцу", steps: ["Откройте страницу автомобиля.", "Нажмите «Написать продавцу» и отправьте сообщение.", "Продолжить переписку можно из «Диалогов» в профиле."], warning: "Обычный диалог не создаёт покупку или финансовую сделку.", action: "Диалоги", profile: "chats" },
       { id: "inactive", title: "Если продавец не отвечает", steps: ["Проверьте, что отправили данные передачи или сообщение в оплаченной сделке.", "Срок ответа хранится на сервере — закрывать приложение можно.", "Если продавец не отвечает 24 часа, подходящая активная сделка отменяется с полным возвратом, его активные объявления снимаются с продажи."], warning: "Спорные, уже переданные и завершённые сделки не отменяются этим таймером автоматически. Для них обратитесь в поддержку.", action: "Поддержка", support: true },
-      { id: "refund", title: "Как работает возврат", steps: ["Откройте нужную сделку. При проблеме используйте спор или поддержку.", "Возврат выполняется сервером по правилам сделки.", "Проверьте баланс и историю операций в профиле."], warning: "Возврат AF Coins внутри сервиса не означает автоматический возврат Telegram Stars. Купленные AF Coins не доступны для вывода; вывод заработанных средств согласуется отдельно.", action: "История операций", profile: "history" },
-      { id: "support", title: "Как связаться с поддержкой", steps: ["Откройте «Поддержку» в «Ещё» или профиле.", "Выберите тему, опишите проблему и при необходимости приложите скриншот.", "Отправьте обращение и следите за ответом в разделе поддержки."], warning: "Не отправляйте пароли, коды входа или доступ к Telegram.", action: "Открыть поддержку", support: true },
+      { id: "refund", title: "Отмена сделки и возврат", steps: ["До отметки продавца о передаче покупатель или продавец может отменить сделку с отдельным подтверждением.", "Сервер возвращает покупателю весь резерв, закрывает чат и уведомляет обе стороны.", "После отметки о передаче обычная отмена недоступна: подтвердите получение либо создайте обращение. Решение о возврате принимает администратор.", "Баланс и запись возврата доступны в истории операций."], warning: "Возврат AF Coins внутри сервиса не означает автоматический возврат Telegram Stars. Купленные AF Coins не доступны для вывода; вывод заработанных средств согласуется отдельно.", action: "История операций", profile: "history" },
+      { id: "support", title: "Есть проблема — поддержка сделки", steps: ["В нужной сделке нажмите «Есть проблема»: номер сделки и участники прикрепляются автоматически.", "Опишите проблему, приложите скриншот и отправьте обращение.", "Только после сохранения обращения сделка переходит на проверку поддержки, напоминания о подтверждении прекращаются. Простое открытие формы ничего не меняет.", "Средства остаются зарезервированы до решения. Ответы доступны в разделе поддержки."], warning: "Не подтверждайте получение, если товар не получен или не соответствует договорённости. Не отправляйте пароли, коды входа или доступ к Telegram.", action: "Открыть поддержку", support: true },
     ];
     document.getElementById("helpArticles").replaceChildren(...articles.map((article) => {
       const section = document.createElement("article"); section.id = `help-${article.id}`; section.className = "help-article";
@@ -2921,7 +2968,7 @@ async function hideCurrentConversation() {
       return executeTrainingPurchase(flow);
     } catch (error) {
       flow.busy = false; elements.purchaseModalAction.disabled = false; elements.purchaseModalAction.textContent = "Проверить снова";
-      elements.purchaseModalNote.textContent = "Платёж получен, но баланс пока не обновился. Проверьте снова.";
+      elements.purchaseModalNote.textContent = "Не удалось проверить платёж. Получение оплаты ещё не подтверждено сервером. Проверьте снова.";
     }
   }
 
@@ -3438,18 +3485,24 @@ async function hideCurrentConversation() {
   }
 
   async function resolveSupportCase(button) {
+    if (state.dealActionPending || button.disabled) return;
+    state.dealActionPending = true; button.disabled = true;
     const outcome = button.dataset.supportResolution;
-    const question = outcome === "complete" ? "Передать защищённые средства продавцу и завершить сделку?" : "Вернуть защищённые средства покупателю и отменить сделку?";
-    if (!(await confirmAction(question))) return;
-    const reason = window.prompt("Укажите обязательную причину решения");
-    if (!reason?.trim()) return;
-    button.disabled = true;
     try {
+      const ticket = await api.request(`/admin/support/tickets/${button.dataset.ticketId}`);
+      const control = await api.request(`/admin/deals/${ticket.deal_id}/control`);
+      const recipient = outcome === "complete" ? control.seller : control.buyer;
+      const amount = outcome === "complete" ? control.seller_payout : control.reserved_af_coins;
+      const reason = window.prompt("Укажите обязательную причину решения");
+      if (!reason?.trim()) return;
+      if (reason.trim().length < 5) return notify("Укажите причину: минимум 5 символов");
+      const question = `Сделка ${ticket.deal_id}\nКому: ${recipient.first_name} · Telegram ID ${recipient.telegram_id}\nСумма: ${formatNumber(amount)} AF\nРезультат: ${outcome === "complete" ? "Завершение и выплата продавцу" : "Отмена и полный возврат покупателю"}\nПричина: ${reason.trim()}`;
+      if (!(await confirmCriticalAction(question, "Подтвердить финансовое решение"))) return;
       await api.request(`/admin/support/tickets/${button.dataset.ticketId}/resolve`, { method: "POST", body: JSON.stringify({ outcome, reason: reason.trim() }) });
       await Promise.all([loadAdminSupport(), loadAdminDeals()]);
       notify("Решение выполнено и записано в историю");
     } catch (error) { notify(error.message); }
-    finally { button.disabled = false; }
+    finally { button.disabled = false; state.dealActionPending = false; }
   }
 
   function ensureBroadcastAdminUi() {
@@ -3728,9 +3781,69 @@ async function hideCurrentConversation() {
       const card = document.createElement("div"); card.className = "admin-record";
       const title = document.createElement("strong"); title.textContent = `Сделка ${deal.id.slice(0, 8)} · ${dealStatusLabel(deal.status)}`;
       const meta = document.createElement("small"); meta.textContent = `${formatNumber(deal.price_af_coins)} AF Coins · ${formatDate(deal.created_at)}`; card.append(title, meta);
+      const open = document.createElement("button"); open.type = "button"; open.dataset.adminDealOpen = deal.id; open.textContent = deal.needs_admin_review_at ? "⚠️ Требует проверки — открыть" : "Управление сделкой"; card.append(open);
       if (deal.status === "disputed") { const note = document.createElement("small"); note.textContent = "Финансовое решение доступно в связанном обращении поддержки"; card.append(note); }
       return card;
     }));
+  }
+
+  async function openAdminSupportCase(id) {
+    try {
+      const ticket = await api.request(`/admin/support/tickets/${id}`);
+      switchAdminTab("support");
+      elements.adminSupportTickets.replaceChildren(createSupportTicketCard(ticket, true));
+    } catch(error){notify(error.message);}
+  }
+
+  async function openAdminDealControl(id) {
+    if (state.me?.user.role !== "admin") return;
+    try {
+      const data = await api.request(`/admin/deals/${id}/control`);
+      state.adminDealControl = data;
+      switchAdminTab("deals");
+      let panel = document.getElementById("adminDealControl");
+      if (!panel) { panel = document.createElement("section"); panel.id = "adminDealControl"; panel.className = "admin-record deal-control-panel"; elements.adminDeals.prepend(panel); }
+      const name = user => [user.first_name, user.last_name].filter(Boolean).join(" ") || `ID ${user.telegram_id}`;
+      const title = document.createElement("h2"); title.textContent = data.product;
+      const details = document.createElement("p"); details.textContent = [`Сделка: ${data.deal.id}`, `Статус: ${dealStatusLabel(data.deal.status)}`, `Покупатель: ${name(data.buyer)} · ID ${data.buyer.telegram_id}`, `Продавец: ${name(data.seller)} · ID ${data.seller.telegram_id}`, `Цена: ${formatNumber(data.deal.price_af_coins)} AF`, `Зарезервировано: ${formatNumber(data.reserved_af_coins)} AF`, `Создана: ${formatDate(data.deal.created_at)}`, `Передача: ${data.deal.transfer_started_at ? formatDate(data.deal.transfer_started_at) : "Не отмечена"}`, `Последнее действие покупателя: ${formatDate(data.last_buyer_action_at)}`, `Последнее действие продавца: ${formatDate(data.last_seller_action_at)}`].join("\n");
+      const reasonLabel = document.createElement("label"); reasonLabel.textContent = "Причина / внутренний комментарий";
+      const reason = document.createElement("textarea"); reason.id = "adminDealReason"; reason.rows = 3; reason.maxLength = 2000; reasonLabel.append(reason);
+      const actions = document.createElement("div"); actions.className = "admin-record__actions";
+      const labels = {complete:"Завершить и выплатить продавцу",refund:"Отменить и вернуть покупателю",review:"Передать на проверку поддержки",resume:"Возобновить незавершённую сделку",comment:"Добавить внутренний комментарий"};
+      for (const action of data.actions) { const button = document.createElement("button"); button.type = "button"; button.dataset.adminDealAction = action; button.textContent = labels[action]; actions.append(button); }
+      const timeline = document.createElement("div"); timeline.className = "deal-timeline";
+      for (const [heading, rows] of [["История статусов",data.events.map(e => `${formatDate(e.at)} — ${e.type}${e.from_status ? `: ${dealStatusLabel(e.from_status)} → ${dealStatusLabel(e.to_status)}` : ""}${e.details?.reason ? ` · ${e.details.reason}` : ""}`)], ["Финансовые операции",data.transactions.map(t => `${formatDate(t.created_at)} — ${t.description}: ${formatNumber(t.amount)} AF · ${t.user_id}`)], ["Чат сделки (последние 200 сообщений)",data.messages.map(m => `${formatDate(m.created_at)} — ${m.sender_id === data.buyer.id ? "Покупатель" : "Продавец"}: ${m.body}`)]]) {
+        const header=document.createElement("h3"); header.textContent=heading; timeline.append(header);
+        for (const row of rows) {const item=document.createElement("p"); item.textContent=row; timeline.append(item);}
+        if (!rows.length) {const empty=document.createElement("p");empty.textContent="Записей пока нет";timeline.append(empty);}
+      }
+      const tickets=document.createElement("div"); const ticketsTitle=document.createElement("h3");ticketsTitle.textContent="Связанные обращения";tickets.append(ticketsTitle);
+      for(const ticket of data.tickets){const button=document.createElement("button");button.type="button";button.textContent=`${ticket.id.slice(0,8)} · ${supportStatusLabel(ticket.status)}`;button.addEventListener("click",()=>openAdminSupportCase(ticket.id));tickets.append(button);}
+      panel.replaceChildren(title,details,reasonLabel,actions,tickets,timeline);
+      panel.scrollIntoView({block:"start"});
+    } catch(error){reportClientError("admin_deal_control",error);notify("Не удалось открыть управление сделкой. Проверьте доступ и повторите.");}
+  }
+
+  async function executeAdminDealControl(button) {
+    if (button.disabled || state.dealActionPending) return;
+    const data=state.adminDealControl; if(!data)return;
+    const action=button.dataset.adminDealAction;
+    const reason=document.getElementById("adminDealReason").value.trim();
+    if(reason.length<5)return notify("Укажите причину: минимум 5 символов");
+    state.dealActionPending=true; button.disabled=true;
+    const signature=JSON.stringify({id:data.deal.id,action,reason});
+    if(state.adminDealRequest?.signature!==signature)state.adminDealRequest={signature,id:createRequestId()};
+    try{
+      const financial=action==="complete"||action==="refund";
+      const recipient=action==="complete"?data.seller:data.buyer;
+      const amount=action==="complete"?data.seller_payout:data.reserved_af_coins;
+      const message=financial?`Сделка ${data.deal.id}\nКому: ${recipient.first_name} (Telegram ID ${recipient.telegram_id})\nСумма: ${formatNumber(amount)} AF\nНовый статус: ${action==="complete"?"Завершена":"Отменена с возвратом"}\nПричина: ${reason}`:`${button.textContent}?\nСделка ${data.deal.id}\n${reason}`;
+      if(!(await confirmCriticalAction(message,financial?"Подтвердить финансовое решение":"Подтвердить")))return;
+      await api.request(`/admin/deals/${data.deal.id}/control`,{method:"POST",body:JSON.stringify({action,reason,request_id:state.adminDealRequest.id})});
+      state.adminDealRequest=null;
+      await openAdminDealControl(data.deal.id);notify("Решение сохранено сервером");
+    }catch(error){notify(error.message);}
+    finally{button.disabled=false;state.dealActionPending=false;}
   }
 
   async function loadAdminTraining(filter = "all") {

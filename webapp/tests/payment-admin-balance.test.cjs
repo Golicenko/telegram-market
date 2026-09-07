@@ -23,7 +23,8 @@ test("top-up exposes confirmed, pending, retry, error and cancelled states", () 
   assert.match(app, /✅ Оплата подтверждена\s*\\nAF Coins зачислены/);
   assert.match(app, /⏳ Платёж подтверждается/);
   assert.match(app, /Не закрывайте приложение\. Обычно это занимает несколько секунд/);
-  assert.match(app, /Платёж получен, но баланс пока не обновился/);
+  assert.match(app, /Не удалось проверить платёж/);
+  assert.doesNotMatch(app, /Платёж получен, но баланс пока не обновился/);
   assert.match(app, /retry\.textContent = "Проверить снова"/);
   assert.match(app, /cancelled: \["is-cancelled", "Оплата не завершена"\]/);
   assert.match(app, /loadOptionalData\(\["profile"\]/);

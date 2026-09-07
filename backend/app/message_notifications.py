@@ -85,7 +85,11 @@ async def claim_delivery(session, user_id, now):
             latest = eligible[0]
             text = latest.body
             params = ({"admin_user_id": latest.payload["seller_id"]}
-                      if latest.notification_type in {"seller_blocked_bot", "seller_notice_failed"} else {"view": "profile"})
+                      if latest.notification_type in {"seller_blocked_bot", "seller_notice_failed"} else
+                      {"admin_deal_id": latest.payload["admin_deal_id"]} if latest.payload.get("admin_deal_id") else
+                      {"support_case": latest.payload["ticket_id"]} if latest.payload.get("ticket_id") else
+                      {"deal_id": latest.payload["deal_id"]} if latest.notification_type == "deal_review_status" else
+                      {"view": "profile"})
         for notice in eligible:
             notice.delivery_status = "sending"
             notice.delivery_claimed_at = now

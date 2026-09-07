@@ -442,7 +442,7 @@ def deal_transfer_reminder_payload(
         "reply_markup": {
             "inline_keyboard": [
                 [{"text": "✅ Подтвердить получение", "web_app": {"url": confirm_url}}],
-                [{"text": "Поддержка", "web_app": {"url": support_url}}],
+                [{"text": "Есть проблема", "web_app": {"url": support_url}}],
             ]
         },
     }
