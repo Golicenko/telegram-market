@@ -51,6 +51,8 @@ test("market shell is immediate and startup feedback stays inline", () => {
 
 test("optional requests render independently before allSettled completes", () => {
   const optional = source.slice(source.indexOf("async function loadOptionalData"), source.indexOf("async function retryFailedOptional"));
-  assert.match(optional, /renderAll\(\)/);
+  assert.match(optional, /scheduleOptionalRender\(\)/);
+  assert.ok(optional.indexOf("scheduleOptionalRender()") < optional.indexOf("await Promise.allSettled"));
+  assert.match(source, /optionalRenderFrame !== null/);
   assert.match(optional, /Promise\.allSettled\(tasks\)/);
 });

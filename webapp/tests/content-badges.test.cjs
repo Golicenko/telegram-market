@@ -26,8 +26,8 @@ test("badges are server-backed, disappear at zero and cap their label at 99+", (
 
 test("section opening marks only the server marker loaded before the refreshed list", () => {
   const flow = app.slice(app.indexOf("async function openContentSection"), app.indexOf("async function refreshUnreadMessages"));
-  assert.ok(flow.indexOf('api.request("/content/unseen")') < flow.indexOf("await refreshMarketplace()"));
-  assert.ok(flow.indexOf("await refreshMarketplace()") < flow.indexOf("mark-seen"));
+  assert.ok(flow.indexOf('api.request("/content/unseen")') < flow.indexOf("await loadOptionalData("));
+  assert.ok(flow.indexOf("await loadOptionalData(") < flow.indexOf("mark-seen"));
   assert.match(flow, /state\.failedOptional\.has\(section\)/);
   assert.match(flow, /snapshot\?\.\[section\]\?\.marker/);
 });
