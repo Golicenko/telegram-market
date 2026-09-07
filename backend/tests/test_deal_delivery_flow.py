@@ -532,8 +532,8 @@ class StaleNotificationRecoverySession:
             self.deal.seller_purchase_notification_status = "pending"
             self.deal.seller_purchase_notification_next_attempt_at = datetime.now(UTC)
         if "seller_timeout_notification_status" in source:
-            self.deal.seller_timeout_notification_status = "pending"
-            self.deal.seller_timeout_notification_next_attempt_at = datetime.now(UTC)
+            self.deal.seller_timeout_notification_status = "not_required"
+            self.deal.seller_timeout_notification_next_attempt_at = None
         return type("Result", (), {"rowcount": 1})()
 
     async def scalars(self, _query):
@@ -561,9 +561,9 @@ async def test_stale_sending_notifications_are_recovered_after_restart(monkeypat
     await routes.recover_seller_response_timeouts()
 
     assert deal.seller_purchase_notification_status == "pending"
-    assert deal.seller_timeout_notification_status == "pending"
+    assert deal.seller_timeout_notification_status == "not_required"
     assert deal.seller_purchase_notification_next_attempt_at is not None
-    assert deal.seller_timeout_notification_next_attempt_at is not None
+    assert deal.seller_timeout_notification_next_attempt_at is None
 
 
 @pytest.mark.asyncio
@@ -594,7 +594,8 @@ async def test_expired_unanswered_deal_refunds_once_and_never_pays_seller():
     assert result is not None
     assert deal.status == "cancelled"
     assert deal.seller_timeout_processed_at == now
-    assert listing.status == "active"
+    assert listing.status == "paused"
+    assert deal.cancellation_reason == "seller_inactive"
     assert wallet.available_balance == Decimal("100.00")
     assert wallet.frozen_balance == Decimal("0.00")
     assert wallet.purchased_balance == Decimal("60.00")
@@ -969,9 +970,9 @@ async def test_timeout_telegram_notifications_are_not_duplicated(monkeypatch):
     await routes.notify_seller_timeout_cancellation(deal.id)
     await routes.notify_seller_timeout_cancellation(deal.id)
 
-    assert [item[0] for item in direct] == [buyer.telegram_id, seller.telegram_id]
-    assert [item[0] for item in admin_notices] == [admin.telegram_id]
-    assert deal.seller_timeout_notification_status == "sent"
+    assert direct == []  # Legacy batches may have partially delivered before deployment.
+    assert admin_notices == []
+    assert deal.seller_timeout_notification_status == "not_required"
 
 
 def test_timeout_migration_is_additive_and_worker_is_database_backed():

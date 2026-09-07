@@ -26,6 +26,8 @@ class User(Base, TimestampMixin):
     username: Mapped[str | None] = mapped_column(String(64))
     photo_url: Mapped[str | None] = mapped_column(Text)
     mini_app_last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    viewing_conversation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    chat_presence_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     bot_started: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     __table_args__ = (CheckConstraint("role IN ('user','admin')", name="ck_users_role"),)
@@ -333,6 +335,7 @@ class Deal(Base, TimestampMixin):
     delivery_timezone: Mapped[str | None] = mapped_column(String(64))
     delivery_details_submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     seller_response_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    cancellation_reason: Mapped[str | None] = mapped_column(String(48))
     seller_responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     seller_timeout_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     seller_timeout_notification_status: Mapped[str] = mapped_column(
@@ -407,6 +410,10 @@ class Conversation(Base, TimestampMixin):
     buyer_hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     seller_hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    response_required_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    inactivity_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    inactivity_status: Mapped[str] = mapped_column(String(24), nullable=False, default="not_required", server_default="not_required")
+    inactivity_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         Index(
             "uq_conversations_dialog_participant_pair",
@@ -579,6 +586,12 @@ class Notification(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivery_status: Mapped[str] = mapped_column(String(24), nullable=False, default="not_required", server_default="not_required", index=True)
+    delivery_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivery_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivery_error: Mapped[str | None] = mapped_column(String(128))
+    delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    delivery_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
