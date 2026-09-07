@@ -20,7 +20,7 @@ test("training save is successful before optional refresh", () => {
 
 test("deal support replaces the accidental dispute action and is idempotent", () => {
   assert.doesNotMatch(app, /Возникла проблема/);
-  assert.match(app, /Написать в поддержку/);
+  assert.match(app, /Есть проблема/);
   assert.match(app, /`\/deals\/\$\{dealId\}\/support`/);
   assert.match(app, /Прикрепите хотя бы один скриншот/);
   assert.match(app, /screenshot_url: screenshotUrl/);
@@ -31,7 +31,8 @@ test("deal support replaces the accidental dispute action and is idempotent", ()
 test("admin support has filters, financial confirmation and deep-link opening", () => {
   assert.match(app, /dataset\.supportFilter|dataSupportFilter/);
   assert.match(app, /\/admin\/support\/tickets\/\$\{button\.dataset\.ticketId\}\/resolve/);
-  assert.match(app, /confirmAction\(question\)/);
+  assert.match(app, /confirmCriticalAction\(question, "Подтвердить финансовое решение"\)/);
+  assert.match(app, /control\.seller_payout : control\.reserved_af_coins/);
   assert.match(app, /support_case/);
   assert.match(app, /\?status=new/);
   assert.match(app, /new: "Новое"/);

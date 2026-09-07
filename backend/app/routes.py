@@ -39,6 +39,8 @@ from .bot import (
     upload_bot_material,
 )
 from .config import Settings, get_settings
+from .deal_lifecycle import audit_deal, schedule_next_reminder, recover_lifecycle_state, admin_nonfinancial_action, last_activity_query
+from .models import DealEvent
 from .database import SessionLocal, get_session
 from .chat_access import ACTIVE_DEAL_STATUSES, active_thread_clause, require_active_chat
 from .inactivity import process_unanswered_dialog, record_buyer_request, record_seller_response
@@ -60,6 +62,7 @@ from .schemas import (
     ConversationMessageCreate,
     CounterOfferCreate,
     DealResolution,
+    DealControlAction,
     DealDeliveryDetailsCreate,
     DealOut,
     ListingCreate,
@@ -875,6 +878,8 @@ async def notify_deal_transfer_buyer(deal_id: uuid.UUID, *, now: datetime | None
                 deal.buyer_transfer_reminder_status = "sent"
                 deal.buyer_transfer_reminder_sent_at = datetime.now(UTC)
                 deal.buyer_transfer_reminder_error = None
+                audit_deal(session, deal, "buyer_reminder_sent", details={"round": int(deal.buyer_reminder_round or 0)})
+                schedule_next_reminder(deal, datetime.now(UTC))
             elif (
                 result.error_type == "rate_limited"
                 and result.retry_after is not None
@@ -899,6 +904,21 @@ async def notify_deal_transfer_buyer(deal_id: uuid.UUID, *, now: datetime | None
 async def recover_deal_transfer_reminders() -> None:
     """Process reminders that are due; PostgreSQL remains the queue source of truth."""
     now = datetime.now(UTC)
+    async with SessionLocal() as session:
+        recovery_ids = list((await session.scalars(select(Deal.id).where(
+            Deal.status.in_(("paid", "seller_contacted", "transfer_in_progress")),
+            or_(
+                and_(Deal.needs_admin_review_at.is_(None), func.coalesce(Deal.transfer_started_at, Deal.created_at) <= now - timedelta(hours=48),
+                    func.coalesce(last_activity_query(), Deal.created_at) <= now - timedelta(hours=48)),
+                and_(Deal.status == "transfer_in_progress", or_(
+                    Deal.buyer_transfer_reminder_status.in_(("sent", "failed", "not_scheduled")),
+                    and_(Deal.buyer_transfer_reminder_status == "sending", or_(Deal.buyer_transfer_reminder_claimed_at.is_(None), Deal.buyer_transfer_reminder_claimed_at <= now - timedelta(minutes=2))),
+                )),
+            ),
+        ).order_by(Deal.created_at).limit(100))).all())
+    for recovery_id in recovery_ids:
+        async with SessionLocal() as session:
+            await recover_lifecycle_state(session, recovery_id, now)
     async with SessionLocal() as session:
         due_ids = list((await session.scalars(
             select(Deal.id)
@@ -2745,14 +2765,14 @@ async def seller_contacted(deal_id: uuid.UUID, background_tasks: BackgroundTasks
 @router.post("/deals/{deal_id}/transfer", response_model=DealOut)
 async def transfer_started(deal_id: uuid.UUID, background_tasks: BackgroundTasks, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     deal = await set_deal_status(session, user, deal_id, "transfer_in_progress")
-    await queue_counterparty_notification(session, background_tasks, deal, user, "Продавец начал передачу товара. Откройте сделку в AUTOFLOW MARKET")
+    # The persisted reminder worker sends the first confirmation request.
     return deal
 
 
 @router.post("/deals/{deal_id}/confirm", response_model=DealOut)
 async def confirm_received(deal_id: uuid.UUID, background_tasks: BackgroundTasks, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     deal = await complete_deal(session, user, deal_id)
-    await queue_counterparty_notification(session, background_tasks, deal, user, "Покупатель подтвердил получение. Сделка завершена, 70% начислено в AF Coins")
+    # Completion notification is in the transactional outbox.
     return deal
 
 
@@ -2774,29 +2794,14 @@ async def create_deal_support(
         session, user, deal_id, payload.message, payload.screenshot_url, payload.client_request_id
     )
 
-    def label(person: User) -> str:
-        return f"@{person.username}" if person.username else f"{person.first_name} (ID {person.telegram_id})"
-
-    for administrator in administrators:
-        if administrator.bot_started:
-            background_tasks.add_task(
-                send_deal_support_case_notification,
-                administrator.telegram_id,
-                ticket_id=str(ticket.id),
-                deal_id=str(deal_id),
-                listing_title=f"{listing.brand} {listing.model}".strip(),
-                buyer_label=label(buyer),
-                seller_label=label(seller),
-                author_label=label(user),
-                reason=payload.message.strip(),
-            )
+    # The admin notification was saved atomically with the support ticket.
     return await support_ticket_out(session, ticket)
 
 
 @router.post("/deals/{deal_id}/cancel", response_model=DealOut)
 async def cancel(deal_id: uuid.UUID, background_tasks: BackgroundTasks, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     deal = await cancel_deal(session, user, deal_id)
-    await queue_counterparty_notification(session, background_tasks, deal, user, "Сделка отменена. Защищённые средства возвращены покупателю")
+    # Both participants are notified by the transactional outbox.
     return deal
 
 
@@ -3049,6 +3054,42 @@ async def admin_platform_financial_summary(
     }
 
 
+@router.get("/admin/deals/{deal_id}/control")
+async def admin_deal_control(deal_id: uuid.UUID, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    deal = await session.get(Deal, deal_id)
+    if not deal: raise HTTPException(404, "Сделка не найдена")
+    buyer = await session.get(User, deal.buyer_id)
+    seller = await session.get(User, deal.seller_id)
+    listing = await session.get(Listing, deal.listing_id)
+    events = list((await session.scalars(select(DealEvent).where(DealEvent.deal_id == deal.id).order_by(DealEvent.created_at, DealEvent.id))).all())
+    tickets = list((await session.scalars(select(SupportTicket).where(SupportTicket.deal_id == deal.id).order_by(SupportTicket.created_at))).all())
+    transactions = list((await session.scalars(select(WalletTransaction).where(WalletTransaction.related_deal_id == deal.id).order_by(WalletTransaction.created_at))).all())
+    messages = list((await session.scalars(select(ConversationMessage).where(ConversationMessage.deal_id == deal.id).order_by(ConversationMessage.created_at.desc()).limit(200))).all())
+    closed = deal.status in {"completed", "cancelled"}
+    actions = ["comment"] if closed or deal.status == "pending_payment" else ["complete", "refund", "review", "comment"]
+    if deal.status == "disputed": actions.append("resume")
+    return {
+        "deal": DealOut.model_validate(deal), "product": f"{listing.brand} {listing.model}".strip() if listing else "Объявление недоступно",
+        "buyer": UserOut.model_validate(buyer), "seller": UserOut.model_validate(seller),
+        "reserved_af_coins": 0 if closed else deal.frozen_amount,
+        "seller_payout": deal.seller_payout, "commission": deal.platform_commission,
+        "actions": actions,
+        "last_buyer_action_at": max([m.created_at for m in messages if m.sender_id == deal.buyer_id] + [deal.delivery_details_submitted_at or deal.created_at]),
+        "last_seller_action_at": max([m.created_at for m in messages if m.sender_id == deal.seller_id] + [deal.transfer_started_at or deal.seller_responded_at or deal.created_at]),
+        "events": [{"id": e.id, "type": e.event_type, "from_status": e.from_status, "to_status": e.to_status, "details": e.details, "at": e.created_at} for e in events],
+        "tickets": [{"id": t.id, "status": t.status, "created_at": t.created_at} for t in tickets],
+        "transactions": [{"id": t.id, "user_id": t.user_id, "type": t.transaction_type, "amount": t.amount, "description": t.description, "created_at": t.created_at, "available_before": t.available_before, "available_after": t.available_after, "frozen_before": t.frozen_before, "frozen_after": t.frozen_after} for t in transactions],
+        "messages": [ConversationMessageOut.model_validate(m) for m in reversed(messages)],
+    }
+
+
+@router.post("/admin/deals/{deal_id}/control", response_model=DealOut)
+async def perform_admin_deal_control(deal_id: uuid.UUID, payload: DealControlAction, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    if payload.action in {"complete", "refund"}:
+        return await resolve_dispute(session, admin, deal_id, payload.action, payload.reason, allow_active=True, request_id=payload.request_id)
+    return await admin_nonfinancial_action(session, admin, deal_id, payload.action, payload.reason, payload.request_id)
+
+
 @router.post("/admin/deals/{deal_id}/resolve", response_model=DealOut)
 async def admin_resolve_deal(
     deal_id: uuid.UUID,
@@ -3058,9 +3099,7 @@ async def admin_resolve_deal(
     session: AsyncSession = Depends(get_session),
 ):
     deal = await resolve_dispute(session, admin, deal_id, payload.outcome, payload.reason)
-    participants = list((await session.scalars(select(User).where(User.id.in_([deal.buyer_id, deal.seller_id]), User.bot_started.is_(True)))).all())
-    for participant in participants:
-        background_tasks.add_task(send_bot_notification, participant.telegram_id, "Администратор рассмотрел спор по сделке в AUTOFLOW MARKET")
+    # Participant notifications are persisted in the transaction, not replayed here.
     return deal
 
 
@@ -3451,24 +3490,19 @@ async def resolve_support_ticket_financially(
     ticket = await session.get(SupportTicket, ticket_id)
     if not ticket or ticket.case_type != "deal" or not ticket.deal_id:
         raise HTTPException(status_code=404, detail="Обращение по сделке не найдено")
+    # Finish the read transaction before the service obtains all financial row locks.
+    target_deal_id, target_ticket_id = ticket.deal_id, ticket.id
+    await session.commit()
     deal = await resolve_dispute(
         session,
         admin,
-        ticket.deal_id,
+        target_deal_id,
         payload.outcome,
         payload.reason,
-        support_ticket_id=ticket.id,
+        support_ticket_id=target_ticket_id,
     )
-    participants = list((await session.scalars(
-        select(User).where(User.id.in_([deal.buyer_id, deal.seller_id]), User.bot_started.is_(True))
-    )).all())
-    for participant in participants:
-        background_tasks.add_task(
-            send_bot_notification,
-            participant.telegram_id,
-            "🛡 Поддержка AUTOFLOW MARKET приняла решение по сделке. Откройте приложение для подробностей.",
-        )
-    refreshed = await session.get(SupportTicket, ticket.id)
+    # resolve_dispute persists both notifications; do not send a second copy here.
+    refreshed = await session.get(SupportTicket, target_ticket_id)
     return await support_ticket_out(session, refreshed)
 
 

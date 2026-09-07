@@ -362,6 +362,8 @@ class Deal(Base, TimestampMixin):
     buyer_transfer_reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     buyer_transfer_reminder_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     buyer_transfer_reminder_error: Mapped[str | None] = mapped_column(Text)
+    buyer_reminder_round: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    needs_admin_review_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     transfer_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     buyer_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -519,6 +521,20 @@ class PriceOffer(Base, TimestampMixin):
         CheckConstraint("amount_af_coins >= 1", name="ck_price_offers_min_price"),
         CheckConstraint("status IN ('pending','accepted','rejected','countered','expired','cancelled')", name="ck_price_offers_status"),
     )
+
+
+class DealEvent(Base):
+    __tablename__ = "deal_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    deal_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("deals.id", ondelete="RESTRICT"), nullable=False, index=True)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(32))
+    to_status: Mapped[str | None] = mapped_column(String(32))
+    request_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    details: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (UniqueConstraint("deal_id", "request_id", name="uq_deal_event_request"),)
 
 
 class DealMessage(Base):

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
+from .deal_lifecycle import audit_deal, stop_reminders
 from .chat_access import ACTIVE_DEAL_STATUSES, require_active_chat, require_active_chat_by_id
 from .inactivity import record_buyer_request, record_seller_response, hide_active_listings, offer_response_expired, SELLER_NOTICE, BUYER_NOTICE
 from .models import (
@@ -19,6 +20,7 @@ from .models import (
     Conversation,
     ConversationMessage,
     Deal,
+    DealEvent,
     DealMessage,
     Listing,
     ListingImage,
@@ -125,7 +127,7 @@ def debit_spendable(wallet: Wallet, amount: Decimal) -> tuple[Decimal, Decimal]:
 
 async def create_notification(session: AsyncSession, user_id: uuid.UUID, kind: str, title: str, body: str, payload: dict | None = None) -> Notification:
     notification = Notification(user_id=user_id, notification_type=kind, title=title, body=body, payload=payload or {})
-    if kind in {"conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden"}:
+    if kind in {"conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden", "deal_completed", "deal_cancelled", "dispute_resolved", "deal_support_case"}:
         notification.delivery_status = "pending"
     session.add(notification)
     return notification
@@ -1276,6 +1278,8 @@ async def send_conversation_message(
             message_type="text", client_message_id=client_message_id,
         )
         session.add(message)
+        if deal:
+            audit_deal(session, deal, "message_sent", sender.id, details={"message_id": str(message.id)})
         conversation.last_message_at = now
         if deal_id is None:
             if recipient_id == conversation.buyer_id:
@@ -1638,6 +1642,7 @@ async def _purchase_locked_listing(
     )
     session.add(deal)
     await session.flush()
+    audit_deal(session, deal, "funds_reserved", buyer.id, details={"amount": str(agreed_price)})
     if not conversation:
         conversation = Conversation(
             listing_id=listing.id,
@@ -1868,7 +1873,10 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
             deal.buyer_game_id and deal.buyer_server and deal.preferred_delivery_time and deal.delivery_timezone
         ):
             raise HTTPException(status_code=409, detail="Покупатель ещё не указал игровой ID, сервер и время получения")
+        previous_status = deal.status
         deal.status = next_status
+        audit_deal(session, deal, "status_changed", actor.id, previous_status)
+        if next_status == "disputed": stop_reminders(deal)
         if actor.id == deal.seller_id and deal.conversation_id:
             conversation = await session.get(Conversation, deal.conversation_id)
             if conversation:
@@ -1877,9 +1885,7 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
             deal.transfer_started_at = now
             if deal.buyer_transfer_reminder_status in {None, "not_scheduled"}:
                 deal.buyer_transfer_reminder_status = "pending"
-                deal.buyer_transfer_reminder_scheduled_at = now + timedelta(
-                    seconds=get_settings().deal_transfer_reminder_seconds
-                )
+                deal.buyer_transfer_reminder_scheduled_at = now
                 deal.buyer_transfer_reminder_error = None
         other_id = deal.seller_id if actor.id == deal.buyer_id else deal.buyer_id
         await create_notification(session, other_id, "deal_status", "Статус сделки изменён", f"Новый статус: {next_status}", {"deal_id": str(deal.id)})
@@ -1966,7 +1972,10 @@ async def create_deal_support_case(
             details={"created_with_case": created},
         ))
         if deal.status != "disputed":
+            previous_status = deal.status
             deal.status = "disputed"
+            audit_deal(session, deal, "support_created", author.id, previous_status, {"ticket_id": str(ticket.id)})
+        stop_reminders(deal)
         administrators = list((await session.scalars(select(User).where(User.role == "admin"))).all())
         for administrator in administrators:
             await create_notification(
@@ -2007,6 +2016,8 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
         deal.status = "completed"
         deal.buyer_confirmed_at = now
         deal.completed_at = now
+        stop_reminders(deal)
+        audit_deal(session, deal, "buyer_confirmed", buyer.id, "transfer_in_progress")
         if deal.conversation_id:
             conversation = await session.get(Conversation, deal.conversation_id)
             if conversation:
@@ -2038,6 +2049,8 @@ def _apply_deal_refund(
     buyer_wallet.version += 1
     deal.status = "cancelled"
     deal.cancelled_at = now
+    stop_reminders(deal)
+    audit_deal(session, deal, "refunded", details={"reason": description, "amount": str(deal.frozen_amount)})
     listing.status = "active"
     listing.reserved_by_deal_id = None
     session.add(
@@ -2081,15 +2094,11 @@ async def cancel_deal(session: AsyncSession, actor: User, deal_id: uuid.UUID) ->
             conversation = await session.get(Conversation, deal.conversation_id)
             if conversation:
                 conversation.archived_at = deal.cancelled_at
-        other_id = deal.seller_id if actor.id == deal.buyer_id else deal.buyer_id
-        await create_notification(
-            session,
-            other_id,
-            "deal_cancelled",
-            "Сделка отменена",
-            "Защищённые средства возвращены покупателю",
-            {"deal_id": str(deal.id)},
-        )
+        deal.cancellation_reason = "seller_cancelled" if actor.id == deal.seller_id else "buyer_cancelled"
+        audit_deal(session, deal, "participant_cancelled", actor.id, details={"reason": deal.cancellation_reason})
+        for recipient in (deal.buyer_id, deal.seller_id):
+            await create_notification(session, recipient, "deal_cancelled", "Сделка отменена",
+                "Защищённые средства возвращены покупателю", {"deal_id": str(deal.id)})
     return deal
 
 
@@ -2210,17 +2219,32 @@ async def resolve_dispute(
     reason: str,
     *,
     support_ticket_id: uuid.UUID | None = None,
+    allow_active: bool = False,
+    request_id: uuid.UUID | None = None,
 ) -> Deal:
+    if admin.role != "admin": raise HTTPException(403, "Требуется администратор")
+    if outcome not in {"complete", "refund"}: raise HTTPException(422, "Неверное финансовое решение")
+    if len(reason.strip()) < 5: raise HTTPException(422, "Укажите причину решения")
     async with session.begin():
         deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
-        if not deal or deal.status != "disputed":
+        if request_id and deal:
+            previous_event = await session.scalar(select(DealEvent).where(DealEvent.deal_id == deal.id, DealEvent.request_id == request_id))
+            if previous_event:
+                if previous_event.actor_id != admin.id or previous_event.event_type != f"admin_{outcome}" or previous_event.details.get("reason") != reason:
+                    raise HTTPException(409, "Идентификатор запроса уже использован")
+                return deal
+        allowed_states = {"paid", "seller_contacted", "transfer_in_progress", "disputed"} if allow_active else {"disputed"}
+        if not deal or deal.status not in allowed_states:
             raise HTTPException(status_code=404, detail="Disputed deal not found")
+        previous_status = deal.status
         listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
         buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
         seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.seller_id).with_for_update())
         if not listing or not buyer_wallet or not seller_wallet:
             raise HTTPException(status_code=409, detail="Settlement state is inconsistent")
         buyer_available_before, buyer_frozen_before = buyer_wallet.available_balance, buyer_wallet.frozen_balance
+        if allow_active and (listing.status != "reserved" or listing.reserved_by_deal_id != deal.id or money(deal.purchased_frozen_amount + deal.earned_frozen_amount) != money(deal.frozen_amount)):
+            raise HTTPException(409, "Резерв сделки не согласован. Финансовая операция остановлена")
         now = datetime.now(UTC)
         support_ticket = None
         if support_ticket_id:
@@ -2236,7 +2260,9 @@ async def resolve_dispute(
             buyer_wallet.version += 1
             deal.status = "cancelled"
             deal.cancelled_at = now
-            listing.status = "active"
+            # After a reported transfer, an administrator must verify the item before resale.
+            listing.status = "paused" if allow_active and deal.transfer_started_at else "active"
+            deal.cancellation_reason = "admin_refund"
             listing.reserved_by_deal_id = None
             session.add(wallet_transaction(buyer_wallet, "dispute_refund", deal.frozen_amount, buyer_available_before, buyer_frozen_before, f"Возврат по спору: {reason}", deal_id=deal.id))
             buyer_body = "Средства возвращены на доступный баланс"
@@ -2262,7 +2288,17 @@ async def resolve_dispute(
             conversation = await session.get(Conversation, deal.conversation_id)
             if conversation:
                 conversation.archived_at = now
+        stop_reminders(deal)
+        audit_deal(session, deal, f"admin_{outcome}", admin.id, previous_status, {"reason": reason}, request_id)
         session.add(AdminAction(admin_id=admin.id, action=f"resolve_dispute_{outcome}", target_type="deal", target_id=deal.id, reason=reason))
+        if allow_active:
+            related_tickets = list((await session.scalars(select(SupportTicket).where(SupportTicket.deal_id == deal.id, SupportTicket.status.in_(("new", "open", "in_progress"))).with_for_update())).all())
+            for related in related_tickets:
+                old_status = related.status
+                related.status = "resolved"
+                related.resolved_at = now
+                related.unread_by_admin = False
+                session.add(SupportCaseEvent(ticket_id=related.id, actor_id=admin.id, event_type=f"financial_resolution_{outcome}", from_status=old_status, to_status="resolved", details={"reason": reason, "deal_id": str(deal.id)}))
         if support_ticket:
             previous_status = support_ticket.status
             support_ticket.status = "resolved"
@@ -2536,7 +2572,7 @@ async def process_successful_payment(session: AsyncSession, telegram_id: int, pa
             raise HTTPException(status_code=400, detail="Payment intent does not belong to this user")
         if intent.status == "paid":
             return False
-        if intent.status != "pending" or intent.xtr_amount != xtr_amount:
+        if intent.status not in {"pending", "expired"} or intent.xtr_amount != xtr_amount:
             raise HTTPException(status_code=400, detail="Invoice amount or status mismatch")
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id).with_for_update())
         if not wallet:

@@ -211,7 +211,7 @@ def test_frontend_training_success_and_support_workflows_are_explicit():
     assert 'materialResult.failures.length' in app
     assert 'training_refresh_after_save' in app
     assert "Возникла проблема" not in app
-    assert "Написать в поддержку" in app
+    assert "Есть проблема" in app
     assert "/deals/${dealId}/support" in app
     assert "--chat-viewport-width" in app
     assert "width:var(--chat-viewport-width,100%)" in css

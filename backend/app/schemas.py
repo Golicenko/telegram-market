@@ -139,6 +139,7 @@ class ListingEngagementOut(BaseModel):
 
 
 class DealOut(ORMModel):
+    needs_admin_review_at: datetime | None = None
     id: uuid.UUID
     listing_id: uuid.UUID
     conversation_id: uuid.UUID | None
@@ -465,6 +466,12 @@ class PriceOfferOut(ORMModel):
 class DealResolution(BaseModel):
     outcome: str = Field(pattern="^(complete|refund)$")
     reason: str = Field(min_length=5, max_length=2000)
+
+
+class DealControlAction(BaseModel):
+    action: str = Field(pattern="^(complete|refund|review|resume|comment)$")
+    reason: str = Field(min_length=5, max_length=2000)
+    request_id: uuid.UUID
 
 
 class WithdrawalCreate(BaseModel):

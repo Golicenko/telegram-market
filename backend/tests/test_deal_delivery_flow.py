@@ -185,7 +185,7 @@ async def test_transfer_schedules_one_reminder_in_the_same_status_transition():
     assert deal.status == "transfer_in_progress"
     assert deal.seller_responded_at is not None
     assert deal.buyer_transfer_reminder_status == "pending"
-    assert deal.buyer_transfer_reminder_scheduled_at >= before + timedelta(seconds=119)
+    assert before <= deal.buyer_transfer_reminder_scheduled_at <= datetime.now(UTC)
 
 
 def test_seller_notification_opens_the_exact_deal():
@@ -329,6 +329,11 @@ async def test_due_transfer_reminder_is_recovered_and_sent_only_once(monkeypatch
     deal.buyer_transfer_reminder_attempts = 0
 
     class ReminderSession(Session):
+        async def scalar(self, query):
+            if "max(deal_events.created_at)" in str(query):
+                return None
+            return await super().scalar(query)
+
         async def get(self, model, key):
             if model is User and key == buyer.id:
                 return buyer
@@ -346,7 +351,9 @@ async def test_due_transfer_reminder_is_recovered_and_sent_only_once(monkeypatch
     await routes.recover_deal_transfer_reminders()
 
     assert sent == [(buyer.telegram_id, str(deal.id))]
-    assert deal.buyer_transfer_reminder_status == "sent"
+    assert deal.buyer_transfer_reminder_status == "pending"
+    assert deal.buyer_reminder_round == 1
+    assert deal.buyer_transfer_reminder_scheduled_at >= deal.buyer_transfer_reminder_sent_at + timedelta(hours=2)
     assert deal.buyer_transfer_reminder_sent_at is not None
 
 

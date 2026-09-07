@@ -7,6 +7,15 @@ const root = path.resolve(__dirname,"..");
 const html=fs.readFileSync(path.join(root,"index.html"),"utf8");
 const app=fs.readFileSync(path.join(root,"js/app.js"),"utf8");
 
+test("profile contains only the requested primary actions",()=>{
+  const profile=html.slice(html.indexOf('<section class="view profile-view"'),html.indexOf('<section class="view" data-view="more"'));
+  assert.doesNotMatch(profile,/data-open-info|data-open-support|data-nav-target="settings"|data-open-frozen|data-open-withdraw/);
+  const menu=profile.slice(profile.indexOf('class="profile-actions'),profile.indexOf('class="profile-panel'));
+  assert.equal((menu.match(/<button /g)||[]).length,6);
+  for(const label of ["Пополнение","Мои объявления","История сделок","Диалоги","Обновить данные профиля","Администратор"])assert(menu.includes(label));
+  assert.match(menu,/data-open-admin data-admin-only hidden/);
+});
+
 test("help has eleven articles, matching shortcuts and no old information modal",()=>{
   const help=app.slice(app.indexOf("function renderHelpCenter()"),app.indexOf("async function openTrainingProduct(id)"));
   assert.equal((help.match(/id: "/g)||[]).length,11);
