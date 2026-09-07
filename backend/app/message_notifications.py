@@ -59,6 +59,7 @@ async def claim_delivery(session, user_id, now):
         if not user.bot_started or user.is_blocked:
             for notice in pending:
                 notice.delivery_status = "suppressed"
+                notice.delivery_error = "bot_not_started" if not user.bot_started else "application_user_blocked"
             return None
         unread = list((await session.scalars(unread_query(user_id).with_only_columns(ConversationMessage.id))).all())
         unread_ids = {str(message_id) for message_id in unread}
@@ -83,7 +84,8 @@ async def claim_delivery(session, user_id, now):
                 return None
             latest = eligible[0]
             text = latest.body
-            params = {"view": "profile"}
+            params = ({"admin_user_id": latest.payload["seller_id"]}
+                      if latest.notification_type in {"seller_blocked_bot", "seller_notice_failed"} else {"view": "profile"})
         for notice in eligible:
             notice.delivery_status = "sending"
             notice.delivery_claimed_at = now
@@ -102,12 +104,53 @@ async def send_delivery(job):
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.post(f"https://api.telegram.org/bot{settings.bot_token}/sendMessage", json=payload)
-        if response.is_success and response.json().get("ok") is True:
+        data = response.json()
+        if not isinstance(data, dict):
+            return "unknown", "invalid_telegram_response"
+        if response.is_success and data.get("ok") is True:
             return "sent", None
+        if (response.status_code == 403 and data.get("error_code") == 403
+                and "bot was blocked by the user" in str(data.get("description", "")).lower()):
+            return "blocked", "telegram_bot_blocked_by_user"
         return "failed", f"telegram_http_{response.status_code}"
     except (httpx.HTTPError, ValueError):
         # Telegram has no sendMessage idempotency key. A timeout may mean delivered.
         return "unknown", "delivery_result_unknown"
+
+
+async def queue_blocked_seller_alert(session, notice_id):
+    """One durable admin alert per failed inactivity notice, never an application ban."""
+    async with session.begin():
+        notice = await session.scalar(select(Notification).where(Notification.id == notice_id).with_for_update())
+        if (not notice or notice.delivery_status not in {"blocked", "failed", "unknown", "suppressed"}
+                or notice.notification_type != "seller_timeout_cancelled"
+                or notice.payload.get("admin_delivery_alert_queued")):
+            return False
+        seller = await session.get(User, notice.user_id)
+        if not seller:
+            return False
+        settings = get_settings()
+        administrators = list((await session.scalars(select(User).where(or_(
+            User.telegram_id.in_(settings.admin_telegram_ids), User.role == "admin",
+        )))).all())
+        if not administrators:
+            return False  # Keep the event pending for an administrator registered later.
+        name = " ".join(filter(None, (seller.first_name, seller.last_name))) or "Пользователь"
+        blocked = notice.delivery_status == "blocked"
+        title = "Продавец заблокировал бота" if blocked else "Не удалось уведомить продавца"
+        explanation = ("Telegram подтвердил блокировку бота пользователем." if blocked else
+            "Доставка не подтверждена. Причина может быть связана с сетью или ограничениями Telegram; блокировка бота не подтверждена.")
+        for admin in administrators:
+            session.add(Notification(user_id=admin.id, notification_type="seller_blocked_bot" if blocked else "seller_notice_failed",
+                title=title,
+                body=f"⚠️ {title}\n\nИмя: {name}\nTelegram ID: {seller.telegram_id}\n\n"
+                     "Его активные объявления сняты с публикации за неактивность. "
+                     f"{explanation} "
+                     "Это не блокировка пользователя в AutoFlow.",
+                payload={"seller_id": str(seller.id), "source_notification_id": str(notice.id),
+                         "deal_id": notice.payload.get("deal_id")}, delivery_status="pending"))
+        notice.payload = {**notice.payload, "admin_delivery_alert_queued": True}
+        return True
 
 
 async def recover_message_notifications():
@@ -145,6 +188,16 @@ async def recover_message_notifications():
                         ).values(delivery_status="pending", delivery_next_attempt_at=datetime.now(UTC) + timedelta(minutes=2)))
         except Exception as exc:
             logger.error("message_delivery_failed user_id=%s error_type=%s", user_id, type(exc).__name__)
+
+    # Also recover a crash after recording Telegram's 403 but before enqueueing the admin notice.
+    async with SessionLocal() as session:
+        blocked_ids = list((await session.scalars(select(Notification.id).where(
+            Notification.delivery_status.in_(("blocked", "failed", "unknown", "suppressed")), Notification.notification_type == "seller_timeout_cancelled",
+            Notification.payload["admin_delivery_alert_queued"].as_boolean().is_not(True),
+        ).limit(100))).all())
+    for notice_id in blocked_ids:
+        async with SessionLocal() as session:
+            await queue_blocked_seller_alert(session, notice_id)
 
 
 async def run_message_notification_worker():

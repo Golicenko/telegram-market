@@ -2180,6 +2180,8 @@ async function hideCurrentConversation() {
     if (offer?.status === "accepted") status.textContent = `✅ Предложение принято — ${formatNumber(amount)} AF`;
     else if (offer?.status === "rejected") status.textContent = "❌ Предложение отклонено";
     else if (offer?.status === "countered") status.textContent = "↪️ Отправлено встречное предложение";
+    else if (offer?.status === "cancelled") status.textContent = "Предложение отменено";
+    else if (offer?.status === "expired") status.textContent = "Срок ответа на предложение истёк";
     else status.textContent = "Ожидается ответ продавца";
     bubble.append(heading, price, status);
     if (offer?.status === "pending" && offer.offered_by_id !== state.me.user.id) {

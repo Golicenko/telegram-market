@@ -667,7 +667,11 @@ async def recover_seller_response_timeouts() -> None:
     async with SessionLocal() as session:
         ordinary_ids = list((await session.scalars(select(Conversation.id).where(
             Conversation.deal_id.is_(None), Conversation.archived_at.is_(None),
-            Conversation.inactivity_status == "waiting", Conversation.inactivity_deadline <= now,
+            Conversation.conversation_type == "deal",
+            select(PriceOffer.id).where(PriceOffer.conversation_id == Conversation.id,
+                PriceOffer.offered_by_id == Conversation.buyer_id, PriceOffer.status == "pending",
+                PriceOffer.created_at <= now - timedelta(seconds=get_settings().seller_response_timeout_seconds),
+            ).correlate(Conversation).exists(),
         ).limit(100))).all())
     for conversation_id in ordinary_ids:
         try:

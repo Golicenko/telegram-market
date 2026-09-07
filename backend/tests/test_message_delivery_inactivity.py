@@ -7,8 +7,8 @@ import pytest
 from sqlalchemy import select, func
 
 from test_chat_lifecycle_db import db, DB
-from app.models import ConversationMessage, Conversation, Notification, Listing, Wallet, WalletTransaction
-from app.services import get_or_create_conversation, send_conversation_message, purchase_listing, auto_cancel_unanswered_deal
+from app.models import ConversationMessage, Conversation, Notification, Listing, Wallet, WalletTransaction, PriceOffer, User
+from app.services import get_or_create_conversation, send_conversation_message, purchase_listing, auto_cancel_unanswered_deal, create_listing_price_offer, respond_price_offer
 from app.inactivity import process_unanswered_dialog, record_buyer_request, record_seller_response
 from app.message_notifications import claim_delivery, send_delivery, unread_query, notification_text
 from app import message_notifications
@@ -172,35 +172,140 @@ async def test_bot_payload_uses_one_exact_chat_button_and_handles_unknown(monkey
 
 
 @pytest.mark.asyncio
-async def test_ordinary_inactivity_hides_once_without_any_refund(db):
+async def test_ordinary_inactivity_never_hides_listings_or_refunds(db):
     bridge, buyer, seller, listing = db
     dialog, _, _ = await get_or_create_conversation(bridge, buyer, listing.id)
     await send_conversation_message(bridge, buyer, dialog.id, "question", uuid.uuid4())
     # SQLite timestamps are timezone-naive; production columns are PostgreSQL timestamptz.
     due = (datetime.now(UTC) + timedelta(hours=25)).replace(tzinfo=None)
-    assert await process_unanswered_dialog(bridge, dialog.id, due)
+    assert not await process_unanswered_dialog(bridge, dialog.id, due)
     assert not await process_unanswered_dialog(bridge, dialog.id, due)
     with bridge.session.begin():
-        assert bridge.session.get(Listing, listing.id).status == "paused"
-        assert bridge.session.get(Conversation, dialog.id).inactivity_status == "processed"
+        assert bridge.session.get(Listing, listing.id).status == "active"
+        assert bridge.session.get(Conversation, dialog.id).archived_at is None
         assert bridge.session.scalar(select(func.count()).select_from(WalletTransaction)) == 0
         assert bridge.session.scalar(select(func.count()).select_from(Notification).where(
-            Notification.notification_type == "seller_inactive_hidden")) == 1
+            Notification.notification_type == "seller_inactive_hidden")) == 0
 
 
 @pytest.mark.asyncio
 async def test_seller_response_stops_case_then_new_buyer_request_rearms(db):
     bridge, buyer, seller, listing = db
-    dialog, _, _ = await get_or_create_conversation(bridge, buyer, listing.id)
-    start = datetime.now(UTC)
+    deal, _, _ = await purchase_listing(bridge, buyer, listing.id)
+    start = datetime.now(UTC) - timedelta(hours=23)
     with bridge.session.begin():
-        record_buyer_request(dialog, start)
-        record_seller_response(dialog, start + timedelta(hours=23))
-    assert not await process_unanswered_dialog(bridge, dialog.id, (start + timedelta(hours=25)).replace(tzinfo=None))
+        dialog = bridge.session.get(Conversation, deal.conversation_id)
+        record_buyer_request(dialog, start, deal)
+    await send_conversation_message(bridge, seller, dialog.id, "reply at 23h", uuid.uuid4(), deal.id)
+    assert not await auto_cancel_unanswered_deal(bridge, deal.id, now=start + timedelta(hours=25))
     with bridge.session.begin():
-        record_buyer_request(dialog, start + timedelta(hours=26))
-    assert not await process_unanswered_dialog(bridge, dialog.id, (start + timedelta(hours=49)).replace(tzinfo=None))
-    assert await process_unanswered_dialog(bridge, dialog.id, (start + timedelta(hours=51)).replace(tzinfo=None))
+        record_buyer_request(dialog, start + timedelta(hours=26), deal)
+    assert not await auto_cancel_unanswered_deal(bridge, deal.id, now=start + timedelta(hours=49))
+    assert await auto_cancel_unanswered_deal(bridge, deal.id, now=start + timedelta(hours=51))
+
+
+@pytest.mark.asyncio
+async def test_unanswered_offer_cancels_only_negotiation_even_if_seller_chatted(db):
+    bridge, buyer, seller, listing = db
+    offer, _ = await create_listing_price_offer(bridge, buyer, listing.id, Decimal(80))
+    await send_conversation_message(bridge, seller, offer.conversation_id, "Thinking", uuid.uuid4())
+    with bridge.session.begin():
+        offer.created_at = datetime.now(UTC) - timedelta(hours=25)
+    assert await process_unanswered_dialog(bridge, offer.conversation_id)
+    assert not await process_unanswered_dialog(bridge, offer.conversation_id)
+    with bridge.session.begin():
+        assert offer.status == "cancelled"
+        assert listing.status == "active"
+        assert bridge.session.get(Conversation, offer.conversation_id).archived_at
+        assert bridge.session.scalar(select(func.count()).select_from(WalletTransaction)) == 0
+        assert bridge.session.scalar(select(func.count()).select_from(Notification).where(
+            Notification.notification_type == "price_offer_timeout")) == 1
+
+
+@pytest.mark.asyncio
+async def test_new_offer_does_not_extend_old_offer_and_expired_accept_is_denied(db):
+    from fastapi import HTTPException
+    bridge, buyer, seller, listing = db
+    old, _ = await create_listing_price_offer(bridge, buyer, listing.id, Decimal(80))
+    with bridge.session.begin():
+        old.created_at = datetime.now(UTC) - timedelta(hours=25)
+    with pytest.raises(HTTPException) as error:
+        await respond_price_offer(bridge, seller, old.id, True)
+    assert error.value.status_code == 409
+    # Rollback expires ORM objects. Re-establish the test request's persisted identity.
+    with bridge.session.begin():
+        bridge.session.refresh(buyer)
+        bridge.session.refresh(listing)
+    new, _ = await create_listing_price_offer(bridge, buyer, listing.id, Decimal(90))
+    assert await process_unanswered_dialog(bridge, new.conversation_id)
+    with bridge.session.begin():
+        assert bridge.session.get(PriceOffer, old.id).status == "cancelled"
+        assert new.status == "pending"
+        assert bridge.session.get(Conversation, new.conversation_id).archived_at is None
+        assert listing.status == "active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accept", [True, False])
+async def test_responded_offer_not_timed_out(db, accept):
+    bridge, buyer, seller, listing = db
+    offer, _ = await create_listing_price_offer(bridge, buyer, listing.id, Decimal(80))
+    with bridge.session.begin():
+        offer.created_at = datetime.now(UTC) - timedelta(hours=23)
+    await respond_price_offer(bridge, seller, offer.id, accept)
+    assert not await process_unanswered_dialog(bridge, offer.conversation_id, datetime.now(UTC) + timedelta(hours=2))
+    assert listing.status == "active"
+    assert offer.status == ("accepted" if accept else "rejected")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("description,expected", [
+    ("Forbidden: bot was blocked by the user", "blocked"),
+    ("Forbidden: user is deactivated", "failed"),
+])
+async def test_telegram_block_requires_explicit_confirmation(monkeypatch, description, expected):
+    config = type("Settings", (), {"bot_token": "test-only", "externally_reachable_url": "https://example.test"})()
+    monkeypatch.setattr(message_notifications, "get_settings", lambda: config)
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(403,
+        json={"ok": False, "error_code": 403, "description": description}))
+    monkeypatch.setattr(message_notifications.httpx, "AsyncClient", lambda **kw: real_client(transport=transport, **kw))
+    assert (await send_delivery({"telegram_id": 2, "text": "test", "params": {}}))[0] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["blocked", "unknown", "failed"])
+async def test_admin_alert_is_durable_once_and_never_bans_seller(db, monkeypatch, outcome):
+    bridge, buyer, seller, listing = db
+    admin_id, seller_id = uuid.uuid4(), seller.id
+    with bridge.session.begin():
+        bridge.session.add(User(id=admin_id, telegram_id=999, first_name="Owner", role="admin", bot_started=True))
+        seller.bot_started = True
+        bridge.session.add(Notification(user_id=seller_id, notification_type="seller_timeout_cancelled",
+            title="Timeout", body="Listings hidden", payload={"deal_id": str(uuid.uuid4())}, delivery_status=outcome))
+    class SessionContext:
+        async def __aenter__(self):
+            return bridge
+        async def __aexit__(self, *args):
+            bridge.session.rollback()
+    monkeypatch.setattr(message_notifications, "SessionLocal", SessionContext)
+    deliveries = []
+    async def fake_send(job):
+        deliveries.append(job)
+        return "sent", None
+    monkeypatch.setattr(message_notifications, "send_delivery", fake_send)
+    for _ in range(3):
+        await message_notifications.recover_message_notifications()
+    assert len(deliveries) == 1
+    assert deliveries[0]["telegram_id"] == 999
+    assert "Seller" in deliveries[0]["text"] and "Telegram ID: 2" in deliveries[0]["text"]
+    if outcome == "blocked":
+        assert "Telegram подтвердил блокировку" in deliveries[0]["text"]
+    else:
+        assert "блокировка бота не подтверждена" in deliveries[0]["text"]
+    with bridge.session.begin():
+        assert not bridge.session.get(User, seller_id).is_blocked
+        assert bridge.session.scalar(select(func.count()).select_from(Notification).where(Notification.user_id == admin_id)) == 1
 
 
 @pytest.mark.asyncio

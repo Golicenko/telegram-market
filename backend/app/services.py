@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
 from .chat_access import ACTIVE_DEAL_STATUSES, require_active_chat, require_active_chat_by_id
-from .inactivity import record_buyer_request, record_seller_response, hide_active_listings, SELLER_NOTICE, BUYER_NOTICE
+from .inactivity import record_buyer_request, record_seller_response, hide_active_listings, offer_response_expired, SELLER_NOTICE, BUYER_NOTICE
 from .models import (
     AccountListing,
     AdminAction,
@@ -1326,6 +1326,8 @@ async def _create_price_offer_locked(session: AsyncSession, actor: User, convers
         parent = await session.scalar(select(PriceOffer).where(PriceOffer.id == parent_offer_id).with_for_update())
         if not parent or parent.conversation_id != conversation.id or parent.status != "pending" or parent.offered_by_id == actor.id:
             raise HTTPException(status_code=409, detail="Counter-offer is not allowed")
+        if offer_response_expired(parent, datetime.now(UTC)):
+            raise HTTPException(status_code=409, detail="Срок ответа на предложение истёк")
         parent.status = "countered"
         parent.responded_at = datetime.now(UTC)
     offer = PriceOffer(
@@ -1383,6 +1385,8 @@ async def respond_price_offer(session: AsyncSession, actor: User, offer_id: uuid
         offer = await session.scalar(select(PriceOffer).where(PriceOffer.id == offer_id).with_for_update().execution_options(populate_existing=True))
         if not offer or offer.status != "pending":
             raise HTTPException(status_code=404, detail="Pending offer not found")
+        if offer_response_expired(offer, datetime.now(UTC)):
+            raise HTTPException(status_code=409, detail="Срок ответа на предложение истёк")
         conversation = await session.scalar(select(Conversation).where(Conversation.id == offer.conversation_id).with_for_update())
         if not conversation or actor.id not in {conversation.buyer_id, conversation.seller_id} or actor.id == offer.offered_by_id:
             raise HTTPException(status_code=403, detail="Only the other participant can respond")
