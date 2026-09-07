@@ -510,7 +510,7 @@ class PriceOffer(Base, TimestampMixin):
     responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         CheckConstraint("amount_af_coins >= 1", name="ck_price_offers_min_price"),
-        CheckConstraint("status IN ('pending','accepted','rejected','countered')", name="ck_price_offers_status"),
+        CheckConstraint("status IN ('pending','accepted','rejected','countered','expired','cancelled')", name="ck_price_offers_status"),
     )
 
 
