@@ -1,5 +1,6 @@
 (function () {
   "use strict";
+  const primaryViews = new Set(["market", "unique", "training", "accounts", "profile", "more"]);
 
   const api = window.AutoFlowApi;
   let telegram = window.Telegram?.WebApp || null;
@@ -7,6 +8,8 @@
   const state = {
     currentView: "market",
     previousView: "market",
+    navigationStack: [],
+    backBlockedUntil: 0,
     listingMode: "regular",
     me: null,
     regular: [],
@@ -237,6 +240,12 @@
     initializedTelegram = telegram;
     state.pendingTrainingDeepLink ||= telegram.initDataUnsafe?.start_param || null;
     safeTelegramCall("ready", () => telegram.ready());
+    safeTelegramCall("back-button", () => { telegram.BackButton?.onClick(goBack); syncBackNavigation(); });
+    safeTelegramCall("safe-area", () => {
+      updateSafeAreas();
+      telegram.onEvent?.("safeAreaChanged", updateSafeAreas);
+      telegram.onEvent?.("contentSafeAreaChanged", updateSafeAreas);
+    });
     safeTelegramCall("expand", () => telegram.expand());
     safeTelegramCall("viewport", () => telegram.onEvent?.("viewportChanged", updateChatViewport));
     safeTelegramCall("theme", () => {
@@ -567,7 +576,7 @@ function handleClick(event) {
 
   const backButton = target.closest("[data-back]");
   if (backButton) {
-    return void navigate(backButton.dataset.backTarget || state.previousView || "market");
+    return void goBack();
   }
 
     const closeDialog = target.closest("[data-close-dialog]");
@@ -680,10 +689,49 @@ function handleClick(event) {
     if (supportResolution) return void resolveSupportCase(supportResolution);
   }
 
-  async function navigate(viewName) {
+  function updateSafeAreas() {
+    for (const edge of ["top", "bottom", "left", "right"]) {
+      const value = Math.max(0, Number(telegram?.safeAreaInset?.[edge] || 0))
+        + Math.max(0, Number(telegram?.contentSafeAreaInset?.[edge] || 0));
+      document.documentElement.style.setProperty("--app-safe-" + edge, value + "px");
+    }
+  }
+
+  async function goBack() {
+    if (primaryViews.has(state.currentView) || Date.now() < state.backBlockedUntil) return;
+    state.backBlockedUntil = Date.now() + 450;
+    const entry = state.navigationStack.pop();
+    const fallback = ["training-detail", "training-editor"].includes(state.currentView) ? "training" : "profile";
+    if (entry?.conversation) state.currentConversation = entry.conversation;
+    await navigate(entry?.view || fallback, { back: true });
+    if (entry?.view === "deal-chat" && entry.conversation?.id) await openConversation(entry.conversation.id, null, null, entry.conversation.deal?.id);
+    if (entry?.view === "listing-detail" && entry.listingId) await openListingDetails(entry.listingId);
+  }
+
+  function syncBackNavigation() {
+    const internal = !primaryViews.has(state.currentView);
+    document.querySelectorAll("[data-back]").forEach(button => {
+      button.hidden = primaryViews.has(button.closest("[data-view]")?.dataset.view);
+    });
+    safeTelegramCall("back-visibility", () => {
+      if (internal) telegram?.BackButton?.show?.();
+      else telegram?.BackButton?.hide?.();
+    });
+  }
+
+  async function navigate(viewName, options = {}) {
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
+    if (viewName !== state.currentView && !options.back) {
+      if (primaryViews.has(viewName)) state.navigationStack = [];
+      else state.navigationStack.push({
+        view: state.currentView,
+        conversation: state.currentView === "deal-chat" ? state.currentConversation : null,
+        listingId: state.selectedListing?.id,
+      });
+    }
     state.currentView = viewName;
+    syncBackNavigation();
     document.body.classList.toggle("chat-open", viewName === "deal-chat");
     if (viewName !== "deal-chat") document.body.classList.remove("deal-details-required");
     document.body.classList.toggle("admin-open", viewName === "admin");
@@ -790,11 +838,17 @@ function handleClick(event) {
   const messagePath = `/conversations/${conversationId}/messages${dealId ? `?deal_id=${encodeURIComponent(dealId)}` : ""}`;
   const [messagesResult, dealResult] = await Promise.allSettled([
     api.request(messagePath),
-    dealId ? api.request(`/deals/${dealId}`) : Promise.resolve(null),
+    api.request(`/conversations/${conversationId}`),
   ]);
-  if (messagesResult.status === "rejected" && dealResult.status === "rejected") throw messagesResult.reason;
+  if (state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId) return;
+  if (messagesResult.status === "rejected") {
+    if (Number(messagesResult.reason?.status) === 409) return closeDealChat();
+    throw messagesResult.reason;
+  }
   const messages = messagesResult.status === "fulfilled" ? safeArray(messagesResult.value) : safeArray(state.messages);
   const dealDetails = dealResult.status === "fulfilled" ? dealResult.value : null;
+  if (dealResult.status === "rejected" && Number(dealResult.reason?.status) === 409) return closeDealChat();
+  const offersChanged = dealDetails && JSON.stringify(dealDetails.offers) !== JSON.stringify(state.currentConversation.offers);
 
   const oldLastMessageId = state.messages.length ? state.messages[state.messages.length - 1]?.id : null;
   const newLastMessageId = messages.length ? messages[messages.length - 1]?.id : null;
@@ -807,8 +861,9 @@ function handleClick(event) {
     previousDeal?.preferred_delivery_time !== refreshedDeal.preferred_delivery_time
   );
   if (refreshedDeal) state.currentConversation.deal = refreshedDeal;
+  if (dealDetails) state.currentConversation = dealDetails;
 
-  if (oldLastMessageId !== newLastMessageId || dealChanged) {
+  if (oldLastMessageId !== newLastMessageId || dealChanged || offersChanged) {
     state.messages = messages;
     renderConversation();
   }
@@ -2045,6 +2100,7 @@ async function hideCurrentConversation() {
     document.getElementById("chatName").textContent = other.name || "Пользователь";
     document.getElementById("chatActivity").textContent = [other.username ? `@${other.username}` : null, other.mini_app_last_active_at ? `в Mini App ${formatMessageTime(other.mini_app_last_active_at)}` : null].filter(Boolean).join(" · ") || "Активность неизвестна";
     const isDealThread = details.conversation_type === "deal";
+    elements.chatForm.hidden = Boolean(details.archived_at) || ["completed", "cancelled"].includes(details.deal?.status);
     document.getElementById("chatStatus").textContent = details.deal ? dealStatusLabel(details.deal.status) : (isDealThread ? "Торг" : "Переписка");
     const avatarFallback = document.getElementById("chatAvatarFallback"); const avatarImage = document.getElementById("chatAvatarImage");
     avatarFallback.textContent = (other.name || other.username || "A").slice(0, 1).toUpperCase();
@@ -2293,7 +2349,11 @@ async function hideCurrentConversation() {
     if (!id) return;
     if (action === "support") return openDealSupport(id);
     const endpoint = action === "seller-contacted" ? "seller-contacted" : action === "transfer" ? "transfer" : action === "confirm" ? "confirm" : action === "cancel" ? "cancel" : "dispute";
-    try { await api.request(`/deals/${id}/${endpoint}`, { method: "POST" }); await openDealConversation(id); await refreshMarketplace(); }
+    try {
+      const result = await api.request(`/deals/${id}/${endpoint}`, { method: "POST" });
+      if (["completed", "cancelled"].includes(result.status)) return await closeDealChat();
+      await openDealConversation(id); await refreshMarketplace();
+    }
     catch (error) { notify(error.message); }
   }
 
@@ -2431,8 +2491,18 @@ async function hideCurrentConversation() {
         const value = window.prompt("Встречная цена в AF Coins (минимум 1)", "1"); if (!value) return;
         await api.request(`/conversations/${state.currentConversation.id}/offers/counter`, { method: "POST", body: JSON.stringify({ amount_af_coins: Number(value), parent_offer_id: button.dataset.offerId }) });
       } else await api.request(`/offers/${button.dataset.offerId}/${button.dataset.offerAction}`, { method: "POST" });
+      if (button.dataset.offerAction === "reject") return await closeDealChat();
       await openConversation(state.currentConversation.id);
     } catch (error) { notify(error.message); }
+  }
+
+  async function closeDealChat() {
+    elements.chatForm.hidden = true;
+    state.currentConversation = null;
+    state.messages = [];
+    await navigate("profile");
+    switchProfileTab("deals");
+    notify("Чат сделки закрыт");
   }
 
   async function requestStarInvoice(event) {

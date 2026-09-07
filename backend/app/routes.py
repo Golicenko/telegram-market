@@ -39,6 +39,7 @@ from .bot import (
 )
 from .config import Settings, get_settings
 from .database import SessionLocal, get_session
+from .chat_access import ACTIVE_DEAL_STATUSES, active_thread_clause, require_active_chat
 from .models import AccountListing, AdminAction, AdminBroadcast, Advertisement, CartItem, ContentSeenState, Conversation, ConversationMessage, Deal, DealMessage, Favorite, Listing, ListingImage, ListingLike, ListingView, Notification, PriceOffer, StarPayment, StarPaymentIntent, SupportCaseEvent, SupportMessage, SupportTicket, TrainingInboxUpload, TrainingMaterial, TrainingMaterialDelivery, TrainingProduct, TrainingPurchase, TrainingView, UploadedImage, User, Wallet, WalletTransaction, WithdrawalRequest
 from .schemas import (
     AccountListingCreate,
@@ -131,7 +132,7 @@ from .services import (
     finish_training_delivery,
     get_or_create_deal_conversation,
     get_or_create_conversation,
-    get_or_create_negotiation_conversation,
+    create_listing_price_offer,
     process_successful_payment,
     purchase_listing,
     complete_listing_payment_intent,
@@ -301,6 +302,8 @@ async def conversation_details(
 ) -> dict:
     if viewer and not allow_admin and viewer.id not in {conversation.buyer_id, conversation.seller_id}:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if viewer and not allow_admin:
+        await require_active_chat(session, conversation, viewer)
     message_scope = message_scope or conversation.conversation_type
     deal = deal_override
     if conversation.conversation_type == "deal" and not deal and conversation.deal_id:
@@ -320,9 +323,8 @@ async def conversation_details(
     )
     message_filter = [ConversationMessage.conversation_id == conversation.id]
     if message_scope == "deal":
-        message_filter.append(
-            ConversationMessage.deal_id == deal.id if deal else ConversationMessage.deal_id.is_(None)
-        )
+        if conversation.conversation_type != "deal":
+            message_filter.append(ConversationMessage.deal_id == deal.id)
     elif message_scope in {"ordinary", "dialog"}:
         message_filter.extend((
             ConversationMessage.deal_id.is_(None),
@@ -2393,13 +2395,15 @@ async def get_conversation_messages(
     if not conversation or user.id not in {conversation.buyer_id, conversation.seller_id}:
         raise HTTPException(status_code=404, detail="Conversation not found")
     query = select(ConversationMessage).where(ConversationMessage.conversation_id == conversation.id)
+    await require_active_chat(session, conversation, user)
     if deal_id:
         deal = await ensure_deal_participant(session, deal_id, user)
         if deal.conversation_id != conversation.id:
             raise HTTPException(status_code=404, detail="Deal conversation not found")
-        query = query.where(ConversationMessage.deal_id == deal.id)
+        if conversation.conversation_type != "deal":
+            query = query.where(ConversationMessage.deal_id == deal.id)
     elif conversation.conversation_type == "deal" and conversation.deal_id:
-        query = query.where(ConversationMessage.deal_id == conversation.deal_id)
+        pass  # Dedicated thread includes the earlier offer and negotiation.
     elif conversation.conversation_type == "dialog":
         query = query.where(ConversationMessage.deal_id.is_(None), ConversationMessage.message_type == "text")
     else:
@@ -2425,17 +2429,20 @@ async def mark_conversation_as_read(
         )
 
     read_filters = [
+            # The same access policy protects reads, receipts and sends.
             ConversationMessage.conversation_id == conversation.id,
             ConversationMessage.sender_id != user.id,
             ConversationMessage.is_read.is_(False),
     ]
+    await require_active_chat(session, conversation, user)
     if deal_id:
         deal = await ensure_deal_participant(session, deal_id, user)
         if deal.conversation_id != conversation.id:
             raise HTTPException(status_code=404, detail="Deal conversation not found")
-        read_filters.append(ConversationMessage.deal_id == deal.id)
+        if conversation.conversation_type != "deal":
+            read_filters.append(ConversationMessage.deal_id == deal.id)
     elif conversation.conversation_type == "deal" and conversation.deal_id:
-        read_filters.append(ConversationMessage.deal_id == conversation.deal_id)
+        pass
     elif conversation.conversation_type == "dialog":
         read_filters.extend((ConversationMessage.deal_id.is_(None), ConversationMessage.message_type == "text"))
     else:
@@ -2533,14 +2540,13 @@ async def add_first_price_offer(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    conversation, _, _ = await get_or_create_negotiation_conversation(session, user, listing_id)
-    offer, recipient = await create_price_offer(session, user, conversation.id, payload.amount_af_coins)
+    offer, recipient = await create_listing_price_offer(session, user, listing_id, payload.amount_af_coins)
     if recipient and recipient.bot_started:
         background_tasks.add_task(
             send_price_offer_notification,
             recipient.telegram_id,
             listing_id=str(listing_id),
-            conversation_id=str(conversation.id),
+            conversation_id=str(offer.conversation_id),
             offer_id=str(offer.id),
             amount_af_coins=str(offer.amount_af_coins),
         )
@@ -2663,7 +2669,9 @@ async def update_deal_delivery_details(
 
 @router.get("/deals/{deal_id}/messages", response_model=list[MessageOut])
 async def get_messages(deal_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
-    await ensure_deal_participant(session, deal_id, user)
+    deal = await ensure_deal_participant(session, deal_id, user)
+    if deal.status not in ACTIVE_DEAL_STATUSES:
+        raise HTTPException(status_code=409, detail="Чат сделки закрыт")
     return list((await session.scalars(select(DealMessage).where(DealMessage.deal_id == deal_id).order_by(DealMessage.created_at))).all())
 
 
@@ -2678,6 +2686,8 @@ async def send_message(
     deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
     if not deal or user.id not in {deal.buyer_id, deal.seller_id}:
         raise HTTPException(status_code=404, detail="Deal not found")
+    if deal.status not in ACTIVE_DEAL_STATUSES:
+        raise HTTPException(status_code=409, detail="Чат сделки закрыт")
     now = datetime.now(UTC)
     if user.id == deal.seller_id and deal.seller_timeout_processed_at is not None:
         raise HTTPException(status_code=409, detail="Сделка уже автоматически отменена из-за истечения срока ответа")
@@ -3474,8 +3484,7 @@ async def profile(user: User = Depends(get_current_user), session: AsyncSession 
     )).all())
     deal_thread_values = list((await session.scalars(
         select(Conversation).where(
-            Conversation.conversation_type == "deal",
-            Conversation.archived_at.is_(None),
+            active_thread_clause(),
             or_(Conversation.buyer_id == user.id, Conversation.seller_id == user.id),
         ).order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc())
     )).all())

@@ -74,7 +74,8 @@ def fixture():
         description="Car", price_af_coins=Decimal("100"), views_count=0, pinned=False,
     )
     conversation = Conversation(
-        id=uuid.uuid4(), listing_id=listing.id, buyer_id=buyer.id, seller_id=seller.id
+        id=uuid.uuid4(), listing_id=listing.id, buyer_id=buyer.id, seller_id=seller.id,
+        conversation_type="deal",
     )
     deal = Deal(
         id=uuid.uuid4(), listing_id=listing.id, conversation_id=conversation.id,
@@ -483,11 +484,16 @@ class TimeoutSession:
         self.users = users or {}
         self.rows = list(rows or [])
         self.added = []
+        self.conversation = next((v for v in self.scalar_values if isinstance(v, Conversation)), None)
 
     def begin(self):
         return Transaction()
 
     async def scalar(self, _query):
+        if "EXISTS" in str(_query):
+            return self.conversation.id if self.conversation else None
+        if _query.column_descriptions[0].get("entity") is Deal and self.scalar_values and isinstance(self.scalar_values[0], Conversation):
+            return next((v for v in self.scalar_values if isinstance(v, Deal)), None)
         return self.scalar_values.pop(0) if self.scalar_values else None
 
     async def scalars(self, _query):
@@ -496,6 +502,8 @@ class TimeoutSession:
     async def get(self, model, key):
         if model is User:
             return self.users.get(key)
+        if model is Conversation:
+            return next((item for item in self.scalar_values if isinstance(item, Conversation) and item.id == key), None)
         return None
 
     def add(self, value):
@@ -642,6 +650,7 @@ async def test_generic_pair_chat_does_not_answer_the_legacy_current_deal_pointer
     deal.delivery_details_submitted_at = datetime.now(UTC)
     deal.seller_response_deadline = datetime.now(UTC) + timedelta(hours=24)
     conversation.deal_id = deal.id
+    conversation.conversation_type = "dialog"
     session = TimeoutSession([conversation, None], users={buyer.id: buyer, seller.id: seller})
 
     await send_conversation_message(session, seller, conversation.id, "Обычное сообщение", uuid.uuid4())
@@ -652,7 +661,7 @@ async def test_generic_pair_chat_does_not_answer_the_legacy_current_deal_pointer
 
 
 @pytest.mark.asyncio
-async def test_response_in_shared_conversation_marks_only_the_explicit_deal():
+async def test_response_in_dedicated_conversation_marks_only_the_explicit_deal():
     buyer, seller, _listing, conversation, first = fixture()
     second = Deal(
         id=uuid.uuid4(), listing_id=uuid.uuid4(), conversation_id=conversation.id,
@@ -665,7 +674,7 @@ async def test_response_in_shared_conversation_marks_only_the_explicit_deal():
     )
     first.delivery_details_submitted_at = datetime.now(UTC)
     first.seller_response_deadline = datetime.now(UTC) + timedelta(hours=24)
-    conversation.deal_id = second.id
+    conversation.deal_id = first.id
     session = TimeoutSession([conversation, None, first], users={buyer.id: buyer, seller.id: seller})
 
     await send_conversation_message(
@@ -765,6 +774,8 @@ class SellerRaceSession(ConcurrentRefundSession):
     async def scalar(self, query):
         entity = query.column_descriptions[0].get("entity")
         if entity is Conversation:
+            if "EXISTS" in str(query):
+                return self.conversation.id if self.state.deal.status not in {"completed", "cancelled"} else None
             if not self.paused:
                 self.paused = True
                 self.entered.set()
@@ -775,6 +786,8 @@ class SellerRaceSession(ConcurrentRefundSession):
         return await super().scalar(query)
 
     async def get(self, model, key):
+        if model is Conversation and key == self.conversation.id:
+            return self.conversation
         return await super().get(model, key)
 
     async def flush(self):

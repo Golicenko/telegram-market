@@ -13,8 +13,8 @@
   --yellow: #ffc11b;
   --green: #22c46a;
   --red: #cf3038;
-  --safe-top: max(env(safe-area-inset-top), 8px);
-  --safe-bottom: max(env(safe-area-inset-bottom), 8px);
+  --safe-top: max(env(safe-area-inset-top), var(--app-safe-top, 0px), 8px);
+  --safe-bottom: max(env(safe-area-inset-bottom), var(--app-safe-bottom, 0px), 8px);
   --shadow: 0 16px 44px rgba(0, 0, 0, 0.42);
   color-scheme: dark;
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -118,6 +118,11 @@ input::placeholder, textarea::placeholder { color:#677381; }
 .screen-heading h1 { margin:0; font-size:18px; }
 .settings-button,.back-button { position:absolute; top:7px; width:38px; height:38px; border:0; background:transparent; font-size:22px; }.settings-button{right:0}.back-button{left:0;font-size:32px;line-height:1}
 .screen-heading--back { margin-bottom:8px; }
+.screen-heading--back,.listing-page__header { display:flex;justify-content:flex-start;gap:10px;min-height:60px;padding:8px; }
+.screen-heading--back h1,.listing-page__header span { min-width:0;overflow-wrap:anywhere; }
+.back-button { position:static;flex:0 0 44px;width:44px;height:44px;min-width:44px;min-height:44px;display:grid;place-items:center;border-radius:10px;touch-action:manipulation; }
+.back-button:focus-visible { outline:2px solid var(--orange-2);outline-offset:2px; }
+.listing-page__header { top:var(--safe-top); }
 .profile-summary { display:grid; grid-template-columns:64px 1fr auto; align-items:center; gap:10px; padding:13px 2px; }
 .profile-photo { width:64px; height:64px; display:grid; place-items:center; overflow:hidden; border:2px solid #078bea; border-radius:50%; color:white; background:#172330; font-size:24px; font-weight:900; }
 .profile-identity { display:grid; gap:4px; min-width:0; }.profile-identity strong{font-size:16px}.profile-identity span{overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:11px}
@@ -542,3 +547,8 @@ body.chat-open .app-shell{width:100vw;max-width:none;margin:0;padding:0;border:0
 .training-telegram-upload>div:not(#trainingInboxUploads){display:grid;grid-template-columns:1fr 1fr;gap:7px}.training-telegram-upload button{min-width:0;padding:9px 7px;border:1px solid rgba(239,167,24,.35);border-radius:8px;color:var(--text);background:#121922;font-size:9px;font-weight:800}
 #trainingInboxUploads{display:grid;gap:6px}.training-inbox-upload{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;gap:2px 8px!important;text-align:left!important}.training-inbox-upload strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.training-inbox-upload small{color:var(--muted)}.training-inbox-upload span{grid-column:2;grid-row:1/3;align-self:center;color:#efc65f}
 .promotion-choice-modal .publish-button,.promotion-choice-modal .ghost-button{display:flex;align-items:center;justify-content:center;width:100%;min-height:46px;margin-top:8px;padding:0 14px;border:1px solid rgba(255,190,67,.62);border-radius:9px;color:#fff;background:linear-gradient(180deg,#ff9c00,#ef6500);box-shadow:0 8px 20px rgba(255,105,0,.17);font:850 12px/1 system-ui,-apple-system,"Segoe UI",sans-serif}.promotion-choice-modal .ghost-button{color:#fff;background:linear-gradient(180deg,#dda42c,#ad6808);box-shadow:0 8px 20px rgba(188,114,8,.18)}
+/* Shared internal navigation: normal layout flow and Telegram safe insets. */
+.chat-header{grid-template-columns:44px 36px minmax(0,1fr) auto;padding-inline:4px;gap:7px}
+.chat-header .back-button{position:static;width:44px;height:44px;min-width:44px;min-height:44px}
+.chat-view{padding-top:var(--safe-top);padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));padding-right:max(10px,env(safe-area-inset-right),var(--app-safe-right,0px))}
+main{padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));padding-right:max(10px,env(safe-area-inset-right),var(--app-safe-right,0px))}

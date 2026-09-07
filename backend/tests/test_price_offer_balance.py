@@ -34,11 +34,15 @@ class OfferSession:
             return self.conversation
         if entity is Wallet:
             return self.wallet
+        if entity is Listing:
+            return None
         if entity is PriceOffer:
             return None
         raise AssertionError(f"Unexpected scalar query: {statement}")
 
     async def get(self, model, key):
+        if model is Conversation and key == self.conversation.id:
+            return self.conversation
         if model is User and key == self.recipient.id:
             return self.recipient
         return None

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
+from .chat_access import ACTIVE_DEAL_STATUSES, require_active_chat, require_active_chat_by_id
 from .models import (
     AccountListing,
     AdminAction,
@@ -1011,36 +1012,35 @@ async def get_or_create_conversation(
     return conversation, seller, listing
 
 
-async def get_or_create_negotiation_conversation(
+async def _get_or_create_negotiation_conversation_locked(
     session: AsyncSession, buyer: User, listing_id: uuid.UUID
 ) -> tuple[Conversation, User, Listing]:
     """Return the active item-specific negotiation thread, never the permanent dialog."""
-    async with session.begin():
-        listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
-        if not listing or listing.status != "active" or listing.deleted_at is not None:
-            raise HTTPException(status_code=404, detail="Listing not found")
-        if listing.seller_id == buyer.id:
-            raise HTTPException(status_code=400, detail="You cannot negotiate with yourself")
-        conversation = await session.scalar(
-            select(Conversation).where(
-                Conversation.conversation_type == "deal",
-                Conversation.listing_id == listing.id,
-                Conversation.buyer_id == buyer.id,
-                Conversation.seller_id == listing.seller_id,
-                Conversation.deal_id.is_(None),
-                Conversation.archived_at.is_(None),
-            ).with_for_update()
+    listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
+    if not listing or listing.status != "active" or listing.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    if listing.seller_id == buyer.id:
+        raise HTTPException(status_code=400, detail="You cannot negotiate with yourself")
+    conversation = await session.scalar(
+        select(Conversation).where(
+            Conversation.conversation_type == "deal",
+            Conversation.listing_id == listing.id,
+            Conversation.buyer_id == buyer.id,
+            Conversation.seller_id == listing.seller_id,
+            Conversation.deal_id.is_(None),
+            Conversation.archived_at.is_(None),
+        ).with_for_update()
+    )
+    if not conversation:
+        conversation = Conversation(
+            listing_id=listing.id,
+            buyer_id=buyer.id,
+            seller_id=listing.seller_id,
+            conversation_type="deal",
         )
-        if not conversation:
-            conversation = Conversation(
-                listing_id=listing.id,
-                buyer_id=buyer.id,
-                seller_id=listing.seller_id,
-                conversation_type="deal",
-            )
-            session.add(conversation)
-            await session.flush()
-        seller = await session.get(User, listing.seller_id)
+        session.add(conversation)
+        await session.flush()
+    seller = await session.get(User, listing.seller_id)
     return conversation, seller, listing
 
 
@@ -1107,6 +1107,8 @@ async def get_or_create_deal_conversation(
         deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
         if not deal or actor.id not in {deal.buyer_id, deal.seller_id}:
             raise HTTPException(status_code=404, detail="Deal not found")
+        if deal.status not in ACTIVE_DEAL_STATUSES:
+            raise HTTPException(status_code=409, detail="Чат доступен только для активной оплаченной сделки")
         listing = await session.get(Listing, deal.listing_id)
         if not listing:
             raise HTTPException(status_code=409, detail="Listing for deal not found")
@@ -1199,9 +1201,18 @@ async def send_conversation_message(
     deal_id: uuid.UUID | None = None,
 ) -> tuple[ConversationMessage, User, bool]:
     async with session.begin():
-        conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id).with_for_update())
+        snapshot = await session.get(Conversation, conversation_id)
+        if not snapshot or sender.id not in {snapshot.buyer_id, snapshot.seller_id}:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        if snapshot.conversation_type == "deal":
+            if snapshot.deal_id:
+                await session.scalar(select(Deal).where(Deal.id == snapshot.deal_id).with_for_update())
+            else:
+                await session.scalar(select(Listing).where(Listing.id == snapshot.listing_id).with_for_update())
+        conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id).with_for_update().execution_options(populate_existing=True))
         if not conversation or sender.id not in {conversation.buyer_id, conversation.seller_id}:
             raise HTTPException(status_code=404, detail="Conversation not found")
+        await require_active_chat(session, conversation, sender)
         if conversation.archived_at is not None:
             raise HTTPException(status_code=409, detail="Эта ветка сделки уже закрыта")
         if conversation.conversation_type == "dialog" and deal_id is not None:
@@ -1269,75 +1280,97 @@ async def send_conversation_message(
     return message, recipient, True
 
 
-async def create_price_offer(session: AsyncSession, actor: User, conversation_id: uuid.UUID, amount: Decimal, parent_offer_id: uuid.UUID | None = None) -> tuple[PriceOffer, User]:
-    async with session.begin():
-        conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id).with_for_update())
-        if not conversation or actor.id not in {conversation.buyer_id, conversation.seller_id}:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        if conversation.conversation_type != "deal" or conversation.archived_at is not None:
-            raise HTTPException(status_code=409, detail="Предложение цены доступно только в ветке конкретного автомобиля")
-        if conversation.deal_id:
-            deal = await session.get(Deal, conversation.deal_id)
-            if deal and deal.status not in {"completed", "cancelled"}:
-                raise HTTPException(status_code=409, detail="Price cannot be negotiated after purchase")
-        normalized_amount = money(amount)
-        if actor.id == conversation.buyer_id:
-            wallet = await session.scalar(
-                select(Wallet).where(Wallet.user_id == actor.id).with_for_update()
+async def _create_price_offer_locked(session: AsyncSession, actor: User, conversation_id: uuid.UUID, amount: Decimal, parent_offer_id: uuid.UUID | None = None) -> tuple[PriceOffer, User]:
+    conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id).with_for_update().execution_options(populate_existing=True))
+    if not conversation or actor.id not in {conversation.buyer_id, conversation.seller_id}:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if conversation.conversation_type != "deal" or conversation.archived_at is not None:
+        raise HTTPException(status_code=409, detail="Предложение цены доступно только в ветке конкретного автомобиля")
+    if conversation.deal_id:
+        deal = await session.get(Deal, conversation.deal_id)
+        if deal and deal.status not in {"completed", "cancelled"}:
+            raise HTTPException(status_code=409, detail="Price cannot be negotiated after purchase")
+    normalized_amount = money(amount)
+    if actor.id == conversation.buyer_id:
+        wallet = await session.scalar(
+            select(Wallet).where(Wallet.user_id == actor.id).with_for_update()
+        )
+        available = money(wallet.available_balance if wallet else Decimal("0"))
+        if normalized_amount > available:
+            missing = money(normalized_amount - available)
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "code": "insufficient_af_coins",
+                    "message": "Недостаточно AF Coins",
+                    "available_af_coins": str(available),
+                    "required_af_coins": str(normalized_amount),
+                    "missing_af_coins": str(missing),
+                },
             )
-            available = money(wallet.available_balance if wallet else Decimal("0"))
-            if normalized_amount > available:
-                missing = money(normalized_amount - available)
-                raise HTTPException(
-                    status_code=402,
-                    detail={
-                        "code": "insufficient_af_coins",
-                        "message": "Недостаточно AF Coins",
-                        "available_af_coins": str(available),
-                        "required_af_coins": str(normalized_amount),
-                        "missing_af_coins": str(missing),
-                    },
-                )
-        if parent_offer_id:
-            parent = await session.scalar(select(PriceOffer).where(PriceOffer.id == parent_offer_id).with_for_update())
-            if not parent or parent.conversation_id != conversation.id or parent.status != "pending" or parent.offered_by_id == actor.id:
-                raise HTTPException(status_code=409, detail="Counter-offer is not allowed")
-            parent.status = "countered"
-            parent.responded_at = datetime.now(UTC)
-        offer = PriceOffer(
+    if parent_offer_id:
+        parent = await session.scalar(select(PriceOffer).where(PriceOffer.id == parent_offer_id).with_for_update())
+        if not parent or parent.conversation_id != conversation.id or parent.status != "pending" or parent.offered_by_id == actor.id:
+            raise HTTPException(status_code=409, detail="Counter-offer is not allowed")
+        parent.status = "countered"
+        parent.responded_at = datetime.now(UTC)
+    offer = PriceOffer(
+        conversation_id=conversation.id,
+        listing_id=conversation.listing_id,
+        offered_by_id=actor.id,
+        amount_af_coins=normalized_amount,
+        status="pending",
+        parent_offer_id=parent_offer_id,
+    )
+    session.add(offer)
+    await session.flush()
+    conversation.last_message_at = datetime.now(UTC)
+    session.add(
+        ConversationMessage(
             conversation_id=conversation.id,
-            listing_id=conversation.listing_id,
-            offered_by_id=actor.id,
-            amount_af_coins=normalized_amount,
-            status="pending",
-            parent_offer_id=parent_offer_id,
+            price_offer_id=offer.id,
+            sender_id=actor.id,
+            body=f"Предложена цена {offer.amount_af_coins} AF Coins",
+            message_type="offer",
         )
-        session.add(offer)
-        await session.flush()
-        conversation.last_message_at = datetime.now(UTC)
-        session.add(
-            ConversationMessage(
-                conversation_id=conversation.id,
-                price_offer_id=offer.id,
-                sender_id=actor.id,
-                body=f"Предложена цена {offer.amount_af_coins} AF Coins",
-                message_type="offer",
-            )
-        )
-        recipient_id = conversation.seller_id if actor.id == conversation.buyer_id else conversation.buyer_id
-        await create_notification(session, recipient_id, "price_offer", "Новое предложение цены", f"Предложено {offer.amount_af_coins} AF Coins", {"conversation_id": str(conversation.id), "listing_id": str(offer.listing_id), "offer_id": str(offer.id)})
-        recipient = await session.get(User, recipient_id)
+    )
+    recipient_id = conversation.seller_id if actor.id == conversation.buyer_id else conversation.buyer_id
+    await create_notification(session, recipient_id, "price_offer", "Новое предложение цены", f"Предложено {offer.amount_af_coins} AF Coins", {"conversation_id": str(conversation.id), "listing_id": str(offer.listing_id), "offer_id": str(offer.id)})
+    recipient = await session.get(User, recipient_id)
     return offer, recipient
+
+
+async def create_listing_price_offer(session: AsyncSession, actor: User, listing_id: uuid.UUID, amount: Decimal):
+    # A rejected request rolls back the thread, offer, message and notification together.
+    async with session.begin():
+        conversation, _, _ = await _get_or_create_negotiation_conversation_locked(session, actor, listing_id)
+        return await _create_price_offer_locked(session, actor, conversation.id, amount)
+
+
+async def create_price_offer(session: AsyncSession, actor: User, conversation_id: uuid.UUID, amount: Decimal, parent_offer_id: uuid.UUID | None = None):
+    async with session.begin():
+        conversation = await require_active_chat_by_id(session, conversation_id, actor)
+        await session.scalar(select(Listing).where(Listing.id == conversation.listing_id).with_for_update())
+        await require_active_chat(session, conversation, actor)
+        return await _create_price_offer_locked(session, actor, conversation_id, amount, parent_offer_id)
 
 
 async def respond_price_offer(session: AsyncSession, actor: User, offer_id: uuid.UUID, accept: bool) -> tuple[PriceOffer, User]:
     async with session.begin():
-        offer = await session.scalar(select(PriceOffer).where(PriceOffer.id == offer_id).with_for_update())
+        snapshot = await session.get(PriceOffer, offer_id)
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="Pending offer not found")
+        await session.scalar(select(Listing).where(Listing.id == snapshot.listing_id).with_for_update())
+        await session.scalar(select(Conversation).where(Conversation.id == snapshot.conversation_id).with_for_update())
+        offer = await session.scalar(select(PriceOffer).where(PriceOffer.id == offer_id).with_for_update().execution_options(populate_existing=True))
         if not offer or offer.status != "pending":
             raise HTTPException(status_code=404, detail="Pending offer not found")
         conversation = await session.scalar(select(Conversation).where(Conversation.id == offer.conversation_id).with_for_update())
         if not conversation or actor.id not in {conversation.buyer_id, conversation.seller_id} or actor.id == offer.offered_by_id:
             raise HTTPException(status_code=403, detail="Only the other participant can respond")
+        await require_active_chat(session, conversation, actor)
+        if conversation.deal_id:
+            raise HTTPException(status_code=409, detail="Покупка уже совершена")
         offer.status = "accepted" if accept else "rejected"
         offer.responded_at = datetime.now(UTC)
         if accept:
@@ -1357,15 +1390,13 @@ async def respond_price_offer(session: AsyncSession, actor: User, offer_id: uuid
                 .values(status="countered", responded_at=datetime.now(UTC))
             )
         else:
-            remaining = await session.scalar(
-                select(func.count(PriceOffer.id)).where(
-                    PriceOffer.conversation_id == conversation.id,
-                    PriceOffer.id != offer.id,
-                    PriceOffer.status.in_(["pending", "accepted"]),
-                )
-            )
-            if not remaining:
-                conversation.archived_at = datetime.now(UTC)
+            conversation.archived_at = datetime.now(UTC)
+            conversation.accepted_price_af_coins = None
+            await session.execute(update(PriceOffer).where(
+                PriceOffer.conversation_id == conversation.id,
+                PriceOffer.id != offer.id,
+                PriceOffer.status.in_(["pending", "accepted"]),
+            ).values(status="cancelled", responded_at=datetime.now(UTC)))
         conversation.last_message_at = datetime.now(UTC)
         session.add(
             ConversationMessage(
