@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-c2716f60b755" />
-    <link rel="stylesheet" href="css/style.css?v=af-c2716f60b755" />
+    <meta name="autoflow-build" content="af-bea96c77f5a6" />
+    <link rel="stylesheet" href="css/style.css?v=af-bea96c77f5a6" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-c2716f60b755" defer></script>
-    <script src="js/app.js?v=af-c2716f60b755" defer></script>
+    <script src="js/api.js?v=af-bea96c77f5a6" defer></script>
+    <script src="js/app.js?v=af-bea96c77f5a6" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -93,6 +93,7 @@
         <section class="view" data-view="training" aria-labelledby="trainingTitle" hidden>
           <div class="compact-page-title admin-title-row"><div><span class="eyebrow">Премиальные материалы</span><h1 id="trainingTitle">Обучение</h1></div><button class="admin-add-button" type="button" data-open-training data-admin-only hidden>＋ Создать</button></div>
           <div class="training-list" id="trainingCards"></div>
+          <section class="training-library" aria-labelledby="myTrainingTitle"><h2 id="myTrainingTitle">Мои покупки</h2><h3>Персональные</h3><div class="training-library__list" id="personalTrainingPurchases"></div><div class="history-empty" id="personalTrainingEmpty">Персональных обучений пока нет</div><h3>Купленные курсы</h3><div class="training-library__list" id="automaticTrainingPurchases"></div><div class="history-empty" id="automaticTrainingEmpty">Купленных курсов пока нет</div></section>
           <div class="empty-state empty-state--tall" id="trainingEmptyState"><img class="training-identity" src="images/gg-training-icon.jpg" alt="" aria-hidden="true" /><h2>Обучений пока нет</h2><p>Новые программы появятся здесь</p></div>
         </section>
 
@@ -103,22 +104,38 @@
           <div class="profile-summary">
             <div class="profile-photo"><span id="profileAvatarFallback">A</span><img id="profileAvatarImage" alt="Фотография профиля" hidden /></div>
             <div class="profile-identity"><strong id="profileName">Telegram User</strong><span id="profileUsername">—</span><small id="profileTelegramId">ID: —</small></div>
-            <div class="profile-wallet"><small>Баланс</small><div><span data-balance>0.00</span> <span class="af-coin" aria-label="AF Coins"></span></div><button type="button" data-open-topup>Пополнить</button></div>
+            <div class="profile-wallet"><small>AF Coins</small><div><span data-balance>0.00</span> <span class="af-coin" aria-label="AF Coins"></span></div></div>
           </div>
           <div class="wallet-breakdown"><button class="wallet-breakdown__button" type="button" data-open-frozen><span>Замороженные деньги</span><strong><span id="frozenBalance">0.00</span> <i class="af-coin af-coin--small"></i></strong><small>Показать сделки ›</small></button></div>
-          <div class="profile-actions"><button type="button" data-open-topup>Пополнить баланс</button><button type="button" data-open-withdraw>Вывести средства</button></div>
-          <div class="profile-tabs" role="tablist"><button class="is-active" type="button" data-profile-tab="listings">Мои объявления</button><button type="button" data-profile-tab="training">Мои обучения</button><button type="button" data-profile-tab="deals">Сделки</button><button type="button" data-profile-tab="chats">Диалоги</button><button type="button" data-profile-tab="history">История</button></div>
-          <div class="profile-links"><button type="button" data-open-support><strong>🛟 Поддержка</strong><b>›</b></button><button type="button" data-open-admin data-admin-only hidden><strong>Админ-панель</strong><b>›</b></button></div>
+          <div class="profile-actions"><button type="button" data-open-topup>Пополнить</button><button class="is-active" type="button" data-profile-tab="listings">Мои объявления</button><button type="button" data-profile-tab="history">История</button></div>
+          <div class="profile-links profile-menu"><button type="button" data-profile-tab="deals">Сделки <b>›</b></button><button type="button" data-profile-tab="chats">Диалоги <b>›</b></button><button type="button" data-nav-target="settings">Настройки <b>›</b></button><button type="button" data-open-support>Поддержка <b>›</b></button></div>
+          <section class="profile-admin" data-admin-only hidden><h2>Администратор</h2><button type="button" data-open-admin>Управление сервисом ›</button></section>
           <div class="profile-panel" data-profile-panel="listings"><button class="profile-row" type="button" data-profile-section="active"><span>▣</span><strong>Активные объявления</strong><b id="activeCount">0</b></button><div class="profile-listings" id="profileActiveCars"></div><button class="profile-row" type="button" data-profile-section="sold"><span>▤</span><strong>Проданные товары</strong><b id="soldCount">0</b></button><div class="profile-listings" id="profileSoldCars" hidden></div></div>
           <div class="profile-panel" data-profile-panel="history" hidden><div class="history-list" id="operationHistory"></div><div class="history-empty" id="historyEmpty">История операций пока пуста</div><h2 class="profile-subtitle">Заявки на вывод</h2><div class="history-list" id="withdrawalHistory"></div></div>
           <div class="profile-panel" data-profile-panel="deals" hidden><div class="deal-list" id="activeDeals"></div><div class="history-empty" id="dealsEmpty">Сделок пока нет</div></div>
           <div class="profile-panel" data-profile-panel="chats" hidden><div class="deal-list" id="conversationList"></div><div class="history-empty" id="conversationsEmpty">Диалогов пока нет</div></div>
-          <div class="profile-panel training-library" data-profile-panel="training" hidden><h2>Персональные</h2><div class="training-library__list" id="personalTrainingPurchases"></div><div class="history-empty" id="personalTrainingEmpty">Персональных обучений пока нет</div><h2>Купленные курсы</h2><div class="training-library__list" id="automaticTrainingPurchases"></div><div class="history-empty" id="automaticTrainingEmpty">Купленных курсов пока нет</div></div>
         </section>
 
         <section class="view" data-view="more" aria-labelledby="moreTitle" hidden>
           <div class="screen-heading"><h1 id="moreTitle">AutoFlow Market</h1></div>
-          <div class="more-updating"><strong>Раздел обновляется</strong><p>Скоро здесь появятся новые возможности.</p></div><output class="frontend-build-info" id="frontendBuildInfo" hidden aria-hidden="true"></output>
+          <div class="profile-links"><button type="button" data-open-info>Центр помощи <b>›</b></button><button type="button" data-open-support>Поддержка <b>›</b></button><button type="button" data-nav-target="settings">Настройки <b>›</b></button></div><output class="frontend-build-info" id="frontendBuildInfo" hidden aria-hidden="true"></output>
+        </section>
+
+        <section class="view" data-view="settings" hidden>
+          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1>Настройки</h1></div>
+          <p>Имя и фотография синхронизируются с Telegram. Тема приложения следует настройкам Telegram.</p>
+          <div class="profile-links"><button type="button" data-refresh-account>Обновить данные профиля</button><button type="button" data-open-withdraw>Вывести заработанные средства</button><button type="button" data-open-support>Поддержка</button></div>
+        </section>
+
+        <section class="view help-center" data-view="help" aria-labelledby="helpTitle" hidden>
+          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="helpTitle">Центр помощи</h1></div>
+          <h2>Популярные вопросы</h2><nav class="help-shortcuts" aria-label="Популярные вопросы"><a href="#help-sell" data-help-anchor="help-sell">Продать машину</a><a href="#help-buy" data-help-anchor="help-buy">Купить машину</a><a href="#help-topup" data-help-anchor="help-topup">Пополнение</a><a href="#help-deal" data-help-anchor="help-deal">Сделка</a><a href="#help-support" data-help-anchor="help-support">Поддержка</a></nav>
+          <div id="helpArticles"></div>
+        </section>
+
+        <section class="view" data-view="training-purchase" aria-labelledby="trainingPurchaseTitle" hidden>
+          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="trainingPurchaseTitle">Купленное обучение</h1></div>
+          <div id="trainingPurchaseContent" class="training-detail__body"></div>
         </section>
 
         <section class="view form-view" data-view="add" aria-labelledby="addTitle" hidden>
@@ -167,12 +184,9 @@
   </div>
 
   <form class="topup-form" id="topupForm">
-    <div class="currency-hero">
-      <span class="af-coin af-coin--hero"></span>
-      <small>1 ⭐ = 1 AF Coin</small>
-    </div>
+    <p class="topup-rate">1 Telegram Star = 1 AF Coin. Выберите пакет или свою сумму.</p>
 
-    <div class="amount-field">
+    <label class="amount-field"><span>Своя сумма, Stars</span>
       <input
         id="topupAmount"
         name="amount"
@@ -183,20 +197,23 @@
         required
         inputmode="numeric"
       />
-    </div>
+    </label>
 
-    <div class="amount-chips">
-      <button type="button" data-topup-amount="10">10</button>
-      <button type="button" data-topup-amount="200">200</button>
-      <button type="button" data-topup-amount="500">500</button>
-      <button type="button" data-topup-amount="1000">1000</button>
+    <div class="amount-chips topup-packages" aria-label="Пакеты пополнения">
+      <button type="button" data-topup-amount="10"><strong>10 ⭐</strong><small>10 AF Coins</small></button>
+      <button type="button" data-topup-amount="15"><strong>15 ⭐</strong><small>15 AF Coins</small></button>
+      <button type="button" data-topup-amount="25"><strong>25 ⭐</strong><small>25 AF Coins</small></button>
+      <button type="button" data-topup-amount="50"><strong>50 ⭐</strong><small>50 AF Coins</small></button>
+      <button type="button" data-topup-amount="75"><strong>75 ⭐</strong><small>75 AF Coins</small></button>
+      <button type="button" data-topup-amount="90"><strong>90 ⭐</strong><small>90 AF Coins</small></button>
+      <button type="button" data-topup-amount="100"><strong>100 ⭐</strong><small>100 AF Coins</small></button>
     </div>
 
     <button class="pay-button" type="submit">
       Оплатить через Telegram Stars
     </button>
 
-    <div class="payment-result" id="paymentResult"></div>
+    <div class="payment-result" id="paymentResult" role="status" aria-live="polite"></div>
   </form>
 </section>
 
@@ -259,7 +276,6 @@
       <nav class="bottom-nav" id="bottomNav" aria-label="Основная навигация"><button class="nav-item" type="button" data-nav-target="unique"><span class="nav-icon-wrap"><span class="nav-icon">◇</span><span class="content-badge" id="uniqueContentBadge" hidden></span></span><span>Уникальные</span></button><button class="nav-item" type="button" data-nav-target="training"><span class="nav-icon-wrap"><img class="gg-nav-icon" src="images/gg-training-icon.jpg" alt="" aria-hidden="true" /><span class="content-badge" id="trainingContentBadge" hidden></span></span><span>Обучение</span></button><button class="nav-market is-active" type="button" data-nav-target="market" aria-current="page"><span>★</span><small>Market</small></button><button class="nav-item" type="button" data-nav-target="profile"><span class="nav-icon">♟</span><span>Профиль</span></button><button class="nav-item" type="button" data-nav-target="more"><span class="nav-icon nav-grid">▪▪<br />▪▪</span><span>Ещё</span></button></nav>
     </div>
 
-    <dialog class="modal" id="infoModal"><div class="modal-head"><div><span class="eyebrow">О приложении</span><h2>AUTOFLOW MARKET</h2></div><button type="button" data-close-dialog="infoModal" aria-label="Закрыть">×</button></div><p>AUTOFLOW MARKET — удобная площадка внутри Telegram для размещения и поиска автомобильных предложений. Вы оплачиваете, но продавец не получит деньги, пока вы не подтвердите, что всё получили. Все объявления, операции и статусы сделки сохраняются в истории.</p><p>AF Coins, купленные через Telegram Stars, можно тратить внутри сервиса, но нельзя выводить. Для вывода доступны только AF Coins, заработанные после продаж. При завершённой сделке продавец получает 70% цены, комиссия платформы составляет 30%.</p><p class="security-note">Никому не передавайте пароль, коды подтверждения или доступ к Telegram. Перед подтверждением сделки убедитесь, что получили именно заявленный товар.</p><button class="publish-button" type="button" data-close-dialog="infoModal">Понятно</button></dialog>
     <dialog class="modal purchase-modal" id="purchaseModal"><div class="modal-head"><div><span class="eyebrow">Покупка автомобиля</span><h2 id="purchaseModalTitle">Покупка автомобиля</h2></div><button type="button" data-close-purchase aria-label="Закрыть">×</button></div><p id="purchaseModalText">Цена автомобиля</p><div class="purchase-modal__amount" id="purchaseModalAmount"></div><p class="security-note" id="purchaseModalNote">Деньги будут под защитой до получения автомобиля. Продавец получит их только после вашего подтверждения.</p><button class="publish-button" id="purchaseModalAction" type="button">Подтвердить покупку</button><button class="ghost-button" type="button" data-close-purchase>Отмена</button></dialog>
     <dialog class="modal promotion-choice-modal" id="promotionChoiceModal"><div class="modal-head"><div><span class="eyebrow">Продвижение</span><h2>Закрепить объявление?</h2></div></div><p>Ваше объявление будет показываться выше остальных в течение 24 часов.</p><div class="purchase-modal__amount">5 <span class="af-coin af-coin--small" aria-label="AF Coins"></span></div><button class="publish-button" id="promotionChoicePaid" type="button">Закрепить за 5 AF</button><button class="ghost-button" id="promotionChoiceFree" type="button">Опубликовать бесплатно</button></dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

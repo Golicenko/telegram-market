@@ -7,22 +7,25 @@ const root = path.resolve(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const script = fs.readFileSync(path.join(root, "js", "app.js"), "utf8");
 
-test("More is an update screen while support and admin remain available from Profile", () => {
+test("More exposes help and support; Profile retains a separate admin block", () => {
   const more = html.match(/<section class="view" data-view="more"[\s\S]*?<\/section>/)?.[0] || "";
   const profile = html.match(/<section class="view profile-view"[\s\S]*?<\/section>/)?.[0] || "";
   assert.match(more, /AutoFlow Market/);
-  assert.match(more, /Раздел обновляется/);
-  assert.doesNotMatch(more, /data-open-topup|data-open-support|data-open-admin/);
+  assert.doesNotMatch(more, /Раздел обновляется/);
+  assert.match(more, /data-open-info/);
+  assert.match(more, /data-open-support/);
   assert.match(profile, /data-open-support/);
-  assert.match(profile, /data-open-admin data-admin-only hidden/);
+  assert.match(profile, /class="profile-admin" data-admin-only hidden/);
+  assert.match(profile, /data-open-admin/);
 });
 
 test("Profile uses user-facing wallet and navigation labels", () => {
   assert.match(html, /Замороженные деньги/);
   assert.doesNotMatch(html, /<span>Под защитой<\/span>/);
-  for (const label of ["Мои объявления", "Мои обучения", "Сделки", "Диалоги", "История", "Поддержка"]) {
+  for (const label of ["Мои объявления", "Сделки", "Диалоги", "История", "Поддержка"]) {
     assert.match(html, new RegExp(label));
   }
+  assert.doesNotMatch(html, /data-profile-tab="training"/);
 });
 
 test("wallet history hides ledger internals and presents understandable events", () => {

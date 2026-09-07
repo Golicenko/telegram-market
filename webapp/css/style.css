@@ -554,3 +554,41 @@ body.chat-open .app-shell{width:100vw;max-width:none;margin:0;padding:0;border:0
 .chat-header .back-button{position:static;width:44px;height:44px;min-width:44px;min-height:44px}
 .chat-view{padding-top:var(--safe-top);padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));padding-right:max(10px,env(safe-area-inset-right),var(--app-safe-right,0px))}
 main{padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));padding-right:max(10px,env(safe-area-inset-right),var(--app-safe-right,0px))}
+/* Compact secondary pages; retain the shared safe-area/back/keyboard layout. */
+.help-center,.profile-view,[data-view="settings"],[data-view="training-purchase"]{overflow-wrap:anywhere}
+.help-center h1,.profile-view h1,[data-view="settings"] h1{font-size:22px}
+.help-center h2,.profile-admin h2,.training-library h2{font-size:17px;margin:12px 0 8px}
+.help-shortcuts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.help-shortcuts a,.help-article button,[data-view="settings"] button,[data-view="training-purchase"] button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text);text-decoration:none;font:inherit}
+.help-article{scroll-margin-top:calc(12px + var(--safe-top));border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px;background:var(--panel)}
+.help-article ol{padding-left:22px;line-height:1.55;font-size:14px}.help-article li+li{margin-top:7px}
+.help-warning{padding:10px;border-left:3px solid var(--orange);border-radius:6px;background:rgba(255,160,20,.07);font-size:13px;line-height:1.5}
+.help-article img{display:block;width:100%;height:auto;border-radius:10px}
+.profile-view .profile-summary{gap:8px;padding:10px 0;grid-template-columns:52px minmax(0,1fr) auto}
+.profile-view .profile-photo{width:52px;height:52px}.profile-view .profile-identity strong{font-size:16px}.profile-view .profile-identity span{font-size:12px}.profile-view .profile-wallet>small{font-size:11px}
+.profile-view .profile-identity{min-width:0}.profile-view .profile-identity strong,.profile-view .profile-identity span{white-space:normal;overflow-wrap:anywhere}
+.profile-view .profile-actions{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.profile-view .profile-actions button{min-height:44px;font-size:12px;padding:6px}
+.profile-menu{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.profile-menu button{min-height:44px;padding:8px;font-size:13px;position:relative}
+.profile-menu .conversation-unread{background:#f03140;color:#fff;border-radius:999px;min-width:18px;padding:2px 5px;font-size:11px}
+.profile-admin{padding:10px;border:1px solid rgba(255,170,40,.3);border-radius:12px;margin:10px 0}
+.profile-admin button{min-height:44px;width:100%;background:var(--panel);color:var(--orange);border:0;border-radius:8px}
+.topup-form .topup-rate{margin:0 0 10px;font-size:13px;line-height:1.5;color:var(--muted)}
+.topup-form .amount-field{display:grid;grid-template-columns:minmax(0,1fr) 90px;align-items:center;height:auto;padding:8px 10px;margin:8px 0;font-size:13px}
+.topup-form .amount-field input{width:100%;min-width:0;min-height:44px;font-size:18px}
+.topup-form .topup-packages{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:10px 0}
+.topup-packages button{display:grid;gap:4px;place-content:center;min-height:62px;padding:8px 4px;border:1px solid var(--line);border-radius:11px;color:var(--text);background:var(--panel)}
+.topup-packages strong{font-size:16px}.topup-packages small{font-size:11px;color:var(--muted)}
+.topup-packages button.is-selected{border-color:var(--orange);background:rgba(255,159,20,.12);box-shadow:inset 0 0 0 1px var(--orange)}
+.topup-form .pay-button{min-height:48px;padding:10px;font-size:14px}
+.payment-result.is-success{display:grid;gap:8px;padding:12px;border:1px solid #3e9960;border-radius:12px}.payment-result button{min-height:44px}
+.training-library h3{font-size:14px;margin:14px 0 8px}.training-library-card strong{white-space:normal;overflow-wrap:anywhere}.training-library-card>button{min-height:44px;font-size:12px}
+.training-library-card>.training-library-card__open{display:grid;grid-template-columns:60px minmax(0,1fr);gap:9px;text-align:left;padding:6px;border:0;background:transparent}.training-library-card__open img{width:60px;height:60px;object-fit:cover;border-radius:8px}.training-library-card__open>div{display:grid;gap:5px;min-width:0}.training-library-card__open strong{font-size:14px}.training-library-card__open span,.training-library-card__open small{font-size:12px}
+[data-view="training-purchase"] .training-detail__body{display:grid;gap:10px;padding:10px 0}
+[data-view="training-purchase"] p{margin:0;line-height:1.5;font-size:14px;white-space:pre-line}
+[data-view="training-purchase"] h2{margin:0;font-size:20px}
+[data-view="training-purchase"] .training-detail__cover{max-height:210px;object-fit:contain}
+[data-view="training-purchase"] .publish-button{min-height:44px;text-align:center;text-decoration:none}
+[data-view="training-purchase"] small{overflow-wrap:anywhere;color:var(--muted)}
+@media(prefers-reduced-motion:reduce){.help-center *{scroll-behavior:auto}}

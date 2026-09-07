@@ -25,7 +25,8 @@ test("training has list, details and an admin-only editor", () => {
 });
 
 test("training purchase uses AF Coins and library uses authenticated backend workflows", () => {
-  assert.match(html, /data-profile-tab="training"/);
+  assert.doesNotMatch(html, /data-profile-tab="training"/);
+  assert.match(html, /id="myTrainingTitle"/);
   assert.match(html, /id="adminTrainingProducts"/);
   assert.match(html, /id="trainingMaterialForm"/);
   assert.match(app, /\/training\/\$\{flow\.product\.id\}\/purchase/);

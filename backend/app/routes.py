@@ -2,6 +2,7 @@ import asyncio
 import hmac
 import json
 import logging
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -1601,6 +1602,49 @@ async def get_training_product(product_id: uuid.UUID, user: User = Depends(get_c
     if not product:
         raise HTTPException(status_code=404, detail="Обучение не найдено")
     return product
+
+
+@router.get("/training/purchases/{purchase_id}/access")
+async def training_purchase_access(
+    purchase_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Buyer library survives unpublishing; never expose delivery references."""
+    purchase = await session.scalar(select(TrainingPurchase).where(
+        TrainingPurchase.id == purchase_id, TrainingPurchase.buyer_id == user.id,
+    ))
+    if not purchase:
+        raise HTTPException(status_code=404, detail="Покупка не найдена")
+    product = await session.get(TrainingProduct, purchase.product_id)
+    seller = await session.get(User, purchase.seller_id)
+    username = str(seller.username or "").lstrip("@") if seller else ""
+    contact_url = f"https://t.me/{username}" if re.fullmatch(r"[A-Za-z0-9_]{5,32}", username) else None
+    allowed = purchase.payment_status == "paid" and purchase.status in {"awaiting_start", "in_progress", "completed"}
+    return {
+        "purchase": await training_purchase_out(session, purchase),
+        "description": product.full_description if product else "",
+        "access_allowed": allowed,
+        "contact_url": contact_url if allowed and purchase.product_type == "personal" else None,
+    }
+
+
+@router.get("/training/purchases/{purchase_id}/materials/open")
+async def open_purchased_training_materials(
+    purchase_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    purchase = await session.scalar(select(TrainingPurchase).where(
+        TrainingPurchase.id == purchase_id, TrainingPurchase.buyer_id == user.id,
+        TrainingPurchase.product_type == "automatic", TrainingPurchase.status == "completed",
+        TrainingPurchase.payment_status == "paid",
+    ))
+    if not purchase:
+        raise HTTPException(status_code=404, detail="Материалы недоступны")
+    # Existing delivery sends files into the buyer's private bot chat.
+    # Opening it must not trigger another delivery or expose Telegram file_id.
+    return {"url": await bot_private_chat_link()}
 
 
 @router.post("/training/{product_id}/view", response_model=TrainingViewOut)

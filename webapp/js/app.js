@@ -110,7 +110,6 @@
     photoPreview: document.getElementById("photoPreview"),
     brandInput: document.getElementById("brandInput"),
     priceInput: document.getElementById("priceInput"),
-    infoModal: document.getElementById("infoModal"),
     toast: document.getElementById("toast"),
     paymentResult: document.getElementById("paymentResult"),
     adminBalanceLookupMessage: document.getElementById("adminBalanceLookupMessage"),
@@ -280,7 +279,10 @@
     trainingForm?.elements.price_af_coins?.setAttribute("min", "0.01");
     document.getElementById("trainingMaterialForm")?.elements.title?.removeAttribute("maxlength");
     document.addEventListener("click", handleClick);
-    bind(document.getElementById("infoButton"), "click", () => openDialog(elements.infoModal), "infoButton");
+    bind(document.getElementById("infoButton"), "click", () => openSecondary("help"), "infoButton");
+    renderHelpCenter();
+    bind(document.getElementById("topupAmount"), "input", renderTopupSelection, "topupSelection");
+    renderTopupSelection();
     bind(elements.extraFiltersButton, "click", toggleExtraFilters, "extraFiltersButton");
     bind(document.getElementById("resetFiltersButton"), "click", resetFilters, "resetFiltersButton");
     bind(document.getElementById("applyFiltersButton"), "click", renderListings, "applyFiltersButton");
@@ -431,10 +433,22 @@
     training: async () => { state.training = safeArray(await api.request(state.me?.user.role === "admin" ? "/admin/training" : "/training")); },
     contentUnseen: async () => { state.contentUnseen = await api.request("/content/unseen"); },
     trainingPurchases: async () => { state.trainingPurchases = safeArray(await api.request("/training/mine")); },
-    profile: async () => { state.profile = await api.request("/profile"); },
+    profile: async () => {
+      state.profile = await api.request("/profile");
+      if (state.me && state.profile?.wallet) state.me.wallet = state.profile.wallet;
+    },
     advertisement: async () => { state.advertisement = await api.request("/advertisement", { timeoutMs: 8000 }); },
     notifications: async () => { state.notifications = safeArray(await api.request("/notifications")); },
   };
+
+  let optionalRenderFrame = null;
+  function scheduleOptionalRender() {
+    if (optionalRenderFrame !== null) return;
+    optionalRenderFrame = window.requestAnimationFrame(() => {
+      optionalRenderFrame = null;
+      updateFilterOptions(); renderAll();
+    });
+  }
 
   async function loadOptionalData(keys = Object.keys(optionalLoaders), options = {}) {
     if (!state.serverAvailable) return [];
@@ -443,8 +457,7 @@
         await optionalLoaders[key]();
         state.failedOptional.delete(key);
         if (key === "regular") reportStartupStage("market_loaded");
-        updateFilterOptions();
-        renderAll();
+        scheduleOptionalRender();
       } catch (error) {
         state.failedOptional.add(key);
         reportClientError(`optional_${key}`, error);
@@ -491,6 +504,21 @@
 
 function handleClick(event) {
   const target = event.target;
+  const helpAnchor = target.closest("[data-help-anchor]");
+  if (helpAnchor) {
+    event.preventDefault();
+    document.getElementById(helpAnchor.dataset.helpAnchor)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
+    return;
+  }
+  if (target.closest("[data-refresh-account]")) return void refreshAccount(target.closest("button"));
+  const ownedTraining = target.closest("[data-open-training-purchase]");
+  if (ownedTraining) return void openTrainingPurchase(ownedTraining.dataset.openTrainingPurchase);
+  const materialsOpen = target.closest("[data-open-training-materials]");
+  if (materialsOpen) return void openPurchasedMaterials(materialsOpen);
+  if (target.closest("[data-payment-done]")) return void goBack();
+  if (target.closest("[data-payment-history]")) {
+    void navigate("profile"); switchProfileTab("history"); return;
+  }
 
   const navButton = target.closest("[data-nav-target]");
   if (navButton) {
@@ -533,7 +561,7 @@ function handleClick(event) {
   }
 
   if (target.closest("[data-open-info]")) {
-    return void openDialog(elements.infoModal);
+    return void openSecondary("help");
   }
 
   if (target.closest("[data-close-purchase]")) {
@@ -563,6 +591,7 @@ function handleClick(event) {
     }
 
     input.value = String(amount);
+    renderTopupSelection();
     return;
   }
 
@@ -743,18 +772,18 @@ function handleClick(event) {
       view.hidden = !active;
       view.classList.toggle("is-active", active);
     });
-    const navView = ["add", "deal-chat", "listing-detail"].includes(viewName) ? "market" : viewName === "training-detail" || viewName === "training-editor" ? "training" : ["topup", "withdraw", "admin", "support"].includes(viewName) ? "profile" : viewName;
+    const navView = ["add", "deal-chat", "listing-detail"].includes(viewName) ? "market" : ["training-detail", "training-editor", "training-purchase"].includes(viewName) ? "training" : ["topup", "withdraw", "admin", "support", "settings"].includes(viewName) ? "profile" : viewName === "help" ? "more" : viewName;
     elements.navButtons.forEach((button) => {
       const active = button.dataset.navTarget === navView;
       button.classList.toggle("is-active", active);
       active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
     });
-    elements.shell.classList.toggle("is-focused", ["add", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin"].includes(viewName));
+    elements.shell.classList.toggle("is-focused", ["add", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin", "training-purchase", "help", "settings"].includes(viewName));
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (state.serverAvailable && ["market", "unique", "training", "profile"].includes(viewName)) {
       try {
         if (["unique", "training"].includes(viewName)) await openContentSection(viewName);
-        else await refreshMarketplace();
+        else await loadOptionalData(viewName === "profile" ? ["profile"] : ["regular"], { allowRecovery: false });
       } catch (error) { notify(error.message); }
     }
   }
@@ -763,7 +792,7 @@ function handleClick(event) {
     const snapshot = await api.request("/content/unseen");
     state.contentUnseen = snapshot;
     renderContentBadges();
-    await refreshMarketplace();
+    await loadOptionalData(section === "training" ? ["training", "trainingPurchases"] : ["unique"], { allowRecovery: false });
     if (state.failedOptional.has(section)) {
       throw new Error(section === "training" ? "Не удалось загрузить обучение" : "Не удалось загрузить уникальные машины");
     }
@@ -1289,7 +1318,7 @@ function handleClick(event) {
     elements.trainingCards.replaceChildren(...state.training.map((product) => {
       const card = document.createElement("article"); card.className = `training-card${product.pinned ? " is-pinned" : ""}${!product.published ? " is-draft" : ""}`;
       const open = document.createElement("button"); open.type = "button"; open.className = "training-card__open"; open.dataset.openTrainingProduct = product.id;
-      const media = document.createElement("div"); media.className = "training-card__media"; const image = document.createElement("img"); image.src = absoluteMediaUrl(product.cover_url); image.alt = product.title; media.append(image);
+      const media = document.createElement("div"); media.className = "training-card__media"; const image = document.createElement("img"); image.src = absoluteMediaUrl(product.cover_url); image.alt = product.title; image.loading = "lazy"; image.decoding = "async"; media.append(image);
       const badge = document.createElement("span"); badge.className = "premium-mark"; badge.textContent = product.pinned ? "PREMIUM · PINNED" : "PREMIUM";
       const body = document.createElement("div"); body.className = "training-card__body";
       const type = document.createElement("span"); type.className = "training-type"; type.textContent = trainingTypeLabel(product.product_type);
@@ -1300,14 +1329,16 @@ function handleClick(event) {
       const purchase = state.trainingPurchases.find((item) => String(item.product_id) === String(product.id));
       if (state.me?.user.id !== product.admin_id) {
         const buy = document.createElement("button"); buy.type = "button"; buy.className = "training-card__buy"; buy.dataset.buyTraining = product.id;
-        buy.disabled = Boolean(purchase) || product.availability !== "available";
-        buy.textContent = purchase ? "Уже куплено" : product.availability === "available" ? "Купить" : trainingAvailabilityLabel(product.availability);
+        buy.disabled = !purchase && product.availability !== "available";
+        buy.textContent = purchase ? "Куплено ✓" : product.availability === "available" ? "Купить" : trainingAvailabilityLabel(product.availability);
+        if (purchase) { delete buy.dataset.buyTraining; buy.dataset.openTrainingPurchase = purchase.id; open.dataset.openTrainingPurchase = purchase.id; delete open.dataset.openTrainingProduct; }
         card.append(buy);
       }
       if (state.me?.user.role === "admin") { const actions = document.createElement("div"); actions.className = "training-admin-actions"; const edit = document.createElement("button"); edit.dataset.editTraining = product.id; edit.textContent = "Изменить"; const remove = document.createElement("button"); remove.dataset.deleteTraining = product.id; remove.textContent = "Удалить"; actions.append(edit, remove); card.append(actions); }
       return card;
     }));
-    elements.trainingEmpty.hidden = state.training.length > 0;
+    elements.trainingEmpty.hidden = state.training.length > 0 || state.trainingPurchases.length > 0;
+    renderTrainingLibrary();
   }
 
   async function buyNowFlow(id) {
@@ -1850,12 +1881,12 @@ function handleClick(event) {
     renderWithdrawalHistory(profile.withdrawals);
     renderDeals(profile.deal_threads || []);
     renderConversations(profile.conversations || []);
-    renderTrainingLibrary();
     document.getElementById("frozenBalance").textContent = Number(profile.wallet.frozen_balance).toFixed(2);
   }
 
   function renderTrainingLibrary() {
     if (!elements.personalTrainingPurchases || !elements.automaticTrainingPurchases) return;
+    elements.personalTrainingPurchases.closest(".training-library").hidden = state.trainingPurchases.length === 0;
     const personal = state.trainingPurchases.filter((item) => item.product_type === "personal");
     const automatic = state.trainingPurchases.filter((item) => item.product_type === "automatic");
     elements.personalTrainingPurchases.replaceChildren(...personal.map(createTrainingLibraryCard));
@@ -1866,13 +1897,16 @@ function handleClick(event) {
 
   function createTrainingLibraryCard(purchase) {
     const card = document.createElement("article"); card.className = "training-library-card";
-    const image = document.createElement("img"); image.src = absoluteMediaUrl(purchase.cover_url_snapshot); image.alt = purchase.title_snapshot;
+    const image = document.createElement("img"); image.src = absoluteMediaUrl(purchase.cover_url_snapshot); image.alt = purchase.title_snapshot; image.loading = "lazy"; image.decoding = "async";
     const copy = document.createElement("div");
     const title = document.createElement("strong"); title.textContent = purchase.title_snapshot;
     const date = document.createElement("small"); date.textContent = `Куплено ${formatDate(purchase.created_at)}`;
     const status = document.createElement("span");
     status.textContent = purchase.product_type === "personal" ? trainingPurchaseStatusLabel(purchase.status) : trainingDeliveryStatusLabel(purchase.delivery_status);
-    copy.append(title, status, date); card.append(image, copy);
+    copy.append(title, status, date);
+    const open = document.createElement("button"); open.type = "button"; open.className = "training-library-card__open"; open.dataset.openTrainingPurchase = purchase.id;
+    const mark = document.createElement("span"); mark.textContent = "Куплено ✓ · Открыть"; copy.append(mark);
+    open.append(image, copy); card.append(open);
     if (purchase.product_type === "automatic" && purchase.status === "completed") {
       const repeat = document.createElement("button"); repeat.type = "button"; repeat.dataset.trainingRedeliver = purchase.id; repeat.textContent = purchase.delivery_status === "sending" ? "Отправляется…" : "Получить материалы повторно"; repeat.disabled = purchase.delivery_status === "sending";
       card.append(repeat);
@@ -2634,6 +2668,12 @@ async function hideCurrentConversation() {
       retry.textContent = "Проверить снова";
       elements.paymentResult.append(retry);
     }
+    if (kind === "confirmed") {
+      const balance = document.createElement("strong"); balance.textContent = `Баланс: ${formatNumber(state.me.wallet.available_balance)} AF Coins`;
+      const done = document.createElement("button"); done.type = "button"; done.dataset.paymentDone = ""; done.textContent = "Готово";
+      const history = document.createElement("button"); history.type = "button"; history.dataset.paymentHistory = ""; history.textContent = "История операций";
+      elements.paymentResult.append(balance, done, history);
+    }
   }
 
   async function createWithdrawal(event) {
@@ -2644,7 +2684,103 @@ async function hideCurrentConversation() {
     } catch (error) { notify(error.message); }
   }
 
+  function renderTopupSelection() {
+    const amount = Number(document.getElementById("topupAmount").value);
+    document.querySelectorAll("[data-topup-amount]").forEach((button) => {
+      const selected = Number(button.dataset.topupAmount) === amount;
+      button.classList.toggle("is-selected", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    const pay = elements.topupForm?.querySelector("button[type=submit]") || document.querySelector("#topupForm button[type=submit]");
+    if (pay && !pay.disabled) pay.textContent = Number.isInteger(amount) && amount >= 1 && amount <= 1000 ? `Оплатить ${amount} ⭐ → ${amount} AF Coins` : "Оплатить через Telegram Stars";
+  }
+
+  async function refreshAccount(button) {
+    if (button.disabled) return;
+    button.disabled = true;
+    try { state.me = await api.request("/me"); await loadOptionalData(["profile"], { allowRecovery: false }); renderAll(); notify("Данные профиля обновлены"); }
+    catch (error) { reportClientError("refresh_account", error); notify("Не удалось обновить профиль. Попробуйте снова."); }
+    finally { button.disabled = false; }
+  }
+
+  async function openTrainingPurchase(id) {
+    try {
+      const access = await api.request(`/training/purchases/${id}/access`);
+      const purchase = access.purchase;
+      const host = document.getElementById("trainingPurchaseContent");
+      const cover = document.createElement("img"); cover.className = "training-detail__cover"; cover.src = absoluteMediaUrl(purchase.cover_url_snapshot); cover.alt = purchase.title_snapshot;
+      const title = document.createElement("h2"); title.textContent = purchase.title_snapshot;
+      const status = document.createElement("p"); status.textContent = `${access.access_allowed ? "Куплено ✓" : "Доступ недоступен"} · ${trainingPurchaseStatusLabel(purchase.status)} · ${formatDate(purchase.created_at)}`;
+      const description = document.createElement("p"); description.textContent = access.description;
+      host.replaceChildren(cover, title, status, description);
+      if (access.access_allowed && purchase.product_type === "automatic") {
+        const list = document.createElement("ul");
+        for (const material of purchase.materials || []) { const row = document.createElement("li"); row.textContent = material.title; list.append(row); }
+        const note = document.createElement("p"); note.textContent = `Материалы находятся в чате с ботом. ${trainingDeliveryStatusLabel(purchase.delivery_status)}`;
+        const open = document.createElement("button"); open.type = "button"; open.className = "publish-button"; open.dataset.openTrainingMaterials = purchase.id; open.textContent = "Открыть материалы в Telegram";
+        const repeat = document.createElement("button"); repeat.type = "button"; repeat.dataset.trainingRedeliver = purchase.id; repeat.textContent = "Получить материалы повторно"; repeat.disabled = purchase.delivery_status === "sending";
+        host.append(list, note, open, repeat);
+      } else if (access.access_allowed) {
+        if (access.contact_url) {
+          const contact = document.createElement("a"); contact.className = "publish-button"; contact.href = access.contact_url; contact.target = "_blank"; contact.rel = "noopener noreferrer"; contact.textContent = "Написать мне"; host.append(contact);
+        } else {
+          const note = document.createElement("p"); note.textContent = "У преподавателя нет доступного Telegram username. Напишите в поддержку и укажите номер заказа.";
+          const support = document.createElement("button"); support.type = "button"; support.dataset.openSupport = ""; support.textContent = "Связаться через поддержку"; host.append(note, support);
+        }
+      }
+      const order = document.createElement("small"); order.textContent = `Заказ: ${purchase.id}`; host.append(order);
+      await navigate("training-purchase");
+      return true;
+    } catch (error) { reportClientError("training_purchase_access", error); notify("Не удалось открыть покупку. Попробуйте снова или обратитесь в поддержку."); return false; }
+  }
+
+  async function openPurchasedMaterials(button) {
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      const result = await api.request(`/training/purchases/${button.dataset.openTrainingMaterials}/materials/open`);
+      if (telegram?.openTelegramLink) telegram.openTelegramLink(result.url);
+      else window.open(result.url, "_blank", "noopener,noreferrer");
+    } catch (error) { reportClientError("training_materials_open", error); notify("Материалы сейчас недоступны. Попробуйте снова или напишите в поддержку."); }
+    finally { button.disabled = false; }
+  }
+
+  function renderHelpCenter() {
+    // Optional screenshot: { src: "images/help/…webp", alt: "…", width: 390, height: 600 }.
+    // Only repository-owned, optimized assets; never private account screenshots.
+    const articles = [
+      { id: "buy", title: "Как купить машину", steps: ["Откройте Market и выберите автомобиль.", "Изучите описание и характеристики. Нажмите «Купить».", "Подтвердите цену. После покупки укажите игровой ID, сервер и время по МСК."], warning: "Подтверждайте получение только после фактической передачи машины.", action: "Market", view: "market" },
+      { id: "sell", title: "Как продать машину", steps: ["Создайте объявление с фотографиями и честным описанием.", "Отвечайте на предложения и сообщения покупателя.", "После оплаты откройте сделку, передайте автомобиль и отметьте передачу."], warning: "Продавец получает 70% цены после завершения сделки; комиссия сервиса — 30%.", action: "Выставить автомобиль", add: true },
+      { id: "publish", title: "Как выставить объявление", steps: ["Нажмите «+» в Market.", "Добавьте фотографии, название, характеристики, описание и цену.", "Выберите бесплатную публикацию или отдельно подтвердите закрепление."], warning: "Публикация бесплатная. Платное закрепление стоит 5 AF на 24 часа; списание требует подтверждения.", action: "Добавить автомобиль", add: true },
+      { id: "offer", title: "Как предложить свою цену", steps: ["Откройте автомобиль и нажмите «Предложить свою цену».", "Укажите сумму от 1 AF и отправьте предложение.", "Дождитесь принятия или отказа. Принятую цену можно использовать при покупке."], warning: "Доступного баланса должно хватать на предложение. Само предложение не списывает средства. Без решения продавца за 24 часа предложение отменяется.", action: "Выбрать автомобиль", view: "market" },
+      { id: "deal", title: "Как проходит безопасная сделка", steps: ["При покупке средства резервируются сервером.", "Отправьте продавцу ID, сервер и удобное время по МСК.", "Общайтесь внутри сделки. После передачи проверьте автомобиль и подтвердите получение."], warning: "Если есть проблема, не подтверждайте получение — откройте спор или обратитесь в поддержку.", action: "Мои сделки", profile: "deals" },
+      { id: "topup", title: "Как пополнить AF Coins", steps: ["Выберите пакет или введите сумму.", "Оплатите счёт в окне Telegram Stars.", "Дождитесь подтверждения сервера. Новый баланс и операция появятся без перезапуска."], warning: "1 Telegram Star = 1 AF Coin. AF Coins — внутренний баланс сервиса, не личный Stars-баланс. Если проверка задержалась, нажмите «Проверить снова», а не платите повторно.", action: "Пополнить", topup: true },
+      { id: "training", title: "Как купить обучение", steps: ["Откройте «Обучение» и прочитайте подробности продукта.", "Подтвердите оплату AF Coins.", "Откройте «Мои покупки» в разделе обучения. Материалы доступны через бота; персональное обучение проводится в личном Telegram-чате преподавателя."], warning: "Повторно покупать курс для получения материалов не нужно. Используйте отдельную кнопку повторной выдачи.", action: "Обучение", view: "training" },
+      { id: "message", title: "Как написать продавцу", steps: ["Откройте страницу автомобиля.", "Нажмите «Написать продавцу» и отправьте сообщение.", "Продолжить переписку можно из «Диалогов» в профиле."], warning: "Обычный диалог не создаёт покупку или финансовую сделку.", action: "Диалоги", profile: "chats" },
+      { id: "inactive", title: "Если продавец не отвечает", steps: ["Проверьте, что отправили данные передачи или сообщение в оплаченной сделке.", "Срок ответа хранится на сервере — закрывать приложение можно.", "Если продавец не отвечает 24 часа, подходящая активная сделка отменяется с полным возвратом, его активные объявления снимаются с продажи."], warning: "Спорные, уже переданные и завершённые сделки не отменяются этим таймером автоматически. Для них обратитесь в поддержку.", action: "Поддержка", support: true },
+      { id: "refund", title: "Как работает возврат", steps: ["Откройте нужную сделку. При проблеме используйте спор или поддержку.", "Возврат выполняется сервером по правилам сделки.", "Проверьте баланс и историю операций в профиле."], warning: "Возврат AF Coins внутри сервиса не означает автоматический возврат Telegram Stars. Купленные AF Coins не доступны для вывода; вывод заработанных средств согласуется отдельно.", action: "История операций", profile: "history" },
+      { id: "support", title: "Как связаться с поддержкой", steps: ["Откройте «Поддержку» в «Ещё» или профиле.", "Выберите тему, опишите проблему и при необходимости приложите скриншот.", "Отправьте обращение и следите за ответом в разделе поддержки."], warning: "Не отправляйте пароли, коды входа или доступ к Telegram.", action: "Открыть поддержку", support: true },
+    ];
+    document.getElementById("helpArticles").replaceChildren(...articles.map((article) => {
+      const section = document.createElement("article"); section.id = `help-${article.id}`; section.className = "help-article";
+      const title = document.createElement("h2"); title.textContent = article.title;
+      const steps = document.createElement("ol"); article.steps.forEach((text) => { const step = document.createElement("li"); step.textContent = text; steps.append(step); });
+      section.append(title, steps);
+      if (article.image) { const image = document.createElement("img"); Object.assign(image, article.image, { loading: "lazy", decoding: "async" }); section.append(image); }
+      const warning = document.createElement("p"); warning.className = "help-warning"; warning.textContent = article.warning;
+      const action = document.createElement("button"); action.type = "button"; action.textContent = article.action;
+      if (article.view) action.dataset.navTarget = article.view;
+      else if (article.profile) action.addEventListener("click", () => { void navigate("profile"); switchProfileTab(article.profile); });
+      else if (article.add) action.dataset.openAdd = "";
+      else if (article.topup) action.dataset.openTopup = "";
+      else action.dataset.openSupport = "";
+      section.append(warning, action); return section;
+    }));
+  }
+
   async function openTrainingProduct(id) {
+    const owned = state.trainingPurchases.find((item) => String(item.product_id) === String(id));
+    if (owned) return openTrainingPurchase(owned.id);
     try {
       const cached = state.training.find((item) => String(item.id) === String(id));
       const product = cached?.published === false ? cached : await api.request(`/training/${id}`);
@@ -2720,6 +2856,7 @@ async function hideCurrentConversation() {
       if (elements.purchaseModal?.open) elements.purchaseModal.close();
       state.purchaseFlow = null;
       renderBalance(); renderTraining(); renderTrainingLibrary();
+      await openTrainingPurchase(purchase.id);
       const button = document.getElementById("trainingBuyButton");
       if (state.selectedTraining && String(state.selectedTraining.id) === String(flow.product.id)) { button.disabled = true; button.textContent = "Уже куплено"; }
       notify(purchase.product_type === "automatic" ? "✅ Обучение куплено. Материалы отправляются ботом" : "✅ Заказ создан. Статус: Ожидает обучения");
@@ -2795,6 +2932,7 @@ async function hideCurrentConversation() {
       const purchase = await api.request(`/training/purchases/${button.dataset.trainingRedeliver}/redeliver`, { method: "POST" });
       state.trainingPurchases = state.trainingPurchases.map((item) => item.id === purchase.id ? purchase : item);
       renderTrainingLibrary();
+      button.textContent = "Материалы отправляются…";
       notify("Материалы отправляются в чат с ботом");
     } catch (error) {
       button.disabled = false; button.textContent = "Получить материалы повторно"; notify(error.message);
