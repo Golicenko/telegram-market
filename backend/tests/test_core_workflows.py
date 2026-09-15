@@ -71,11 +71,12 @@ def test_listing_accepts_multiple_images_and_unbounded_positive_stats():
         ListingCreate(**{**values, "price_af_coins": 0}, image_urls=["one"])
 
 
-def test_server_commission_is_single_70_30_formula():
+def test_car_sale_has_zero_fee_training_keeps_separate_policy():
     payout, commission = settlement_amounts(Decimal("101.00"))
-    assert payout == Decimal("70.70")
-    assert commission == Decimal("30.30")
+    assert payout == Decimal("101.00")
+    assert commission == Decimal("0.00")
     assert payout + commission == Decimal("101.00")
+    assert settlement_amounts(Decimal("101.00"), training=True) == (Decimal("70.70"), Decimal("30.30"))
 
 
 def test_minimum_topup_is_ten_stars():
@@ -370,8 +371,11 @@ async def test_successful_star_payment_is_credited_once():
 
 
 @pytest.mark.asyncio
-async def test_purchased_af_coins_cannot_be_withdrawn():
+async def test_purchased_af_coins_cannot_be_withdrawn(monkeypatch):
     from types import SimpleNamespace
+    from app.gift_withdrawals import preview_withdrawal
+    async def catalog(): return [{"id": "test-only", "star_count": 15}]
+    monkeypatch.setattr("app.gift_withdrawals.available_gifts", catalog)
 
     user_id = uuid.uuid4()
     user = User(id=user_id, telegram_id=100, first_name="Buyer", role="user")
@@ -380,12 +384,9 @@ async def test_purchased_af_coins_cannot_be_withdrawn():
         purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=0, version=0,
     )
     with pytest.raises(HTTPException) as error:
-        await create_withdrawal(
-            FakeSession([wallet]), user,
-            SimpleNamespace(amount=Decimal("15"), payout_method="manual", details="test"),
-        )
+        await preview_withdrawal(FakeSession([wallet]), user, Decimal("30"))
     assert error.value.status_code == 402
-    assert "продаж" in error.value.detail
+    assert "заработанные" in error.value.detail
 
 
 def time_to_datetime(timestamp: float):

@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-8651f0840ea2" />
-    <link rel="stylesheet" href="css/style.css?v=af-8651f0840ea2" />
+    <meta name="autoflow-build" content="af-33fa5347c638" />
+    <link rel="stylesheet" href="css/style.css?v=af-33fa5347c638" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-8651f0840ea2" defer></script>
-    <script src="js/app.js?v=af-8651f0840ea2" defer></script>
+    <script src="js/api.js?v=af-33fa5347c638" defer></script>
+    <script src="js/app.js?v=af-33fa5347c638" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -22,7 +22,7 @@
         <button id="startupRetry" type="button" hidden>Повторить</button>
       </section>
       <header class="app-header" id="appHeader">
-        <button class="header-balance" type="button" data-open-topup aria-label="Пополнить баланс AF Coins"><span data-balance>0.00</span><span class="af-coin" aria-label="AF Coins"></span><span class="balance-plus">＋</span></button>
+        <button class="header-balance" type="button" data-nav-target="wallet" aria-label="Открыть кошелёк AF Coins"><span data-balance>0.00</span><span class="af-coin" aria-label="AF Coins"></span><span class="balance-plus">＋</span></button>
         <div class="logo" aria-label="AutoFlow Market"><span class="logo__auto">AUTOFLOW</span><span class="logo__speed" aria-hidden="true"></span><span class="logo__market">MARKET</span></div>
         <div class="header-lower">
           <button class="info-button" id="infoButton" type="button"><span aria-hidden="true">▰</span> Информация <span aria-hidden="true">›</span></button>
@@ -109,30 +109,33 @@
           <div class="profile-actions profile-main-actions" aria-label="Действия профиля">
             <button type="button" data-open-topup>Пополнение</button>
             <button class="is-active" type="button" data-profile-tab="listings">Мои объявления</button>
-            <button type="button" data-profile-tab="history">История сделок</button>
-            <button type="button" data-profile-tab="chats">Диалоги</button>
-            <button type="button" data-refresh-account>Обновить данные профиля</button>
+            <button type="button" data-profile-tab="deals">Сделки и чаты</button>
+            <button type="button" data-open-support>Поддержка</button>
+            <button type="button" data-open-info>Информация</button>
             <button class="profile-admin" type="button" data-open-admin data-admin-only hidden>Администратор</button>
           </div>
+          <small class="profile-work-note">Профиль дорабатывается</small>
           <div class="profile-panel" data-profile-panel="listings"><button class="profile-row" type="button" data-profile-section="active"><span>▣</span><strong>Активные объявления</strong><b id="activeCount">0</b></button><div class="profile-listings" id="profileActiveCars"></div><button class="profile-row" type="button" data-profile-section="sold"><span>▤</span><strong>Проданные товары</strong><b id="soldCount">0</b></button><div class="profile-listings" id="profileSoldCars" hidden></div></div>
+        </section>
+
+        <section class="view wallet-view" data-view="wallet" aria-labelledby="walletTitle" hidden>
+          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="walletTitle">Кошелёк</h1></div>
+          <p>Доступно: <strong data-balance>0.00</strong> AF Coins</p>
+          <div class="profile-links"><button type="button" data-open-topup>Пополнить</button><button type="button" data-open-withdraw>Вывести заработанные средства</button></div>
+          <h2>Мои заявки</h2><div class="history-list" id="withdrawalHistory"></div>
+        </section>
+
+        <section class="view activity-view" data-view="activity" aria-labelledby="activityTitle" hidden>
+          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="activityTitle">Сделки и чаты</h1></div>
+          <nav class="activity-tabs" aria-label="Сделки и диалоги"><button type="button" data-activity-tab="deals" class="is-active" aria-pressed="true">Активные</button><button type="button" data-activity-tab="history" aria-pressed="false">История</button><button type="button" data-activity-tab="chats" aria-pressed="false">Диалоги</button></nav>
           <div class="profile-panel" data-profile-panel="deals" hidden><div class="deal-list" id="activeDeals"></div><div class="history-empty" id="dealsEmpty">Сделок пока нет</div></div>
-          <div class="profile-panel" data-profile-panel="history" hidden><div class="history-list" id="operationHistory"></div><div class="history-empty" id="historyEmpty">История операций пока пуста</div><div class="history-list" id="withdrawalHistory" hidden></div></div>
+          <div class="profile-panel" data-profile-panel="history" hidden><div class="history-list" id="operationHistory"></div><div class="history-empty" id="historyEmpty">История операций пока пуста</div></div>
           <div class="profile-panel" data-profile-panel="chats" hidden><div class="deal-list" id="conversationList"></div><div class="history-empty" id="conversationsEmpty">Диалогов пока нет</div></div>
         </section>
 
-        <section class="view" data-view="more" aria-labelledby="moreTitle" hidden>
-          <div class="screen-heading"><h1 id="moreTitle">AutoFlow Market</h1></div>
-          <div class="profile-links"><button type="button" data-open-info>Центр помощи <b>›</b></button><button type="button" data-open-support>Поддержка <b>›</b></button><button type="button" data-nav-target="settings">Настройки <b>›</b></button></div><output class="frontend-build-info" id="frontendBuildInfo" hidden aria-hidden="true"></output>
-        </section>
-
-        <section class="view" data-view="settings" hidden>
-          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1>Настройки</h1></div>
-          <p>Имя и фотография синхронизируются с Telegram. Тема приложения следует настройкам Telegram.</p>
-          <div class="profile-links"><button type="button" data-refresh-account>Обновить данные профиля</button><button type="button" data-open-withdraw>Вывести заработанные средства</button><button type="button" data-open-support>Поддержка</button></div>
-        </section>
-
         <section class="view help-center" data-view="help" aria-labelledby="helpTitle" hidden>
-          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="helpTitle">Центр помощи</h1></div>
+          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="helpTitle">Информация</h1></div>
+          <output class="frontend-build-info" id="frontendBuildInfo" hidden aria-hidden="true"></output>
           <h2>Популярные вопросы</h2><nav class="help-shortcuts" aria-label="Популярные вопросы"><a href="#help-sell" data-help-anchor="help-sell">Продать машину</a><a href="#help-buy" data-help-anchor="help-buy">Купить машину</a><a href="#help-topup" data-help-anchor="help-topup">Пополнение</a><a href="#help-deal" data-help-anchor="help-deal">Сделка</a><a href="#help-support" data-help-anchor="help-support">Поддержка</a></nav>
           <div id="helpArticles"></div>
         </section>
@@ -260,7 +263,8 @@
         </section>
 
         <section class="view form-view" data-view="withdraw" aria-labelledby="withdrawTitle" hidden>
-          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="withdrawTitle">Вывести средства</h1></div><form class="withdraw-form" id="withdrawForm"><label>Сумма AF Coins<input name="amount" type="number" min="0" required /></label><label>Способ получения<select name="payout_method" required><option value="">Выберите способ</option><option value="manual">Ручное согласование с администратором</option></select></label><label>Реквизиты или комментарий<textarea name="details" rows="4" required></textarea></label><p>После заявки сумма будет заморожена до решения администратора. Реальная выплата выполняется вручную и пока не автоматизирована.</p><button class="publish-button" type="submit">Подтвердить заявку</button></form>
+          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="withdrawTitle">Подарки Telegram</h1></div>
+          <form class="withdraw-form" id="withdrawForm"><label>Бюджет из заработанных AF Coins<input name="amount" type="number" inputmode="decimal" step="0.01" min="0.01" required /></label><label>Комментарий<textarea name="details" rows="2" maxlength="2000"></textarea></label><p>Администратор отправит подарки вручную, обычно до 1 часа. Комиссия — 30% включённой в заявку суммы. Неиспользованный остаток остаётся на балансе. Это подарки, а не пополнение личного баланса Telegram Stars.</p><div id="withdrawQuote" role="status" aria-live="polite"></div><button class="publish-button" type="submit">Рассчитать подарки</button></form>
         </section>
 
         <section class="view form-view" data-view="support" aria-labelledby="supportTitle" hidden>
@@ -277,7 +281,7 @@
         </section>
       </main>
 
-      <nav class="bottom-nav" id="bottomNav" aria-label="Основная навигация"><button class="nav-item" type="button" data-nav-target="unique"><span class="nav-icon-wrap"><span class="nav-icon">◇</span><span class="content-badge" id="uniqueContentBadge" hidden></span></span><span>Уникальные</span></button><button class="nav-item" type="button" data-nav-target="training"><span class="nav-icon-wrap"><img class="gg-nav-icon" src="images/gg-training-icon.jpg" alt="" aria-hidden="true" /><span class="content-badge" id="trainingContentBadge" hidden></span></span><span>Обучение</span></button><button class="nav-market is-active" type="button" data-nav-target="market" aria-current="page"><span>★</span><small>Market</small></button><button class="nav-item" type="button" data-nav-target="profile"><span class="nav-icon">♟</span><span>Профиль</span></button><button class="nav-item" type="button" data-nav-target="more"><span class="nav-icon nav-grid">▪▪<br />▪▪</span><span>Ещё</span></button></nav>
+      <nav class="bottom-nav" id="bottomNav" aria-label="Основная навигация"><button class="nav-item" type="button" data-nav-target="unique"><span class="nav-icon-wrap"><img class="section-nav-icon" src="images/photo_unique.jpg" alt="" aria-hidden="true" /><span class="content-badge" id="uniqueContentBadge" hidden></span></span><span>Уникальные</span></button><button class="nav-item" type="button" data-nav-target="training"><span class="nav-icon-wrap"><img class="section-nav-icon" src="images/photo_tutorial.jpg" alt="" aria-hidden="true" /><span class="content-badge" id="trainingContentBadge" hidden></span></span><span>Обучение</span></button><button class="nav-market is-active" type="button" data-nav-target="market" aria-current="page"><span>★</span><small>Market</small></button><button class="nav-item" type="button" data-nav-target="profile"><img class="section-nav-icon" src="images/photo_profile.jpg" alt="" aria-hidden="true" /><span>Профиль</span></button></nav>
     </div>
 
     <dialog class="modal purchase-modal" id="purchaseModal"><div class="modal-head"><div><span class="eyebrow">Покупка автомобиля</span><h2 id="purchaseModalTitle">Покупка автомобиля</h2></div><button type="button" data-close-purchase aria-label="Закрыть">×</button></div><p id="purchaseModalText">Цена автомобиля</p><div class="purchase-modal__amount" id="purchaseModalAmount"></div><p class="security-note" id="purchaseModalNote">Деньги будут под защитой до получения автомобиля. Продавец получит их только после вашего подтверждения.</p><button class="publish-button" id="purchaseModalAction" type="button">Подтвердить покупку</button><button class="ghost-button" type="button" data-close-purchase>Отмена</button></dialog>

@@ -48,8 +48,9 @@ def money(value) -> Decimal:
     return Decimal(value).quantize(AF, rounding=ROUND_HALF_UP)
 
 
-def settlement_amounts(price: Decimal) -> tuple[Decimal, Decimal]:
-    seller_percent = Decimal(get_settings().seller_payout_percent) / Decimal("100")
+def settlement_amounts(price: Decimal, *, training: bool = False) -> tuple[Decimal, Decimal]:
+    # Car sales are commission-free even if a previous deployment left 70 in env.
+    seller_percent = Decimal(get_settings().training_seller_payout_percent if training else 100) / Decimal("100")
     seller_payout = money(money(price) * seller_percent)
     return seller_payout, money(money(price) - seller_payout)
 
@@ -127,7 +128,7 @@ def debit_spendable(wallet: Wallet, amount: Decimal) -> tuple[Decimal, Decimal]:
 
 async def create_notification(session: AsyncSession, user_id: uuid.UUID, kind: str, title: str, body: str, payload: dict | None = None) -> Notification:
     notification = Notification(user_id=user_id, notification_type=kind, title=title, body=body, payload=payload or {})
-    if kind in {"conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden", "deal_completed", "deal_cancelled", "dispute_resolved", "deal_support_case"}:
+    if kind in {"conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden", "deal_completed", "deal_cancelled", "dispute_resolved", "deal_support_case", "withdrawal_created", "withdrawal_paid", "withdrawal_rejected", "withdrawal_approved"}:
         notification.delivery_status = "pending"
     session.add(notification)
     return notification
@@ -668,7 +669,7 @@ async def purchase_training_product(
                     "training_product_id": str(product.id),
                 },
             )
-        payout, commission = settlement_amounts(price)
+        payout, commission = settlement_amounts(price, training=True)
         buyer_available_before, buyer_frozen_before = wallet_snapshot(buyer_wallet)
         if product.product_type == "personal":
             purchased_part, earned_part = hold_for_purchase(buyer_wallet, price)
@@ -2026,8 +2027,8 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
         listing.sold_at = now
         listing.reserved_by_deal_id = None
         session.add(wallet_transaction(buyer_wallet, "purchase_completed", Decimal("0"), buyer_avail_before, buyer_frozen_before, "Покупка завершена", deal_id=deal.id))
-        session.add(wallet_transaction(seller_wallet, "sale_income", deal.seller_payout, seller_avail_before, seller_frozen_before, f"{get_settings().seller_payout_percent}% стоимости сделки начислено продавцу", deal_id=deal.id))
-        session.add(wallet_transaction(buyer_wallet, "platform_commission", -deal.platform_commission, buyer_wallet.available_balance, buyer_wallet.frozen_balance, f"Комиссия платформы {100 - get_settings().seller_payout_percent}%", deal_id=deal.id))
+        session.add(wallet_transaction(seller_wallet, "sale_income", deal.seller_payout, seller_avail_before, seller_frozen_before, f"Продажа автомобиля: продавцу начислено {deal.seller_payout} AF Coins", deal_id=deal.id))
+        session.add(wallet_transaction(buyer_wallet, "platform_commission", -deal.platform_commission, buyer_wallet.available_balance, buyer_wallet.frozen_balance, f"Комиссия продажи: {deal.platform_commission} AF Coins", deal_id=deal.id))
         await create_notification(session, deal.seller_id, "deal_completed", "Сделка завершена", f"Начислено {deal.seller_payout} AF Coins", {"deal_id": str(deal.id)})
     return deal
 
@@ -2280,8 +2281,8 @@ async def resolve_dispute(
             listing.sold_at = now
             listing.reserved_by_deal_id = None
             session.add(wallet_transaction(buyer_wallet, "dispute_completed", Decimal("0"), buyer_available_before, buyer_frozen_before, f"Сделка завершена администратором: {reason}", deal_id=deal.id))
-            session.add(wallet_transaction(seller_wallet, "sale_income", deal.seller_payout, seller_available_before, seller_frozen_before, f"{get_settings().seller_payout_percent}% начислено после решения спора: {reason}", deal_id=deal.id))
-            session.add(wallet_transaction(buyer_wallet, "platform_commission", -deal.platform_commission, buyer_wallet.available_balance, buyer_wallet.frozen_balance, f"Комиссия платформы {100 - get_settings().seller_payout_percent}% после решения спора", deal_id=deal.id))
+            session.add(wallet_transaction(seller_wallet, "sale_income", deal.seller_payout, seller_available_before, seller_frozen_before, f"Начислено {deal.seller_payout} AF Coins после решения спора: {reason}", deal_id=deal.id))
+            session.add(wallet_transaction(buyer_wallet, "platform_commission", -deal.platform_commission, buyer_wallet.available_balance, buyer_wallet.frozen_balance, f"Комиссия продажи после решения спора: {deal.platform_commission} AF Coins", deal_id=deal.id))
             buyer_body = "Сделка завершена решением администратора"
             seller_body = f"Сделка завершена, начислено {deal.seller_payout} AF Coins"
         if deal.conversation_id:
@@ -2326,29 +2327,15 @@ async def resolve_dispute(
 
 
 async def create_withdrawal(session: AsyncSession, user: User, payload) -> WithdrawalRequest:
-    minimum = money(get_settings().min_withdrawal_af_coins)
-    amount = money(payload.amount)
-    if amount < minimum:
-        raise HTTPException(status_code=400, detail=f"Minimum withdrawal is {minimum} AF Coins")
-    async with session.begin():
-        wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id).with_for_update())
-        if not wallet or wallet.earned_balance < amount:
-            raise HTTPException(status_code=402, detail="Для вывода доступны только AF Coins, заработанные с продаж")
-        before_available, before_frozen = wallet_snapshot(wallet)
-        wallet.earned_balance = money(wallet.earned_balance - amount)
-        wallet.earned_frozen_balance = money(wallet.earned_frozen_balance + amount)
-        wallet.version += 1
-        withdrawal = WithdrawalRequest(user_id=user.id, amount=amount, payout_method=payload.payout_method, details=payload.details, status="pending")
-        session.add(withdrawal)
-        await session.flush()
-        session.add(wallet_transaction(wallet, "withdrawal_reserved", -amount, before_available, before_frozen, "AF Coins заморожены для заявки на вывод", withdrawal_id=withdrawal.id))
-        admins = list((await session.scalars(select(User).where(User.role == "admin"))).all())
-        for admin in admins:
-            await create_notification(session, admin.id, "withdrawal_created", "Новая заявка на вывод", f"Пользователь {user.telegram_id}: {amount} AF Coins", {"withdrawal_id": str(withdrawal.id)})
-    return withdrawal
+    from .gift_withdrawals import reserve_gift_withdrawal
+    if not getattr(payload, "quote_id", None):
+        raise HTTPException(409, "Сначала рассчитайте подарки и комиссию в обновлённой форме вывода.")
+    return await reserve_gift_withdrawal(session, user, payload.quote_id, payload.details)
 
 
 async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: uuid.UUID, action: str, reason: str | None) -> WithdrawalRequest:
+    if admin.role != "admin":
+        raise HTTPException(403, "Доступен только администратору")
     targets = {"approve": "approved", "paid": "paid", "reject": "rejected"}
     expected = {"approve": {"pending"}, "paid": {"approved"}, "reject": {"pending", "approved"}}[action]
     target = targets[action]
@@ -2356,6 +2343,8 @@ async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: u
         request = await session.scalar(select(WithdrawalRequest).where(WithdrawalRequest.id == withdrawal_id).with_for_update())
         if not request:
             raise HTTPException(status_code=404, detail="Withdrawal not found")
+        if request.status == target:
+            return request
         if request.status not in expected:
             raise HTTPException(status_code=409, detail=f"Withdrawal must be one of {sorted(expected)}")
         if action == "reject" and not reason:
@@ -2374,7 +2363,9 @@ async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: u
                 raise HTTPException(status_code=409, detail="Frozen balance is insufficient")
             wallet.earned_frozen_balance = money(wallet.earned_frozen_balance - request.amount)
             request.paid_at = now
-            transaction = wallet_transaction(wallet, "withdrawal_paid", -request.amount, before_available, before_frozen, "Ручная выплата отмечена администратором", withdrawal_id=request.id)
+            description = (f"Подарки стоимостью {request.payout_stars} Stars отправлены вручную; комиссия {request.fee_af} AF Coins"
+                           if request.payout_method == "manual_gift" else "Ручная выплата отмечена администратором")
+            transaction = wallet_transaction(wallet, "withdrawal_paid", -request.amount, before_available, before_frozen, description, withdrawal_id=request.id)
         elif action == "reject":
             if wallet.earned_frozen_balance < request.amount:
                 raise HTTPException(status_code=409, detail="Frozen balance is insufficient")
@@ -2386,7 +2377,12 @@ async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: u
         if transaction:
             session.add(transaction)
         session.add(AdminAction(admin_id=admin.id, action=f"withdrawal_{target}", target_type="withdrawal", target_id=request.id, reason=reason))
-        await create_notification(session, request.user_id, f"withdrawal_{target}", "Статус заявки на вывод изменён", f"Новый статус: {target}", {"withdrawal_id": str(request.id)})
+        text = {"approved": "Заявка одобрена. Подарки отправит администратор вручную; выдача ещё не завершена.",
+                "paid": "✅ Администратор подтвердил отправку подарков. Заявка завершена.",
+                "rejected": f"Заявка отклонена: {reason}. Зарезервированные AF Coins возвращены."}[target]
+        if request.payout_method != "manual_gift":
+            text = f"Статус заявки: {target}"
+        await create_notification(session, request.user_id, f"withdrawal_{target}", "Статус заявки на вывод изменён", text, {"withdrawal_id": str(request.id)})
     return request
 
 

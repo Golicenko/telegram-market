@@ -25,12 +25,12 @@ const server = http.createServer((req, res) => {
       await page.goto(`http://127.0.0.1:${server.address().port}`);
       await page.waitForTimeout(7000);
       const overflow = async () => assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `overflow at ${width}`);
-      for (const view of ["profile","training","more"]) {
+      for (const view of ["training","profile"]) {
         await page.locator(`.bottom-nav [data-nav-target="${view}"]`).click();
         await overflow();
         if (width === 390) await page.screenshot({path:path.join(root,"../docs",`ux-after-${view}.png`),fullPage:true});
       }
-      await page.locator('[data-view="more"] [data-open-info]').click();
+      await page.locator('[data-view="profile"] [data-open-info]').click();
       assert.equal(await page.locator(".help-article").count(), 11);
       await page.locator('[data-help-anchor="help-support"]').click();
       await page.waitForTimeout(900);
