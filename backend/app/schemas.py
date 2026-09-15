@@ -475,9 +475,15 @@ class DealControlAction(BaseModel):
 
 
 class WithdrawalCreate(BaseModel):
-    amount: Decimal = Field(gt=0, decimal_places=2)
-    payout_method: str = Field(min_length=2, max_length=64)
-    details: str = Field(min_length=2, max_length=2000)
+    quote_id: uuid.UUID | None = None
+    # Accept old clients structurally, but require server quote before reservation.
+    amount: Decimal | None = Field(default=None, gt=0, decimal_places=2)
+    payout_method: str | None = Field(default=None, max_length=64)
+    details: str = Field(default="", max_length=2000)
+
+
+class WithdrawalQuoteCreate(BaseModel):
+    amount: Decimal = Field(gt=0, le=999999999, decimal_places=2)
 
 
 class WithdrawalDecision(BaseModel):
@@ -488,6 +494,9 @@ class WithdrawalOut(ORMModel):
     id: uuid.UUID
     user_id: uuid.UUID
     amount: Decimal
+    fee_af: Decimal | None = None
+    payout_stars: int | None = None
+    gift_plan: list[dict] | None = None
     payout_method: str
     details: str
     status: str

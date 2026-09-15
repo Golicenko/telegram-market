@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const primaryViews = new Set(["market", "unique", "training", "accounts", "profile", "more"]);
+  const primaryViews = new Set(["market", "unique", "training", "accounts", "profile"]);
 
   const api = window.AutoFlowApi;
   let telegram = window.Telegram?.WebApp || null;
@@ -41,6 +41,8 @@
     broadcastPollingId: null,
     pendingBroadcastRequestId: null,
     profile: null,
+    withdrawalQuote: null,
+    withdrawalBusy: false,
     catalog: { brands: [] },
     photoFiles: [],
     currentConversation: null,
@@ -310,6 +312,12 @@
     bind(elements.listingPageOfferButton, "click", showListingOfferForm, "listingPageOfferButton");
     bind(elements.listingOfferForm, "submit", submitListingOffer, "listingOfferForm");
     bind(elements.withdrawForm, "submit", createWithdrawal, "withdrawForm");
+    bind(elements.withdrawForm, "input", () => {
+      if (state.withdrawalBusy) return;
+      state.withdrawalQuote = null;
+      document.getElementById("withdrawQuote").replaceChildren();
+      elements.withdrawForm.querySelector("button[type=submit]").textContent = "Рассчитать подарки";
+    }, "withdrawFormInput");
     bind(document.getElementById("trainingForm"), "submit", submitTrainingProduct, "trainingForm");
     bind(trainingForm?.elements.product_type, "change", toggleAutomaticMaterialFields, "trainingProductType");
     bind(trainingVideoInput, "change", previewTrainingMaterials, "trainingVideo");
@@ -408,6 +416,16 @@
   }
 
   async function openSectionDeepLink() {
+    const adminWithdrawal = launchParams.get("admin_withdrawal_id");
+    if (adminWithdrawal) {
+      launchParams.delete("admin_withdrawal_id");
+      if (state.me?.user.role !== "admin") return notify("Доступен только администратору");
+      await openAdminPanel(); switchAdminTab("withdrawals"); await loadAdminWithdrawals();
+      const card = [...elements.adminWithdrawals.children].find(item => item.dataset.withdrawalId === adminWithdrawal);
+      if (card) { card.scrollIntoView({ block: "center" }); card.focus(); }
+      else notify("Заявка не найдена");
+      return;
+    }
     const adminDeal = launchParams.get("admin_deal_id");
     if (adminDeal) {
       launchParams.delete("admin_deal_id");
@@ -654,6 +672,8 @@ function handleClick(event) {
     }
     const profileTab = target.closest("[data-profile-tab]");
     if (profileTab) return void switchProfileTab(profileTab.dataset.profileTab);
+    const activityTab = target.closest("[data-activity-tab]");
+    if (activityTab) return void switchProfileTab(activityTab.dataset.activityTab);
     const profileSection = target.closest("[data-profile-section]");
     if (profileSection) return void toggleProfileSection(profileSection.dataset.profileSection);
     const conversationButton = target.closest("[data-open-conversation]");
@@ -771,6 +791,9 @@ function handleClick(event) {
   }
 
   async function navigate(viewName, options = {}) {
+    // Preserve old links without keeping removed navigation screens.
+    if (viewName === "more") viewName = "help";
+    if (viewName === "settings") viewName = "profile";
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
     if (state.currentView === "deal-chat" && viewName !== "deal-chat") releaseChatPresence();
@@ -794,18 +817,19 @@ function handleClick(event) {
       view.hidden = !active;
       view.classList.toggle("is-active", active);
     });
-    const navView = ["add", "deal-chat", "listing-detail"].includes(viewName) ? "market" : ["training-detail", "training-editor", "training-purchase"].includes(viewName) ? "training" : ["topup", "withdraw", "admin", "support", "settings"].includes(viewName) ? "profile" : viewName === "help" ? "more" : viewName;
+    const navView = ["add", "deal-chat", "listing-detail"].includes(viewName) ? "market" : ["training-detail", "training-editor", "training-purchase"].includes(viewName) ? "training" : ["wallet", "topup", "withdraw", "admin", "support", "activity", "help"].includes(viewName) ? "profile" : viewName;
     elements.navButtons.forEach((button) => {
       const active = button.dataset.navTarget === navView;
       button.classList.toggle("is-active", active);
       active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
     });
-    elements.shell.classList.toggle("is-focused", ["add", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin", "training-purchase", "help", "settings"].includes(viewName));
+    elements.shell.classList.toggle("is-focused", ["add", "wallet", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin", "training-purchase", "help", "activity"].includes(viewName));
+    if (viewName === "profile") switchProfileTab("listings");
     window.scrollTo({ top: 0, behavior: "smooth" });
-    if (state.serverAvailable && ["market", "unique", "training", "profile"].includes(viewName)) {
+    if (state.serverAvailable && ["market", "unique", "training", "profile", "activity", "wallet"].includes(viewName)) {
       try {
         if (["unique", "training"].includes(viewName)) await openContentSection(viewName);
-        else await loadOptionalData(viewName === "profile" ? ["profile"] : ["regular"], { allowRecovery: false });
+        else await loadOptionalData(["profile", "activity", "wallet"].includes(viewName) ? ["profile"] : ["regular"], { allowRecovery: false });
       } catch (error) { notify(error.message); }
     }
   }
@@ -838,7 +862,7 @@ function handleClick(event) {
     state.unreadConversations = summary.conversations || [];
 
     renderUnreadBadge();
-    if (state.currentView === "profile") {
+    if (["profile", "activity"].includes(state.currentView)) {
       if (state.totalUnread !== previousTotal) state.profile = await api.request("/profile");
       renderConversations(state.profile?.conversations || []);
       renderDeals(state.profile?.deal_threads || []);
@@ -869,11 +893,11 @@ function handleClick(event) {
     count > 9 ? "9+" : String(count);
 
   elements.chatUnreadBadge.hidden = count === 0;
-  for (const [tab, type] of [["chats", "dialog"], ["deals", "deal"]]) {
-    const button = document.querySelector(`[data-profile-tab="${tab}"]`);
+  for (const [selector, type] of [['[data-profile-tab="deals"]', null], ['[data-activity-tab="chats"]', "dialog"], ['[data-activity-tab="deals"]', "deal"]]) {
+    const button = document.querySelector(selector);
     if (!button) continue;
     let badge = button.querySelector(".conversation-unread");
-    const unread = state.unreadConversations.filter(item => (item.conversation_type || "dialog") === type)
+    const unread = type === null ? count : state.unreadConversations.filter(item => (item.conversation_type || "dialog") === type)
       .reduce((sum, item) => sum + Number(item.unread_count || 0), 0);
     if (!unread) { badge?.remove(); continue; }
     if (!badge) { badge = document.createElement("span"); badge.className = "conversation-unread"; button.append(badge); }
@@ -2014,6 +2038,7 @@ function handleClick(event) {
       const copy = document.createElement("div");
       const title = document.createElement("strong"); title.textContent = `${formatNumber(item.amount)} AF Coins · ${withdrawalStatusLabel(item.status)}`;
       const date = document.createElement("span"); date.textContent = formatDate(item.created_at); copy.append(title, date);
+      if (item.gift_plan) { const gifts = document.createElement("small"); gifts.textContent = `Подарки: ${item.gift_plan.map(gift => `${gift.quantity} × ${gift.star_count} Stars`).join(" + ")}. Комиссия: ${formatNumber(item.fee_af)} AF. ${item.rejection_reason || ""}`; copy.append(gifts); }
       row.append(copy);
       if (item.status === "pending") { const cancel = document.createElement("button"); cancel.dataset.cancelWithdrawal = item.id; cancel.textContent = "Отменить"; row.append(cancel); }
       return row;
@@ -2028,18 +2053,24 @@ function handleClick(event) {
   function renderDeals(threads) {
     document.getElementById("dealsEmpty").hidden = threads.length > 0;
     elements.activeDeals.replaceChildren(...threads.map((thread) => {
-      const row = document.createElement("article"); row.className = "deal-row";
+      const row = document.createElement("article"); row.className = "deal-row activity-deal-row";
+      const photo = document.createElement("div"); photo.className = "activity-deal-photo";
+      if (thread.listing?.images?.[0]) {
+        const image = document.createElement("img"); image.src = absoluteMediaUrl(thread.listing.images[0]); image.alt = listingTitle(thread.listing); image.loading = "lazy"; photo.append(image);
+      } else { photo.textContent = "AF"; photo.setAttribute("aria-label", "Без фотографии"); }
       const copy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = listingTitle(thread.listing);
       const date = document.createElement("small"); date.textContent = formatDate(thread.last_message_at || thread.created_at); copy.append(title, date);
-      const identity = document.createElement("span"); identity.textContent = thread.counterparty?.name || "Пользователь";
+      const identity = document.createElement("span"); identity.textContent = [thread.counterparty?.name || "Пользователь", thread.counterparty?.username ? `@${thread.counterparty.username}` : ""].filter(Boolean).join(" · ");
+      const role = document.createElement("small"); role.textContent = String(thread.buyer_id) === String(state.me.user.id) ? "Вы — покупатель" : "Вы — продавец";
+      const price = document.createElement("span"); price.textContent = `${formatNumber(thread.deal?.price_af_coins ?? thread.accepted_price_af_coins ?? thread.listing?.price_af_coins)} AF Coins`;
       const preview = document.createElement("small"); preview.textContent = thread.last_message || "Чат сделки";
-      copy.append(identity, preview);
-      const unread = Number(state.unreadConversations.find(item => item.conversation_id === thread.id)?.unread_count || 0);
+      copy.append(role, identity, price, preview);
+      const unread = Number(state.unreadConversations.find(item => String(item.conversation_id) === String(thread.id))?.unread_count ?? thread.unread_count ?? 0);
       if (unread) { const badge = document.createElement("span"); badge.className = "conversation-unread"; badge.textContent = unread > 9 ? "9+" : String(unread); copy.append(badge); }
       const meta = document.createElement("div"); meta.className = "deal-row__meta";
       const status = document.createElement("b"); status.textContent = thread.deal ? dealStatusLabel(thread.deal.status) : "Торг";
-      const chat = document.createElement("button"); chat.type = "button"; chat.dataset.openDealThread = thread.id; chat.dataset.dealId = thread.deal?.id || ""; chat.textContent = "💬 Открыть";
-      meta.append(status, chat); row.append(copy, meta); return row;
+      const chat = document.createElement("button"); chat.type = "button"; chat.dataset.openDealThread = thread.id; chat.dataset.dealId = thread.deal?.id || ""; chat.textContent = "Открыть чат";
+      meta.append(status, chat); row.append(photo, copy, meta); return row;
     }));
   }
 
@@ -2118,10 +2149,14 @@ async function hideCurrentConversation() {
   }
 
   function switchProfileTab(tabName) {
-    // One history entry retains access to existing active deals and operation history.
-    if (tabName === "deals") tabName = "history";
+    if (!["listings", "deals", "history", "chats"].includes(tabName)) return;
+    if (tabName !== "listings") void navigate("activity");
     document.querySelectorAll("[data-profile-tab]").forEach((button) => button.classList.toggle("is-active", button.dataset.profileTab === tabName));
-    document.querySelectorAll("[data-profile-panel]").forEach((panel) => { panel.hidden = panel.dataset.profilePanel !== tabName && !(tabName === "history" && panel.dataset.profilePanel === "deals"); });
+    document.querySelectorAll("[data-activity-tab]").forEach((button) => {
+      const active = button.dataset.activityTab === tabName;
+      button.classList.toggle("is-active", active); button.setAttribute("aria-pressed", String(active));
+    });
+    document.querySelectorAll("[data-profile-panel]").forEach((panel) => { panel.hidden = panel.dataset.profilePanel !== tabName; });
   }
 
   function toggleProfileSection(section) {
@@ -2157,7 +2192,7 @@ async function hideCurrentConversation() {
       if (messagesResult.status === "rejected") reportClientError("conversation_messages_initial", messagesResult.reason);
       state.currentConversation = conversation;
       state.messages = messages;
-      state.previousView = returnView || (state.currentView === "profile" ? "profile" : "market");
+      state.previousView = returnView || (["profile", "activity"].includes(state.currentView) ? state.currentView : "market");
       renderConversation();
       await navigate("deal-chat");
       try {
@@ -2724,11 +2759,51 @@ async function hideCurrentConversation() {
   }
 
   async function createWithdrawal(event) {
-    event.preventDefault(); const form = new FormData(elements.withdrawForm);
+    event.preventDefault();
+    if (state.withdrawalBusy) return;
+    state.withdrawalBusy = true;
+    const form = new FormData(elements.withdrawForm);
+    const controls = [...elements.withdrawForm.querySelectorAll("input,textarea,button")];
+    controls.forEach(control => { control.disabled = true; });
+    const output = document.getElementById("withdrawQuote");
+    const button = elements.withdrawForm.querySelector("button[type=submit]");
     try {
-      await api.request("/withdrawals", { method: "POST", body: JSON.stringify({ amount: Number(form.get("amount")), payout_method: form.get("payout_method"), details: form.get("details") }) });
-      elements.withdrawForm.reset(); await refreshMarketplace(); navigate("profile"); notify("Заявка создана, сумма заморожена");
-    } catch (error) { notify(error.message); }
+      if (!state.withdrawalQuote) {
+        button.textContent = "Рассчитываем…";
+        const quote = await api.request("/withdrawals/quote", { method: "POST", body: JSON.stringify({ amount: form.get("amount") }) });
+        state.withdrawalQuote = quote;
+        output.replaceChildren();
+        for (const text of [
+          `Подарки: ${quote.gift_plan.map(item => `${item.quantity} × ${item.star_count} Stars`).join(" + ")}`,
+          `Стоимость подарков: ${quote.payout_stars} Stars`,
+          `Комиссия: ${formatNumber(quote.fee_af)} AF Coins`,
+          `Будет зарезервировано: ${formatNumber(quote.gross_af)} AF Coins`,
+          `Из указанного бюджета останется: ${formatNumber(quote.unspent_af)} AF Coins`,
+          "После подтверждения заявка ожидает ручной отправки администратором.",
+        ]) { const row = document.createElement("p"); row.textContent = text; output.append(row); }
+        button.textContent = "Подтвердить заявку";
+      } else {
+        button.textContent = "Сохраняем заявку…";
+        const request = await api.request("/withdrawals", { method: "POST", body: JSON.stringify({ quote_id: state.withdrawalQuote.quote_id, details: form.get("details") }) });
+        state.withdrawalQuote = null; elements.withdrawForm.reset();
+        output.textContent = withdrawalSubmissionText(request);
+        button.textContent = "Рассчитать подарки";
+        try { await refreshMarketplace(); } catch (error) { notify("Заявка сохранена. Баланс временно не удалось обновить."); }
+      }
+    } catch (error) {
+      // Keep the quote after an uncertain POST: retry uses the same server idempotency key.
+      const message = error.status === 409 ? "Расчёт устарел или каталог изменился. Измените сумму и рассчитайте заново." : error.message;
+      notify(message); button.textContent = state.withdrawalQuote ? "Повторить подтверждение" : "Рассчитать подарки";
+    } finally { state.withdrawalBusy = false; controls.forEach(control => { control.disabled = false; }); }
+  }
+
+  function withdrawalSubmissionText(request) {
+    const status = withdrawalStatusLabel(request.status);
+    const detail = ["pending", "approved"].includes(request.status)
+      ? `Зарезервировано ${formatNumber(request.amount)} AF Coins. Ожидает ручной отправки подарков; выплата ещё не завершена.`
+      : request.status === "paid" ? "Администратор подтвердил выполнение выплаты."
+      : ["rejected", "cancelled"].includes(request.status) ? "Резерв возвращён на баланс." : "Обновите данные заявки в кошельке.";
+    return `Заявка ${request.id}: ${status}. ${detail}`;
   }
 
   function renderTopupSelection() {
@@ -2797,7 +2872,7 @@ async function hideCurrentConversation() {
     // Only repository-owned, optimized assets; never private account screenshots.
     const articles = [
       { id: "buy", title: "Как купить машину", steps: ["Откройте Market и выберите автомобиль.", "Изучите описание и характеристики. Нажмите «Купить».", "Подтвердите цену. После покупки укажите игровой ID, сервер и время по МСК."], warning: "Подтверждайте получение только после фактической передачи машины.", action: "Market", view: "market" },
-      { id: "sell", title: "Как продать машину", steps: ["Создайте объявление с фотографиями и честным описанием.", "Отвечайте на предложения и сообщения покупателя.", "После оплаты откройте сделку, передайте автомобиль и отметьте передачу."], warning: "Продавец получает 70% цены после завершения сделки; комиссия сервиса — 30%.", action: "Выставить автомобиль", add: true },
+      { id: "sell", title: "Как продать машину", steps: ["Создайте объявление с фотографиями и честным описанием.", "Отвечайте на предложения и сообщения покупателя.", "После оплаты откройте сделку, передайте автомобиль и отметьте передачу."], warning: "После завершения продажи автомобиля продавец получает 100% цены в AF Coins. Комиссия 30% применяется только при выводе подарками.", action: "Выставить автомобиль", add: true },
       { id: "publish", title: "Как выставить объявление", steps: ["Нажмите «+» в Market.", "Добавьте фотографии, название, характеристики, описание и цену.", "Выберите бесплатную публикацию или отдельно подтвердите закрепление."], warning: "Публикация бесплатная. Платное закрепление стоит 5 AF на 24 часа; списание требует подтверждения.", action: "Добавить автомобиль", add: true },
       { id: "offer", title: "Как предложить свою цену", steps: ["Откройте автомобиль и нажмите «Предложить свою цену».", "Укажите сумму от 1 AF и отправьте предложение.", "Дождитесь принятия или отказа. Принятую цену можно использовать при покупке."], warning: "Доступного баланса должно хватать на предложение. Само предложение не списывает средства. Без решения продавца за 24 часа предложение отменяется.", action: "Выбрать автомобиль", view: "market" },
       { id: "deal", title: "Как проходит безопасная сделка", steps: ["Купите автомобиль: сервер резервирует средства и создаёт чат сделки.", "Отправьте продавцу игровой ID, сервер и время по МСК.", "Продавец передаёт автомобиль в игре и подтверждает это отдельной кнопкой в сделке.", "Проверьте полученный автомобиль. Если всё хорошо — подтвердите получение. Только тогда продавцу начисляются средства.", "Если есть проблема — создайте обращение через кнопку «Есть проблема» в этой сделке."], warning: "До подтверждения средства остаются под защитой. Напоминания приходят сразу, через 2 и 6 часов, затем раз в 12 часов. После 48 часов ожидания подключается администратор; автоматической выплаты нет.", action: "Мои сделки", profile: "deals" },
@@ -4192,6 +4267,7 @@ async function hideCurrentConversation() {
     ...withdrawals.map((item) => {
       const card = document.createElement("div");
       card.className = "admin-withdrawal";
+      card.dataset.withdrawalId = item.id; card.tabIndex = -1;
 
       const title = document.createElement("strong");
       title.textContent = `${formatNumber(item.amount)} AF Coins · ${withdrawalStatusLabel(item.status)}`;
@@ -4207,6 +4283,7 @@ async function hideCurrentConversation() {
       const details = document.createElement("small");
       details.textContent =
         `${item.payout_method} · ${item.details}`;
+      if (item.gift_plan) details.textContent = `Отправить: ${item.gift_plan.map(gift => `${gift.quantity} × ${gift.star_count} Stars (ID ${gift.gift_id})`).join(" + ")}. Всего: ${item.payout_stars} Stars. Комиссия: ${formatNumber(item.fee_af)} AF. ${item.details}`;
 
       const actions = document.createElement("div");
       actions.className = "admin-withdrawal__actions";
@@ -4220,7 +4297,7 @@ async function hideCurrentConversation() {
 
       if (item.status === "approved") {
         actions.append(
-          adminActionButton(item.id, "paid", "Завершено"),
+          adminActionButton(item.id, "paid", "Подарки отправлены"),
           adminActionButton(item.id, "reject", "Отклонить")
         );
       }
@@ -4239,12 +4316,15 @@ async function hideCurrentConversation() {
   function adminActionButton(id, action, label) { const button = document.createElement("button"); button.dataset.withdrawalAction = action; button.dataset.withdrawalId = id; button.textContent = label; return button; }
 
   async function adminWithdrawalAction(button) {
+    if (button.disabled) return;
+    button.disabled = true;
     let reason = null;
-    if (button.dataset.withdrawalAction === "reject") { reason = window.prompt("Укажите причину отклонения"); if (!reason) return; }
     try {
+      if (button.dataset.withdrawalAction === "reject") { reason = window.prompt("Причина отклонения. Если часть подарков уже отправлена — не отклоняйте заявку: сначала завершите ручную сверку."); if (!reason) return; }
+      if (button.dataset.withdrawalAction === "paid" && !(await confirmCriticalAction("Подтверждаете, что ВСЕ подарки по этой заявке уже отправлены нужному пользователю? Зарезервированные AF Coins будут списаны окончательно.", "Да, все подарки отправлены"))) return;
       await api.request(`/admin/withdrawals/${button.dataset.withdrawalId}/${button.dataset.withdrawalAction}`, { method: "POST", body: JSON.stringify({ reason }) });
       renderAdminWithdrawals(await api.request("/admin/withdrawals")); notify("Статус заявки обновлён");
-    } catch (error) { notify(error.message); }
+    } catch (error) { notify(error.message); } finally { button.disabled = false; }
   }
 
   async function loadAdminFinancialHistory(userId) {

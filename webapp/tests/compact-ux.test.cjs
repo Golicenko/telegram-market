@@ -8,11 +8,11 @@ const html=fs.readFileSync(path.join(root,"index.html"),"utf8");
 const app=fs.readFileSync(path.join(root,"js/app.js"),"utf8");
 
 test("profile contains only the requested primary actions",()=>{
-  const profile=html.slice(html.indexOf('<section class="view profile-view"'),html.indexOf('<section class="view" data-view="more"'));
-  assert.doesNotMatch(profile,/data-open-info|data-open-support|data-nav-target="settings"|data-open-frozen|data-open-withdraw/);
+  const profile=html.match(/<section class="view profile-view"[\s\S]*?<\/section>/)[0];
+  assert.doesNotMatch(profile,/data-refresh-account|data-nav-target="settings"|data-open-frozen|data-open-withdraw/);
   const menu=profile.slice(profile.indexOf('class="profile-actions'),profile.indexOf('class="profile-panel'));
   assert.equal((menu.match(/<button /g)||[]).length,6);
-  for(const label of ["Пополнение","Мои объявления","История сделок","Диалоги","Обновить данные профиля","Администратор"])assert(menu.includes(label));
+  for(const label of ["Пополнение","Мои объявления","Сделки и чаты","Поддержка","Информация","Администратор"])assert(menu.includes(label));
   assert.match(menu,/data-open-admin data-admin-only hidden/);
 });
 

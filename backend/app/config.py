@@ -49,10 +49,12 @@ class Settings(BaseSettings):
     public_base_url: str | None = None
     upload_dir: str | None = None
     min_withdrawal_af_coins: int = 15
+    payout_nft_threshold_stars: int = Field(default=350, ge=1, le=5000)
     listing_promotion_cost_af_coins: int = 5
     listing_promotion_hours: int = 24
     training_delivery_cooldown_seconds: int = Field(default=300, ge=30, le=86400)
-    seller_payout_percent: int = Field(default=70, ge=1, le=100)
+    seller_payout_percent: int = Field(default=100, ge=1, le=100)  # Legacy env accepted; car policy is fixed at 100%.
+    training_seller_payout_percent: int = Field(default=70, ge=1, le=100)
     star_topup_min: int = Field(default=10, ge=1)
     star_topup_max: int = Field(default=1000, ge=1)
     upload_max_bytes: int = Field(default=30 * 1024 * 1024, ge=1024)

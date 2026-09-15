@@ -107,6 +107,7 @@ from .schemas import (
     UserOut,
     WalletOut,
     WithdrawalCreate,
+    WithdrawalQuoteCreate,
     WithdrawalDecision,
     WithdrawalOut,
 )
@@ -2920,12 +2921,15 @@ async def withdrawals(user: User = Depends(get_current_user), session: AsyncSess
     return list((await session.scalars(select(WithdrawalRequest).where(WithdrawalRequest.user_id == user.id).order_by(WithdrawalRequest.created_at.desc()))).all())
 
 
+@router.post("/withdrawals/quote")
+async def quote_withdrawal(payload: WithdrawalQuoteCreate, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    from .gift_withdrawals import preview_withdrawal
+    return await preview_withdrawal(session, user, payload.amount)
+
+
 @router.post("/withdrawals", response_model=WithdrawalOut, status_code=201)
 async def add_withdrawal(payload: WithdrawalCreate, background_tasks: BackgroundTasks, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     withdrawal = await create_withdrawal(session, user, payload)
-    admin_telegram_ids = list((await session.scalars(select(User.telegram_id).where(User.role == "admin", User.bot_started.is_(True)))).all())
-    for telegram_id in admin_telegram_ids:
-        background_tasks.add_task(send_bot_notification, telegram_id, f"Новая заявка на вывод: {withdrawal.amount} AF Coins от Telegram ID {user.telegram_id}")
     return withdrawal
 
 
@@ -3150,9 +3154,6 @@ async def admin_withdrawal_action(
     if action not in {"approve", "paid", "reject"}:
         raise HTTPException(status_code=404, detail="Unknown withdrawal action")
     withdrawal = await decide_withdrawal(session, admin, withdrawal_id, action, payload.reason)
-    owner = await session.get(User, withdrawal.user_id)
-    if owner and owner.bot_started:
-        background_tasks.add_task(send_bot_notification, owner.telegram_id, f"Статус заявки на вывод изменён: {withdrawal.status}")
     return withdrawal
 
 

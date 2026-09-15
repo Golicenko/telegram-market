@@ -670,11 +670,28 @@ class StarPaymentIntent(Base):
     )
 
 
+class GiftWithdrawalQuote(Base):
+    __tablename__ = "gift_withdrawal_quotes"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    budget: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    gross_af: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    fee_af: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    payout_stars: Mapped[int] = mapped_column(Integer, nullable=False)
+    gift_plan: Mapped[list] = mapped_column(JSONB, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (CheckConstraint("gross_af > 0 AND gross_af <= budget AND payout_stars > 0 AND fee_af = gross_af - payout_stars", name="ck_gift_quote_amounts"),)
+
+
 class WithdrawalRequest(Base, TimestampMixin):
     __tablename__ = "withdrawal_requests"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    gift_quote_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("gift_withdrawal_quotes.id", ondelete="RESTRICT"), unique=True)
+    fee_af: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    payout_stars: Mapped[int | None] = mapped_column(Integer)
+    gift_plan: Mapped[list | None] = mapped_column(JSONB)
     payout_method: Mapped[str] = mapped_column(String(64), nullable=False)
     details: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
