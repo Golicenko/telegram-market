@@ -10,8 +10,8 @@ const app = fs.readFileSync(path.join(root, "js", "app.js"), "utf8");
 test("user navigation uses the supplied replacement training image", () => {
   const nav = html.match(/<nav class="bottom-nav"[\s\S]*?<\/nav>/)?.[0] || "";
   assert.match(nav, /data-nav-target="training"/);
-  assert.match(nav, /images\/photo_tutorial\.jpg/);
-  assert.equal(fs.existsSync(path.join(root, "images", "photo_tutorial.jpg")), true);
+  assert.match(nav, /images\/nav-training\.png/);
+  assert.equal(fs.existsSync(path.join(root, "images", "nav-training.png")), true);
   assert.match(nav, />Обучение</);
   assert.doesNotMatch(nav, />Аккаунты</);
 });

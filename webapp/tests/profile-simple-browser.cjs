@@ -37,11 +37,11 @@ const server=http.createServer((req,res)=>{
       assert.equal(await menu.locator("button:visible").count(),role==="admin"?6:5);
       assert.equal(await profile.locator('[data-open-support],[data-open-info]').count(),2);
       assert.equal(await page.locator('[data-view="more"],[data-view="settings"],[data-refresh-account]').count(),0);
-      assert.deepEqual(await page.locator('.bottom-nav button').evaluateAll(nodes=>nodes.map(n=>n.dataset.navTarget)),['unique','training','market','profile']);
+      assert.deepEqual(await page.locator('.bottom-nav button').evaluateAll(nodes=>nodes.map(n=>n.dataset.navTarget)),['unique','training','market','profile','more']);
       for(const icon of await page.locator('.bottom-nav img').all()){
         assert(await icon.evaluate(img=>img.complete&&img.naturalWidth>0));
         assert.equal(await icon.evaluate(img=>getComputedStyle(img).objectFit),'contain');
-        const box=await icon.boundingBox();assert.equal(box.width,28);assert.equal(box.height,28);
+        const box=await icon.locator('..').boundingBox();assert.equal(box.width,30);assert.equal(box.height,30);
       }
       for(const button of await menu.locator("button:visible").all()){
         const b=await button.boundingBox();assert(b.width>=44&&b.height>=44&&b.x>=0&&b.x+b.width<=width&&b.y+b.height<600,JSON.stringify(b));
@@ -67,7 +67,7 @@ const server=http.createServer((req,res)=>{
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
       if(role==="admin"&&width===390){await page.waitForTimeout(350);const output=path.join(os.tmpdir(),"autoflow-profile-simple-390.png");await page.screenshot({path:output});console.log("Screenshot: "+output);}
       await menu.locator('[data-open-topup]').click();await page.locator('[data-view="topup"]').waitFor({state:"visible"});
-      assert.deepEqual(errors,[]);console.log(`${role} ${width}px: four icons, compact menu, role visibility, activity/history/dialogs/back/information/topup OK`);
+      assert.deepEqual(errors,[]);console.log(`${role} ${width}px: five nav items, compact menu, role visibility, activity/history/dialogs/back/information/topup OK`);
       await page.close();
     }
   }finally{await browser.close();server.close();}

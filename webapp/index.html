@@ -6,11 +6,11 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-33fa5347c638" />
-    <link rel="stylesheet" href="css/style.css?v=af-33fa5347c638" />
+    <meta name="autoflow-build" content="af-ebcf1147a68b" />
+    <link rel="stylesheet" href="css/style.css?v=af-ebcf1147a68b" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-33fa5347c638" defer></script>
-    <script src="js/app.js?v=af-33fa5347c638" defer></script>
+    <script src="js/api.js?v=af-ebcf1147a68b" defer></script>
+    <script src="js/app.js?v=af-ebcf1147a68b" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -281,8 +281,22 @@
         </section>
       </main>
 
-      <nav class="bottom-nav" id="bottomNav" aria-label="Основная навигация"><button class="nav-item" type="button" data-nav-target="unique"><span class="nav-icon-wrap"><img class="section-nav-icon" src="images/photo_unique.jpg" alt="" aria-hidden="true" /><span class="content-badge" id="uniqueContentBadge" hidden></span></span><span>Уникальные</span></button><button class="nav-item" type="button" data-nav-target="training"><span class="nav-icon-wrap"><img class="section-nav-icon" src="images/photo_tutorial.jpg" alt="" aria-hidden="true" /><span class="content-badge" id="trainingContentBadge" hidden></span></span><span>Обучение</span></button><button class="nav-market is-active" type="button" data-nav-target="market" aria-current="page"><span>★</span><small>Market</small></button><button class="nav-item" type="button" data-nav-target="profile"><img class="section-nav-icon" src="images/photo_profile.jpg" alt="" aria-hidden="true" /><span>Профиль</span></button></nav>
+      <nav class="bottom-nav" id="bottomNav" aria-label="Основная навигация">
+        <button class="nav-item" type="button" data-nav-target="unique"><span class="nav-icon-wrap"><img class="section-nav-icon section-nav-icon--unique" src="images/nav-unique.png" alt="" aria-hidden="true" /><span class="content-badge" id="uniqueContentBadge" hidden></span></span><span>Уникальные</span></button>
+        <button class="nav-item" type="button" data-nav-target="training"><span class="nav-icon-wrap"><img class="section-nav-icon section-nav-icon--training" src="images/nav-training.png" alt="" aria-hidden="true" /><span class="content-badge" id="trainingContentBadge" hidden></span></span><span>Обучение</span></button>
+        <button class="nav-market is-active" type="button" data-nav-target="market" aria-current="page"><span class="nav-market-disc"><span>★</span><small>Market</small></span></button>
+        <button class="nav-item" type="button" data-nav-target="profile"><span class="nav-icon-wrap"><img class="section-nav-icon section-nav-icon--profile" src="images/nav-profile.png" alt="" aria-hidden="true" /></span><span>Профиль</span></button>
+        <button class="nav-item" type="button" data-nav-target="more" aria-haspopup="dialog" aria-controls="moreUpdatesModal" aria-expanded="false"><span class="nav-icon-wrap"><img class="section-nav-icon section-nav-icon--more" src="images/nav-more.png" alt="" aria-hidden="true" /></span><span>Ещё</span></button>
+      </nav>
     </div>
+
+    <dialog class="modal more-updates-modal" id="moreUpdatesModal" aria-labelledby="moreUpdatesTitle" aria-describedby="moreUpdatesText">
+      <button class="more-updates-close" type="button" data-close-more aria-label="Закрыть окно">×</button>
+      <h2 id="moreUpdatesTitle">Раздел обновляется</h2>
+      <p id="moreUpdatesText">Мы сейчас готовим обновлённый раздел. Следите за новостями в нашем Telegram-канале.</p>
+      <a class="publish-button more-updates-channel" id="moreUpdatesChannel" href="https://t.me/CarParking_AF" target="_blank" rel="noopener noreferrer">Перейти в канал</a>
+      <button class="ghost-button more-updates-dismiss" type="button" data-close-more>Закрыть</button>
+    </dialog>
 
     <dialog class="modal purchase-modal" id="purchaseModal"><div class="modal-head"><div><span class="eyebrow">Покупка автомобиля</span><h2 id="purchaseModalTitle">Покупка автомобиля</h2></div><button type="button" data-close-purchase aria-label="Закрыть">×</button></div><p id="purchaseModalText">Цена автомобиля</p><div class="purchase-modal__amount" id="purchaseModalAmount"></div><p class="security-note" id="purchaseModalNote">Деньги будут под защитой до получения автомобиля. Продавец получит их только после вашего подтверждения.</p><button class="publish-button" id="purchaseModalAction" type="button">Подтвердить покупку</button><button class="ghost-button" type="button" data-close-purchase>Отмена</button></dialog>
     <dialog class="modal promotion-choice-modal" id="promotionChoiceModal"><div class="modal-head"><div><span class="eyebrow">Продвижение</span><h2>Закрепить объявление?</h2></div></div><p>Ваше объявление будет показываться выше остальных в течение 24 часов.</p><div class="purchase-modal__amount">5 <span class="af-coin af-coin--small" aria-label="AF Coins"></span></div><button class="publish-button" id="promotionChoicePaid" type="button">Закрепить за 5 AF</button><button class="ghost-button" id="promotionChoiceFree" type="button">Опубликовать бесплатно</button></dialog>
