@@ -88,6 +88,7 @@
     shell: document.querySelector(".app-shell"),
     views: [...document.querySelectorAll("[data-view]")],
     navButtons: [...document.querySelectorAll("[data-nav-target]")],
+    moreUpdatesModal: document.getElementById("moreUpdatesModal"),
     marketCars: document.getElementById("marketCars"),
     uniqueCars: document.getElementById("uniqueCars"),
     marketEmpty: document.getElementById("marketEmptyState"),
@@ -284,6 +285,29 @@
     trainingForm?.elements.price_af_coins?.setAttribute("min", "0.01");
     document.getElementById("trainingMaterialForm")?.elements.title?.removeAttribute("maxlength");
     document.addEventListener("click", handleClick);
+    bind(elements.moreUpdatesModal, "click", (event) => {
+      const rect = elements.moreUpdatesModal.getBoundingClientRect();
+      const outside = event.target === elements.moreUpdatesModal && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom);
+      if (outside || event.target.closest("[data-close-more]")) closeMoreOverlay();
+    }, "moreUpdatesClick");
+    bind(elements.moreUpdatesModal, "cancel", (event) => { event.preventDefault(); closeMoreOverlay(); }, "moreUpdatesCancel");
+    bind(elements.moreUpdatesModal, "close", () => {
+      // An old close event must not reset a newly reopened dialog.
+      if (elements.moreUpdatesModal.open) return;
+      document.documentElement.classList.remove("more-overlay-open");
+      document.querySelector('[data-nav-target="more"]').setAttribute("aria-expanded", "false");
+      syncBackNavigation();
+    }, "moreUpdatesClose");
+    bind(document.getElementById("moreUpdatesChannel"), "click", (event) => {
+      const webApp = window.Telegram?.WebApp;
+      if (typeof webApp?.openTelegramLink !== "function") return; // The anchor is the browser fallback.
+      try {
+        webApp.openTelegramLink(event.currentTarget.href);
+        event.preventDefault();
+      } catch (error) {
+        console.warn("Telegram channel opening failed; using the normal link.", error);
+      }
+    }, "moreUpdatesChannel");
     bind(document.getElementById("infoButton"), "click", () => openSecondary("help"), "infoButton");
     renderHelpCenter();
     bind(document.getElementById("topupAmount"), "input", renderTopupSelection, "topupSelection");
@@ -768,7 +792,25 @@ function handleClick(event) {
     }
   }
 
+  function openMoreOverlay() {
+    if (elements.moreUpdatesModal.open) return;
+    elements.moreUpdatesModal.showModal();
+    document.documentElement.classList.add("more-overlay-open");
+    document.querySelector('[data-nav-target="more"]').setAttribute("aria-expanded", "true");
+    syncBackNavigation();
+  }
+
+  function closeMoreOverlay() {
+    if (!elements.moreUpdatesModal.open) return;
+    elements.moreUpdatesModal.close();
+    document.documentElement.classList.remove("more-overlay-open");
+    document.querySelector('[data-nav-target="more"]').setAttribute("aria-expanded", "false");
+    state.backBlockedUntil = Date.now() + 450;
+    syncBackNavigation();
+  }
+
   async function goBack() {
+    if (elements.moreUpdatesModal.open) return closeMoreOverlay();
     if (primaryViews.has(state.currentView) || Date.now() < state.backBlockedUntil) return;
     state.backBlockedUntil = Date.now() + 450;
     const entry = state.navigationStack.pop();
@@ -780,7 +822,7 @@ function handleClick(event) {
   }
 
   function syncBackNavigation() {
-    const internal = !primaryViews.has(state.currentView);
+    const internal = elements.moreUpdatesModal.open || !primaryViews.has(state.currentView);
     document.querySelectorAll("[data-back]").forEach(button => {
       button.hidden = primaryViews.has(button.closest("[data-view]")?.dataset.view);
     });
@@ -791,11 +833,12 @@ function handleClick(event) {
   }
 
   async function navigate(viewName, options = {}) {
+    if (viewName === "more") return openMoreOverlay();
     // Preserve old links without keeping removed navigation screens.
-    if (viewName === "more") viewName = "help";
     if (viewName === "settings") viewName = "profile";
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
+    if (elements.moreUpdatesModal.open) closeMoreOverlay();
     if (state.currentView === "deal-chat" && viewName !== "deal-chat") releaseChatPresence();
     if (viewName !== state.currentView && !options.back) {
       if (primaryViews.has(viewName)) state.navigationStack = [];
