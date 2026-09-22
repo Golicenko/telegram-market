@@ -8,6 +8,14 @@ from .models import Deal, DealEvent, Notification, User, Conversation
 ACTIVITY_EVENTS = ("funds_reserved", "message_sent", "status_changed", "admin_resume")
 
 
+def delivery_deadline_expired(deal, now):
+    deadline = deal.seller_delivery_deadline
+    if deadline and deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=UTC)
+    return bool(deadline and deadline <= now and deal.status in {"paid", "seller_contacted"}
+                and deal.transfer_started_at is None)
+
+
 def last_activity_query():
     return select(func.max(DealEvent.created_at)).where(
         DealEvent.deal_id == Deal.id, DealEvent.event_type.in_(ACTIVITY_EVENTS)
@@ -96,6 +104,8 @@ async def admin_nonfinancial_action(session, admin, deal_id, action, reason, req
             elif deal.seller_response_deadline:
                 # Explicitly resumed disputes must not inherit an already expired deadline.
                 deal.seller_response_deadline = datetime.now(UTC) + timedelta(hours=24)
+            if not deal.transfer_started_at:
+                deal.seller_delivery_deadline = datetime.now(UTC) + timedelta(hours=24)
             if deal.conversation_id:
                 conversation = await session.get(Conversation, deal.conversation_id)
                 if conversation: conversation.archived_at = None

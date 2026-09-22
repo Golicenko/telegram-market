@@ -19,14 +19,14 @@ test("deal delivery form persists via the backend and has a mobile-safe layout",
   assert.match(html, /id="dealDeliveryPanel"/);
   assert.match(app, /`\/deals\/\$\{dealId\}\/delivery-details`/);
   assert.match(app, /buyer_game_id: gameId/);
-  assert.match(app, /buyer_server: server/);
-  assert.match(app, /preferred_time: preferredTime/);
-  assert.match(app, /Время указывается по МСК/);
+  assert.doesNotMatch(app, /name="buyer_server"|name="preferred_time"|buyer_server: server|preferred_time: preferredTime/);
+  assert.match(app, /seller_delivery_deadline/);
+  assert.match(app, /У вас есть 24 часа, чтобы передать машину покупателю/);
   assert.match(app, /data-copy-game-id/);
   assert.match(app, /✅ ID скопирован/);
   assert.match(app, /activeField\?\.closest\?\.\("\.chat-view"\)/);
   assert.match(app, /\["INPUT", "TEXTAREA", "SELECT"\]\.includes\(activeField\.tagName\)/);
-  assert.match(css, /\.deal-delivery__form input\[type="time"\].*font-size:16px/);
+  assert.match(css, /\.deal-delivery__form input\[type="text"\].*font-size:16px/);
   assert.match(app, /hasDeliveryDetails && \["paid", "seller_contacted"\]/);
   assert.match(app, /✅ Машина передана/);
   assert.match(app, /✅ Да, машина у меня/);

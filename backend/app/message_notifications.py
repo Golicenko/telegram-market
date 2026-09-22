@@ -89,7 +89,7 @@ async def claim_delivery(session, user_id, now):
                       {"admin_deal_id": latest.payload["admin_deal_id"]} if latest.payload.get("admin_deal_id") else
                       {"admin_withdrawal_id": latest.payload["admin_withdrawal_id"]} if latest.payload.get("admin_withdrawal_id") else
                       {"support_case": latest.payload["ticket_id"]} if latest.payload.get("ticket_id") else
-                      {"deal_id": latest.payload["deal_id"]} if latest.notification_type == "deal_review_status" else
+                      {"deal_id": latest.payload["deal_id"]} if latest.notification_type in {"deal_review_status", "deal_admin_message", "deal_delivery_timeout"} else
                       {"view": "profile"})
         for notice in eligible:
             notice.delivery_status = "sending"

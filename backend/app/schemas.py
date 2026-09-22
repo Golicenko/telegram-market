@@ -167,6 +167,7 @@ class DealOut(ORMModel):
     preferred_delivery_time: str | None
     delivery_timezone: str | None
     seller_response_deadline: datetime | None
+    seller_delivery_deadline: datetime | None = None
     cancellation_reason: str | None = None
     seller_responded_at: datetime | None
     transfer_started_at: datetime | None
@@ -176,8 +177,6 @@ class DealOut(ORMModel):
 
 class DealDeliveryDetailsCreate(BaseModel):
     buyer_game_id: str = Field(min_length=1, max_length=128)
-    buyer_server: str = Field(min_length=1, max_length=128)
-    preferred_time: str = Field(pattern="^([01]\\d|2[0-3]):[0-5]\\d$")
 
     @field_validator("buyer_game_id")
     @classmethod
@@ -186,20 +185,6 @@ class DealDeliveryDetailsCreate(BaseModel):
         if not value:
             raise ValueError("Укажите игровой ID")
         return value
-
-    @field_validator("buyer_server")
-    @classmethod
-    def normalize_server(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Укажите сервер")
-        return value
-
-    @field_validator("preferred_time")
-    @classmethod
-    def normalize_preferred_time(cls, value: str) -> str:
-        return value.strip()
-
 
 class MessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=4000)

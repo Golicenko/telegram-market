@@ -337,6 +337,7 @@ class Deal(Base, TimestampMixin):
     delivery_timezone: Mapped[str | None] = mapped_column(String(64))
     delivery_details_submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     seller_response_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    seller_delivery_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     cancellation_reason: Mapped[str | None] = mapped_column(String(48))
     seller_responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     seller_timeout_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

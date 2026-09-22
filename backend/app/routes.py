@@ -114,6 +114,9 @@ from .schemas import (
 from .services import (
     adjust_balance,
     auto_cancel_unanswered_deal,
+    auto_cancel_undelivered_deal,
+    send_admin_deal_message,
+    add_admin_deal_message_locked,
     cancel_deal,
     cancel_withdrawal,
     checkout_cart,
@@ -604,6 +607,7 @@ async def notify_deal_purchase_seller(deal_id: uuid.UUID) -> None:
             now = datetime.now(UTC)
             if (
                 not deal
+                or deal.status not in {"paid", "seller_contacted", "transfer_in_progress"}
                 or deal.seller_purchase_notification_status not in {"pending", "failed"}
                 or int(deal.seller_purchase_notification_attempts or 0) >= get_settings().deal_notification_max_attempts
                 or (
@@ -612,7 +616,7 @@ async def notify_deal_purchase_seller(deal_id: uuid.UUID) -> None:
                 )
             ):
                 return
-            if not (deal.buyer_game_id and deal.buyer_server and deal.preferred_delivery_time and deal.delivery_timezone):
+            if not deal.buyer_game_id:
                 return
             deal.seller_purchase_notification_status = "sending"
             deal.seller_purchase_notification_claimed_at = now
@@ -629,8 +633,6 @@ async def notify_deal_purchase_seller(deal_id: uuid.UUID) -> None:
                     "deal_id": str(deal.id),
                     "buyer_name": (" ".join(filter(None, [buyer.first_name, buyer.last_name])) or "Покупатель") if buyer else "Покупатель",
                     "buyer_game_id": deal.buyer_game_id,
-                    "buyer_server": deal.buyer_server,
-                    "preferred_delivery_time": deal.preferred_delivery_time,
                     "photo_url": photo_url,
                 }
             else:
@@ -707,10 +709,11 @@ async def recover_seller_response_timeouts() -> None:
             select(Deal.id)
             .where(
                 Deal.status.in_(("paid", "seller_contacted")),
-                Deal.seller_response_deadline.is_not(None),
-                Deal.seller_response_deadline <= now,
-                Deal.seller_responded_at.is_(None),
-                Deal.seller_timeout_processed_at.is_(None),
+                or_(
+                    and_(Deal.seller_response_deadline <= now, Deal.seller_responded_at.is_(None),
+                         Deal.seller_timeout_processed_at.is_(None)),
+                    and_(Deal.seller_delivery_deadline <= now, Deal.transfer_started_at.is_(None)),
+                ),
             )
             .order_by(Deal.seller_response_deadline)
             .limit(100)
@@ -721,6 +724,9 @@ async def recover_seller_response_timeouts() -> None:
                 result = await auto_cancel_unanswered_deal(session, deal_id, now=now)
             if result:
                 await notify_seller_timeout_cancellation(deal_id)
+            else:
+                async with SessionLocal() as session:
+                    await auto_cancel_undelivered_deal(session, deal_id, now=now)
         except Exception as exc:
             deal_notification_logger.error(
                 "seller_response_timeout_deal_failed deal_id=%s error_type=%s",
@@ -801,6 +807,8 @@ async def recover_deal_purchase_notifications() -> None:
             select(Deal.id).where(
                 Deal.status.in_(("paid", "seller_contacted")),
                 Deal.delivery_details_submitted_at.is_not(None),
+                Deal.status.in_(("paid", "seller_contacted", "transfer_in_progress")),
+                Deal.buyer_game_id.is_not(None),
                 Deal.seller_purchase_notification_status.in_(("pending", "failed")),
                 Deal.seller_purchase_notification_attempts < get_settings().deal_notification_max_attempts,
                 or_(
@@ -2696,7 +2704,7 @@ async def update_deal_delivery_details(
     session: AsyncSession = Depends(get_session),
 ):
     deal = await save_deal_delivery_details(
-        session, user, deal_id, payload.buyer_game_id, payload.buyer_server, payload.preferred_time
+        session, user, deal_id, payload.buyer_game_id
     )
     background_tasks.add_task(notify_deal_purchase_seller, deal.id)
     return deal
@@ -3094,6 +3102,12 @@ async def perform_admin_deal_control(deal_id: uuid.UUID, payload: DealControlAct
     return await admin_nonfinancial_action(session, admin, deal_id, payload.action, payload.reason, payload.request_id)
 
 
+@router.post("/admin/deals/{deal_id}/messages", response_model=ConversationMessageOut, status_code=201)
+async def admin_message_deal(deal_id: uuid.UUID, payload: ConversationMessageCreate,
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    return await send_admin_deal_message(session, admin, deal_id, payload.body, payload.client_message_id)
+
+
 @router.post("/admin/deals/{deal_id}/resolve", response_model=DealOut)
 async def admin_resolve_deal(
     deal_id: uuid.UUID,
@@ -3395,6 +3409,9 @@ async def admin_reply_to_support_ticket(
     ticket = await session.get(SupportTicket, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Обращение не найдено")
+    deal = None
+    if ticket.case_type == "deal" and ticket.deal_id:
+        deal = await session.scalar(select(Deal).where(Deal.id == ticket.deal_id).with_for_update())
     if payload.client_request_id:
         existing = await session.scalar(select(SupportMessage).where(
             SupportMessage.ticket_id == ticket.id,
@@ -3423,6 +3440,11 @@ async def admin_reply_to_support_ticket(
     if ticket.case_type == "deal":
         recipient_ids.update({ticket.buyer_id, ticket.seller_id})
     recipient_ids.discard(None)
+    if deal and deal.status in {"paid", "seller_contacted", "transfer_in_progress", "disputed"}:
+        await add_admin_deal_message_locked(session, admin, deal, payload.message,
+            payload.client_request_id or uuid.uuid4())
+        # The explicit deal notification replaces the weaker support notice.
+        recipient_ids.difference_update({deal.buyer_id, deal.seller_id})
     for recipient_id in recipient_ids:
         await create_notification(
             session,
