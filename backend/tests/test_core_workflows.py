@@ -51,6 +51,7 @@ def test_telegram_init_data_signature_and_tampering():
 
 def test_listing_accepts_multiple_images_and_unbounded_positive_stats():
     values = {
+        "game_version": "car_parking_1",
         "brand": "Произвольное название автомобиля " + ("X" * 5000),
         "model": None,
         "power_hp": 1_000_000_000_000,
@@ -150,6 +151,7 @@ class FakeSession:
 async def test_creating_multiple_regular_listings_is_free():
     seller = User(id=uuid.uuid4(), telegram_id=7, first_name="Seller", role="user")
     payload = ListingCreate(
+        game_version="car_parking_1",
         brand="BMW",
         model="M5",
         power_hp=600,
@@ -171,6 +173,7 @@ async def test_listing_creation_retry_returns_the_original_listing():
     seller = User(id=uuid.uuid4(), telegram_id=70, first_name="Seller", role="user")
     request_id = uuid.uuid4()
     payload = ListingCreate(
+        game_version="car_parking_1",
         client_request_id=request_id,
         brand="Retry car",
         power_hp=100,
@@ -201,6 +204,7 @@ async def test_promotion_costs_5_and_retry_does_not_charge_twice():
     user = User(id=user_id, telegram_id=8, first_name="Seller", role="user")
     wallet = Wallet(user_id=user_id, purchased_balance=Decimal("100"), earned_balance=0, purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=0, version=0)
     listing = Listing(
+        game_version="car_parking_1",
         id=uuid.uuid4(), seller_id=user_id, listing_type="regular", status="active",
         brand="BMW", model="M5", power_hp=600, max_speed_kph=300,
         description="Описание", price_af_coins=100, pinned=False, views_count=0,
@@ -223,6 +227,7 @@ async def test_regular_listing_creation_and_five_af_pin_are_atomic_and_idempoten
     )
     request_id = uuid.uuid4()
     payload = ListingCreate(
+        game_version="car_parking_1",
         client_request_id=request_id, brand="Pinned car", power_hp=100, max_speed_kph=200,
         description="Описание", price_af_coins=10, image_urls=["/api/media/car"],
         promote_for_24h=True,
@@ -255,6 +260,7 @@ async def test_regular_listing_pin_shortfall_does_not_publish_or_debit():
         purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=0, version=0,
     )
     payload = ListingCreate(
+        game_version="car_parking_1",
         client_request_id=uuid.uuid4(), brand="Car", power_hp=100, max_speed_kph=200,
         description="Описание", price_af_coins=10, image_urls=["/api/media/car"],
         promote_for_24h=True,
@@ -297,6 +303,7 @@ async def test_listing_promotion_shortfall_allows_exact_three_xtr_intent():
 @pytest.mark.asyncio
 async def test_expired_pin_is_removed_without_deleting_listing():
     listing = Listing(
+        game_version="car_parking_1",
         id=uuid.uuid4(), seller_id=uuid.uuid4(), listing_type="regular", status="active",
         brand="Car", model="", power_hp=100, max_speed_kph=200, description="Описание",
         price_af_coins=10, pinned=True, pinned_until=time_to_datetime(time.time() - 60), views_count=0,

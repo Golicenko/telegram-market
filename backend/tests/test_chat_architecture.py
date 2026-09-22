@@ -93,6 +93,7 @@ async def test_buyer_and_seller_reopen_the_same_deal_conversation_without_duplic
     buyer = User(id=uuid.uuid4(), telegram_id=10, first_name="Buyer", role="user")
     seller = User(id=uuid.uuid4(), telegram_id=11, first_name="Seller", role="user")
     listing = Listing(
+        game_version="car_parking_1",
         id=uuid.uuid4(), seller_id=seller.id, listing_type="regular", status="reserved",
         brand="BMW M5", model="", power_hp=600, max_speed_kph=300, description="Описание",
         price_af_coins=Decimal("100"), delivery_time_estimate="up_to_30m", views_count=0, pinned=False,
@@ -116,6 +117,7 @@ async def test_buyer_and_seller_reopen_the_same_deal_conversation_without_duplic
 
 def test_listing_create_accepts_new_vehicle_title_without_model_and_validates_delivery():
     payload = ListingCreate(
+        game_version="car_parking_1",
         brand="BMW M5", power_hp=600, max_speed_kph=300, description="Описание",
         price_af_coins=100, delivery_time_estimate="up_to_30m", image_urls=["/uploads/car.jpg"],
     )
@@ -123,6 +125,7 @@ def test_listing_create_accepts_new_vehicle_title_without_model_and_validates_de
     assert payload.delivery_time_estimate == "up_to_30m"
     with pytest.raises(ValidationError):
         ListingCreate(
+            game_version="car_parking_1",
             brand="BMW M5", power_hp=600, max_speed_kph=300, description="Описание",
             price_af_coins=99, delivery_time_estimate="tomorrow", image_urls=["/uploads/car.jpg"],
         )

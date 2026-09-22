@@ -185,6 +185,7 @@ async def create_listing(
                     promotion_before = wallet_snapshot(promotion_wallet)
                 listing = Listing(
                     seller_id=seller.id,
+                    game_version=payload.game_version,
                     client_request_id=request_id,
                     listing_type=listing_type,
                     status="active",

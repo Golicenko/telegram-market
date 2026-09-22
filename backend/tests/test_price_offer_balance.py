@@ -60,6 +60,7 @@ def offer_fixture(balance: Decimal):
     buyer = User(id=uuid.uuid4(), telegram_id=101, first_name="Buyer", role="user")
     seller = User(id=uuid.uuid4(), telegram_id=202, first_name="Seller", role="user")
     listing = Listing(
+        game_version="car_parking_1",
         id=uuid.uuid4(), seller_id=seller.id, listing_type="regular", status="active",
         brand="Car", model="", power_hp=1, max_speed_kph=1, description="Description",
         price_af_coins=Decimal("100"), delivery_time_estimate="up_to_30m", views_count=0, pinned=False,

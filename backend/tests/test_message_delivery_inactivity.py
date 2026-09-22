@@ -314,7 +314,7 @@ async def test_deal_refund_and_hidden_listing_history_survive_repeated_worker(db
     deal, _, _ = await purchase_listing(bridge, buyer, listing.id)
     with bridge.session.begin():
         deal.seller_response_deadline = datetime.now(UTC) - timedelta(hours=1)
-        other = Listing(id=uuid.uuid4(), seller_id=seller.id, listing_type="regular", status="active",
+        other = Listing(game_version="car_parking_1", id=uuid.uuid4(), seller_id=seller.id, listing_type="regular", status="active",
             brand="Other", model="", power_hp=1, max_speed_kph=1, description="", price_af_coins=100)
         bridge.session.add(other)
     assert await auto_cancel_unanswered_deal(bridge, deal.id)

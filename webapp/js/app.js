@@ -45,6 +45,7 @@
     withdrawalBusy: false,
     catalog: { brands: [] },
     photoFiles: [],
+    pinnedCardTimer: null,
     currentConversation: null,
     selectedListing: null,
     editingListingId: null,
@@ -325,6 +326,11 @@
     bind(elements.brandInput, "input", updateBrandSuggestions, "brandInput");
     bind(elements.carPhotos, "change", previewPhotos, "carPhotos");
     bind(elements.carForm, "submit", submitListing, "carForm");
+    bind(elements.carForm, "change", (event) => {
+      if (event.target.name === "game_version") renderListingGameSelection();
+    }, "listingGameChoice");
+    document.addEventListener("visibilitychange", refreshPinnedCardAppearance);
+    window.addEventListener("pageshow", refreshPinnedCardAppearance);
     bind(document.getElementById("topupForm"), "submit", requestStarInvoice, "topupForm");
     bind(elements.chatForm, "submit", sendChatMessage, "chatForm");
     bind(document.getElementById("chatHideButton"), "click", hideCurrentConversation, "chatHideButton");
@@ -1076,6 +1082,7 @@ function handleClick(event) {
     state.pendingListingRequestId = null;
     state.photoFiles = [];
     elements.carForm.reset();
+    renderListingGameSelection();
     elements.photoPreview.replaceChildren();
     document.getElementById("listingType").value = mode;
     document.getElementById("addTitle").textContent = mode === "unique" ? "Добавить уникальную машину" : "Добавить автомобиль";
@@ -1220,29 +1227,59 @@ function handleClick(event) {
     });
   }
 
+  function listingGameLabel(listing) {
+    if (listing?.game_version === "car_parking_1") return "Car Parking 1";
+    if (listing?.game_version === "car_parking_2") return "Car Parking 2";
+    return "Игра не указана"; // Never silently label an unknown/new value as CP1.
+  }
+
+  function renderListingGameSelection() {
+    const game = elements.carForm.elements.game_version.value;
+    document.getElementById("listingGameSelection").textContent = game
+      ? `Выбрано: ${listingGameLabel({ game_version: game })}` : "Выбор игры обязателен";
+  }
+
+  function isListingPinned(listing, now = Date.now()) {
+    return Boolean(listing.pinned) && Date.parse(listing.pinned_until) > now;
+  }
+
+  function refreshPinnedCardAppearance() {
+    window.clearTimeout(state.pinnedCardTimer);
+    state.pinnedCardTimer = null;
+    const now = Date.now();
+    let nextExpiry = Infinity;
+    document.querySelectorAll(".car-card[data-pinned-until]").forEach(card => {
+      const expiry = Date.parse(card.dataset.pinnedUntil);
+      const active = expiry > now;
+      card.classList.toggle("is-pinned", active);
+      if (active) nextExpiry = Math.min(nextExpiry, expiry);
+    });
+    // Visual expiry only: no wallet/state mutation or change to promotion rules.
+    if (Number.isFinite(nextExpiry) && !document.hidden) {
+      state.pinnedCardTimer = window.setTimeout(refreshPinnedCardAppearance, Math.min(nextExpiry - now + 1, 2147483647));
+    }
+  }
+
   function renderListings() {
     const regular = getFilteredRegular();
     elements.marketCars.replaceChildren(...regular.map(createListingCard));
     elements.uniqueCars.replaceChildren(...state.unique.map(createListingCard));
     elements.marketEmpty.hidden = regular.length > 0;
     elements.uniqueEmpty.hidden = state.unique.length > 0;
+    refreshPinnedCardAppearance();
     observeVisibleListingCards();
   }
 
   function createListingCard(listing) {
     const card = document.createElement("article");
     card.className = `car-card${listing.listing_type === "unique" ? " is-unique" : ""}`;
+    card.classList.toggle("is-pinned", isListingPinned(listing));
+    if (listing.pinned && listing.pinned_until) card.dataset.pinnedUntil = listing.pinned_until;
     if (listing.listing_type === "unique") {
       const label = document.createElement("span");
       label.className = "unique-label";
       label.textContent = "Уникальная";
       card.append(label);
-    }
-    if (listing.pinned) {
-      const pin = document.createElement("span");
-      pin.className = "pin-label";
-      pin.textContent = "✦";
-      card.append(pin);
     }
     const media = document.createElement("div");
     media.className = "car-card__media";
@@ -1267,6 +1304,10 @@ function handleClick(event) {
     }
     const body = document.createElement("div");
     body.className = "car-card__body";
+    const game = document.createElement("span");
+    game.className = "listing-game-badge";
+    game.textContent = listingGameLabel(listing);
+    media.append(game);
     const title = document.createElement("h3");
     title.textContent = listingTitle(listing);
     const price = document.createElement("div");
@@ -1637,6 +1678,7 @@ function handleClick(event) {
     button.disabled = true;
     try {
       const payload = {
+        game_version: String(formData.get("game_version") || ""),
         brand: String(formData.get("brand")).trim(),
         power_hp: Number(formData.get("power_hp")),
         max_speed_kph: Number(formData.get("max_speed_kph")),
@@ -1648,6 +1690,7 @@ function handleClick(event) {
         state.pendingListingRequestId ||= createRequestId();
         payload.client_request_id = state.pendingListingRequestId;
       }
+      if (!["car_parking_1", "car_parking_2"].includes(payload.game_version)) throw new Error("Выберите Car Parking 1 или Car Parking 2");
       if (!payload.brand) throw new Error("Введите название автомобиля");
       if (!Number.isInteger(payload.power_hp) || payload.power_hp <= 0) throw new Error("Мощность должна быть положительным целым числом");
       if (!Number.isInteger(payload.max_speed_kph) || payload.max_speed_kph <= 0) throw new Error("Максимальная скорость должна быть положительным целым числом");
@@ -1768,6 +1811,9 @@ function handleClick(event) {
     if (imageUrl) elements.listingPageImage.src = imageUrl;
     else elements.listingPageImage.removeAttribute("src");
     elements.listingPageKind.textContent = listing.listing_type === "unique" ? "Уникальная машина" : "Объявление";
+    const gameName = listingGameLabel(listing);
+    document.getElementById("listingPageGame").textContent = gameName;
+    document.getElementById("listingPageGameNote").textContent = listing.game_version ? `Машина из ${gameName}` : gameName;
     elements.listingPageTitle.textContent = listingTitle(listing);
     elements.listingPageBrand.textContent = listing.brand || "Автомобиль";
     const effectivePrice = listing.effective_price_af_coins ?? listing.price_af_coins;
@@ -1830,6 +1876,8 @@ function handleClick(event) {
     state.pendingListingRequestId = null;
     state.photoFiles = [];
     elements.carForm.reset(); elements.photoPreview.replaceChildren();
+    elements.carForm.elements.game_version.value = listing.game_version || "";
+    renderListingGameSelection();
     elements.brandInput.value = listing.brand;
     elements.carForm.elements.power_hp.value = listing.power_hp; elements.carForm.elements.max_speed_kph.value = listing.max_speed_kph; elements.carForm.elements.description.value = listing.description; elements.priceInput.value = listing.price_af_coins;
     elements.carForm.elements.delivery_time_estimate.value = listing.delivery_time_estimate || "up_to_1h";
@@ -2018,7 +2066,7 @@ function handleClick(event) {
       else image.className = "profile-mini-placeholder";
       const copy = document.createElement("div");
       const title = document.createElement("strong"); title.textContent = listingTitle(listing);
-      const meta = document.createElement("small"); meta.textContent = statusLabel(listing.status);
+      const meta = document.createElement("small"); meta.textContent = `${listingGameLabel(listing)} · ${statusLabel(listing.status)}`;
       copy.append(title, meta);
       const price = document.createElement("b"); price.append(document.createTextNode(`${formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins)} `), coin("af-coin--small"));
       row.append(image, copy, price);
@@ -2102,7 +2150,8 @@ function handleClick(event) {
         const image = document.createElement("img"); image.src = absoluteMediaUrl(thread.listing.images[0]); image.alt = listingTitle(thread.listing); image.loading = "lazy"; photo.append(image);
       } else { photo.textContent = "AF"; photo.setAttribute("aria-label", "Без фотографии"); }
       const copy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = listingTitle(thread.listing);
-      const date = document.createElement("small"); date.textContent = formatDate(thread.last_message_at || thread.created_at); copy.append(title, date);
+      const game = document.createElement("small"); game.textContent = listingGameLabel(thread.listing);
+      const date = document.createElement("small"); date.textContent = formatDate(thread.last_message_at || thread.created_at); copy.append(title, game, date);
       const identity = document.createElement("span"); identity.textContent = [thread.counterparty?.name || "Пользователь", thread.counterparty?.username ? `@${thread.counterparty.username}` : ""].filter(Boolean).join(" · ");
       const role = document.createElement("small"); role.textContent = String(thread.buyer_id) === String(state.me.user.id) ? "Вы — покупатель" : "Вы — продавец";
       const price = document.createElement("span"); price.textContent = `${formatNumber(thread.deal?.price_af_coins ?? thread.accepted_price_af_coins ?? thread.listing?.price_af_coins)} AF Coins`;
@@ -2274,7 +2323,7 @@ async function hideCurrentConversation() {
     const listingCopy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = listingTitle(details.listing);
     const priceValue = details.deal?.price_af_coins ?? details.accepted_price_af_coins ?? details.listing.price_af_coins;
     const price = document.createElement("small"); price.textContent = `${formatNumber(priceValue)} AF Coins`;
-    const context = document.createElement("small"); context.textContent = `${details.deal ? dealStatusLabel(details.deal.status) : "Объявление"} · передача ${deliveryTimeLabel(details.listing.delivery_time_estimate)}`;
+    const context = document.createElement("small"); context.textContent = `${listingGameLabel(details.listing)} · ${details.deal ? dealStatusLabel(details.deal.status) : "Объявление"} · передача ${deliveryTimeLabel(details.listing.delivery_time_estimate)}`;
     if (isDealThread) {
       listingCopy.append(title, price, context);
       const listingAction = document.createElement("span"); listingAction.textContent = "Открыть ›"; elements.chatListing.append(listingCopy, listingAction);

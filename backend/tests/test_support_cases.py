@@ -75,6 +75,7 @@ def support_fixture():
     seller = User(id=uuid.uuid4(), telegram_id=20, first_name="Seller", username="seller", role="user")
     admin = User(id=uuid.uuid4(), telegram_id=30, first_name="Admin", role="admin", bot_started=True)
     listing = Listing(
+        game_version="car_parking_1",
         id=uuid.uuid4(), seller_id=seller.id, listing_type="regular", status="reserved",
         brand="Test car", model="", power_hp=1, max_speed_kph=1, description="Description",
         price_af_coins=Decimal("100"), delivery_time_estimate="up_to_1h", views_count=0, pinned=False,

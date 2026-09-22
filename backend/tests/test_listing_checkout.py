@@ -75,6 +75,7 @@ def make_wallet(user_id, amount):
 
 def make_listing(seller_id, price="100", status="active"):
     return Listing(
+        game_version="car_parking_1",
         id=uuid.uuid4(), seller_id=seller_id, listing_type="regular", status=status,
         brand="BMW", model="M5", power_hp=600, max_speed_kph=300,
         description="Описание", price_af_coins=Decimal(price), views_count=0, pinned=False,
