@@ -65,6 +65,7 @@
     dealActionPending: false,
     adminDealControl: null,
     adminDealRequest: null,
+    adminDealMessageRequest: null,
     listingViewObserver: null,
     listingViewTimers: new Map(),
     listingViewRequests: new Set(),
@@ -845,7 +846,11 @@ function handleClick(event) {
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
     if (elements.moreUpdatesModal.open) closeMoreOverlay();
-    if (state.currentView === "deal-chat" && viewName !== "deal-chat") releaseChatPresence();
+    if (state.currentView === "deal-chat" && viewName !== "deal-chat") {
+      releaseChatPresence();
+      window.clearInterval(state.dealTimerId);
+      state.dealTimerId = null;
+    }
     if (viewName !== state.currentView && !options.back) {
       if (primaryViews.has(viewName)) state.navigationStack = [];
       else state.navigationStack.push({
@@ -998,7 +1003,7 @@ function handleClick(event) {
   const dealChanged = refreshedDeal && (
     previousDeal?.status !== refreshedDeal.status ||
     previousDeal?.buyer_game_id !== refreshedDeal.buyer_game_id ||
-    previousDeal?.preferred_delivery_time !== refreshedDeal.preferred_delivery_time
+    previousDeal?.seller_delivery_deadline !== refreshedDeal.seller_delivery_deadline
   );
   if (refreshedDeal) state.currentConversation.deal = refreshedDeal;
   if (dealDetails) state.currentConversation = dealDetails;
@@ -1275,14 +1280,14 @@ function handleClick(event) {
     card.className = `car-card${listing.listing_type === "unique" ? " is-unique" : ""}`;
     card.classList.toggle("is-pinned", isListingPinned(listing));
     if (listing.pinned && listing.pinned_until) card.dataset.pinnedUntil = listing.pinned_until;
+    const media = document.createElement("div");
+    media.className = "car-card__media";
     if (listing.listing_type === "unique") {
       const label = document.createElement("span");
       label.className = "unique-label";
       label.textContent = "Уникальная";
-      card.append(label);
+      media.append(label);
     }
-    const media = document.createElement("div");
-    media.className = "car-card__media";
     if (listing.images?.[0]) {
       const image = document.createElement("img");
       image.src = absoluteMediaUrl(listing.images[0]);
@@ -1306,6 +1311,7 @@ function handleClick(event) {
     body.className = "car-card__body";
     const game = document.createElement("span");
     game.className = "listing-game-badge";
+    game.dataset.game = listing.game_version;
     game.textContent = listingGameLabel(listing);
     media.append(game);
     const title = document.createElement("h3");
@@ -2387,7 +2393,7 @@ async function hideCurrentConversation() {
     panel.hidden = !deal;
     if (!deal) return;
     const isBuyer = deal.buyer_id === state.me.user.id;
-    const hasDetails = Boolean(deal.buyer_game_id && deal.buyer_server && deal.preferred_delivery_time && deal.delivery_timezone);
+    const hasDetails = Boolean(deal.buyer_game_id);
     const requiresDetails = isBuyer && !hasDetails && ["paid", "seller_contacted"].includes(deal.status);
     document.body.classList.toggle("deal-details-required", requiresDetails);
 
@@ -2409,13 +2415,13 @@ async function hideCurrentConversation() {
     }
     if (isBuyer && hasDetails) {
       title.textContent = "⏳ Ожидается передача автомобиля";
-      copy.textContent = `Продавец получил ваши данные.\nID: ${deal.buyer_game_id}\nСервер: ${deal.buyer_server}\nВремя: ${deal.preferred_delivery_time} МСК\nЕсли необходимо что-то уточнить, используйте чат ниже.`;
+      copy.textContent = `Продавец получил ваш ID: ${deal.buyer_game_id}\nЕсли необходимо что-то уточнить, используйте чат ниже.`;
       panel.append(title, copy);
       return;
     }
     if (!isBuyer && hasDetails) {
       title.textContent = "Передача автомобиля";
-      copy.textContent = `Покупатель: ${state.currentConversation?.counterparty?.name || "Покупатель"}\nСервер: ${deal.buyer_server}\nВремя: ${deal.preferred_delivery_time} МСК`;
+      copy.textContent = `Покупатель: ${state.currentConversation?.counterparty?.name || "Покупатель"}`;
       const idButton = document.createElement("button");
       idButton.type = "button";
       idButton.className = "deal-delivery__copy-id";
@@ -2426,20 +2432,17 @@ async function hideCurrentConversation() {
     }
     if (!isBuyer) {
       title.textContent = "⏳ Ожидаем данные покупателя";
-      copy.textContent = "Покупатель ещё не указал игровой ID и удобное время передачи. Как только данные появятся, этот блок обновится.";
+      copy.textContent = "Покупатель ещё не указал игровой ID. Как только ID появится, этот блок обновится.";
       panel.append(title, copy);
       return;
     }
 
     title.textContent = "✅ Машина куплена";
-    copy.textContent = "Укажите данные, чтобы продавец смог передать вам автомобиль.";
+    copy.textContent = "Укажите игровой ID, чтобы продавец смог передать вам автомобиль.";
     const form = document.createElement("form");
     form.className = "deal-delivery__form";
     form.innerHTML = `
       <label>Игровой ID<input name="buyer_game_id" type="text" inputmode="text" maxlength="128" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="AB123456" required></label>
-      <label>Сервер<input name="buyer_server" type="text" maxlength="128" autocomplete="off" placeholder="Введите сервер" required></label>
-      <label class="deal-delivery__time">Удобное время сегодня<input name="preferred_time" type="time" required></label>
-      <small>Время указывается по МСК</small>
       <button type="submit">Отправить продавцу</button>`;
     form.addEventListener("submit", submitDealDeliveryDetails);
     panel.append(title, copy, form);
@@ -2450,18 +2453,15 @@ async function hideCurrentConversation() {
     const form = event.currentTarget;
     const dealId = state.currentConversation?.deal?.id;
     const gameId = form.elements.buyer_game_id.value.trim();
-    const server = form.elements.buyer_server.value.trim();
-    const preferredTime = form.elements.preferred_time.value;
-    if (!dealId || !gameId || !server || !preferredTime) return notify("Заполните игровой ID, сервер и время");
+    if (!dealId || !gameId) return notify("Укажите игровой ID");
     const button = form.querySelector("button[type=submit]");
+    if (button.disabled) return;
     button.disabled = true;
     try {
       const updated = await api.request(`/deals/${dealId}/delivery-details`, {
         method: "PUT",
         body: JSON.stringify({
           buyer_game_id: gameId,
-          buyer_server: server,
-          preferred_time: preferredTime,
         }),
       });
       state.currentConversation.deal = updated;
@@ -2513,12 +2513,31 @@ async function hideCurrentConversation() {
     if (!deal || ["completed", "cancelled"].includes(deal.status)) return;
     const isBuyer = deal.buyer_id === state.me.user.id;
     const isSeller = deal.seller_id === state.me.user.id;
-    const hasDeliveryDetails = Boolean(deal.buyer_game_id && deal.buyer_server && deal.preferred_delivery_time && deal.delivery_timezone);
+    const hasDeliveryDetails = Boolean(deal.buyer_game_id);
+    if (isSeller && ["paid", "seller_contacted"].includes(deal.status) && deal.seller_delivery_deadline) {
+      const deadline = new Date(deal.seller_delivery_deadline).getTime();
+      if (Number.isFinite(deadline)) {
+        const block = document.createElement("div"); block.className = "seller-delivery-deadline";
+        const label = document.createElement("strong"); label.textContent = "У вас есть 24 часа, чтобы передать машину покупателю";
+        const countdown = document.createElement("span"); countdown.className = "seller-delivery-deadline__time"; countdown.setAttribute("role", "timer");
+        block.append(label, countdown); elements.dealDeliveryPanel.prepend(block);
+        const updateDeliveryTimer = () => {
+          const minutes = Math.max(0, Math.ceil((deadline - Date.now()) / 60000));
+          countdown.textContent = minutes > 0 ? `Осталось: ${Math.floor(minutes / 60)} ч ${String(minutes % 60).padStart(2, "0")} мин` : "Срок истёк · ожидается проверка сервера";
+          block.classList.toggle("is-expired", minutes === 0);
+          const transfer = elements.dealControls.querySelector('[data-deal-action="transfer"]');
+          if (transfer) transfer.disabled = minutes === 0;
+        };
+        updateDeliveryTimer();
+        state.dealTimerId = window.setInterval(updateDeliveryTimer, 1000);
+      }
+    }
     if (isSeller && hasDeliveryDetails && ["paid", "seller_contacted"].includes(deal.status)) {
       const transfer = document.createElement("button");
       transfer.className = "deal-confirm deal-transfer-critical";
       transfer.dataset.dealAction = "transfer";
       transfer.textContent = "✅ Машина передана";
+      transfer.disabled = Boolean(deal.seller_delivery_deadline && new Date(deal.seller_delivery_deadline).getTime() <= Date.now());
       elements.dealControls.append(transfer);
     }
     if (isBuyer && deal.status === "transfer_in_progress") {
@@ -3964,6 +3983,7 @@ async function hideCurrentConversation() {
 
   async function openAdminDealControl(id) {
     if (state.me?.user.role !== "admin") return;
+    const draft = state.adminDealControl?.deal.id === id ? document.getElementById("adminDealMessage")?.value || "" : "";
     try {
       const data = await api.request(`/admin/deals/${id}/control`);
       state.adminDealControl = data;
@@ -3979,7 +3999,7 @@ async function hideCurrentConversation() {
       const labels = {complete:"Завершить и выплатить продавцу",refund:"Отменить и вернуть покупателю",review:"Передать на проверку поддержки",resume:"Возобновить незавершённую сделку",comment:"Добавить внутренний комментарий"};
       for (const action of data.actions) { const button = document.createElement("button"); button.type = "button"; button.dataset.adminDealAction = action; button.textContent = labels[action]; actions.append(button); }
       const timeline = document.createElement("div"); timeline.className = "deal-timeline";
-      for (const [heading, rows] of [["История статусов",data.events.map(e => `${formatDate(e.at)} — ${e.type}${e.from_status ? `: ${dealStatusLabel(e.from_status)} → ${dealStatusLabel(e.to_status)}` : ""}${e.details?.reason ? ` · ${e.details.reason}` : ""}`)], ["Финансовые операции",data.transactions.map(t => `${formatDate(t.created_at)} — ${t.description}: ${formatNumber(t.amount)} AF · ${t.user_id}`)], ["Чат сделки (последние 200 сообщений)",data.messages.map(m => `${formatDate(m.created_at)} — ${m.sender_id === data.buyer.id ? "Покупатель" : "Продавец"}: ${m.body}`)]]) {
+      for (const [heading, rows] of [["История статусов",data.events.map(e => `${formatDate(e.at)} — ${e.type}${e.from_status ? `: ${dealStatusLabel(e.from_status)} → ${dealStatusLabel(e.to_status)}` : ""}${e.details?.reason ? ` · ${e.details.reason}` : ""}`)], ["Финансовые операции",data.transactions.map(t => `${formatDate(t.created_at)} — ${t.description}: ${formatNumber(t.amount)} AF · ${t.user_id}`)], ["Чат сделки (последние 200 сообщений)",data.messages.map(m => `${formatDate(m.created_at)} — ${m.sender_id === data.buyer.id ? "Покупатель" : m.sender_id === data.seller.id ? "Продавец" : "Администратор"}: ${m.body}`)]]) {
         const header=document.createElement("h3"); header.textContent=heading; timeline.append(header);
         for (const row of rows) {const item=document.createElement("p"); item.textContent=row; timeline.append(item);}
         if (!rows.length) {const empty=document.createElement("p");empty.textContent="Записей пока нет";timeline.append(empty);}
@@ -3987,6 +4007,28 @@ async function hideCurrentConversation() {
       const tickets=document.createElement("div"); const ticketsTitle=document.createElement("h3");ticketsTitle.textContent="Связанные обращения";tickets.append(ticketsTitle);
       for(const ticket of data.tickets){const button=document.createElement("button");button.type="button";button.textContent=`${ticket.id.slice(0,8)} · ${supportStatusLabel(ticket.status)}`;button.addEventListener("click",()=>openAdminSupportCase(ticket.id));tickets.append(button);}
       panel.replaceChildren(title,details,reasonLabel,actions,tickets,timeline);
+      const refresh = document.createElement("button"); refresh.type = "button"; refresh.textContent = "Обновить переписку";
+      refresh.addEventListener("click", () => openAdminDealControl(id)); panel.append(refresh);
+      if (["paid", "seller_contacted", "transfer_in_progress", "disputed"].includes(data.deal.status)) {
+        const form = document.createElement("form"); form.className = "admin-deal-message";
+        const label = document.createElement("label"); label.htmlFor = "adminDealMessage"; label.textContent = "Сообщение покупателю и продавцу";
+        const input = document.createElement("textarea"); input.id = "adminDealMessage"; input.rows = 3; input.maxLength = 4000; input.required = true; input.value = draft;
+        const send = document.createElement("button"); send.type = "submit"; send.textContent = "Отправить участникам";
+        form.append(label, input, send);
+        form.addEventListener("submit", async event => {
+          event.preventDefault(); if (send.disabled || !input.value.trim()) return;
+          const body = input.value.trim(); const signature = JSON.stringify({id, body});
+          if (state.adminDealMessageRequest?.signature !== signature) state.adminDealMessageRequest = {signature, id:createRequestId()};
+          send.disabled = true;
+          try {
+            await api.request(`/admin/deals/${id}/messages`, {method:"POST", body:JSON.stringify({body, client_message_id:state.adminDealMessageRequest.id})});
+            input.value = ""; state.adminDealMessageRequest = null;
+            await openAdminDealControl(id); notify("Сообщение сохранено. Уведомления участникам поставлены в очередь.");
+          } catch (error) { notify(error.message); }
+          finally { send.disabled = false; }
+        });
+        panel.append(form);
+      }
       panel.scrollIntoView({block:"start"});
     } catch(error){reportClientError("admin_deal_control",error);notify("Не удалось открыть управление сделкой. Проверьте доступ и повторите.");}
   }

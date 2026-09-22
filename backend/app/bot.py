@@ -318,8 +318,6 @@ def deal_purchase_notification_payload(
     public_url: str,
     buyer_name: str,
     buyer_game_id: str,
-    buyer_server: str,
-    preferred_delivery_time: str,
     photo_url: str | None = None,
 ) -> dict:
     target = versioned_webapp_url(
@@ -328,10 +326,9 @@ def deal_purchase_notification_payload(
     text = (
         "🚗 Вашу машину купили\n\n"
         f"Покупатель: {buyer_name}\n"
-        f"Сервер: {buyer_server}\n"
         f"ID: {buyer_game_id}\n"
-        f"Удобное время: {preferred_delivery_time} МСК\n\n"
-        "Покупатель уже оплатил автомобиль. Свяжитесь с ним и передайте машину по указанным данным."
+        "\nПокупатель уже оплатил автомобиль. У вас есть 24 часа с момента покупки, чтобы передать машину. "
+        "Точный оставшийся срок указан в сделке."
     )
     payload = {
         "chat_id": telegram_id,

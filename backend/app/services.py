@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
-from .deal_lifecycle import audit_deal, stop_reminders
+from .deal_lifecycle import audit_deal, stop_reminders, delivery_deadline_expired
 from .chat_access import ACTIVE_DEAL_STATUSES, require_active_chat, require_active_chat_by_id
 from .inactivity import record_buyer_request, record_seller_response, hide_active_listings, offer_response_expired, SELLER_NOTICE, BUYER_NOTICE
 from .models import (
@@ -128,7 +128,7 @@ def debit_spendable(wallet: Wallet, amount: Decimal) -> tuple[Decimal, Decimal]:
 
 async def create_notification(session: AsyncSession, user_id: uuid.UUID, kind: str, title: str, body: str, payload: dict | None = None) -> Notification:
     notification = Notification(user_id=user_id, notification_type=kind, title=title, body=body, payload=payload or {})
-    if kind in {"conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden", "deal_completed", "deal_cancelled", "dispute_resolved", "deal_support_case", "withdrawal_created", "withdrawal_paid", "withdrawal_rejected", "withdrawal_approved"}:
+    if kind in {"conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden", "deal_completed", "deal_cancelled", "dispute_resolved", "deal_support_case", "withdrawal_created", "withdrawal_paid", "withdrawal_rejected", "withdrawal_approved", "deal_admin_message", "deal_delivery_timeout"}:
         notification.delivery_status = "pending"
     session.add(notification)
     return notification
@@ -1133,18 +1133,10 @@ async def save_deal_delivery_details(
     buyer: User,
     deal_id: uuid.UUID,
     buyer_game_id: str,
-    buyer_server: str,
-    preferred_time: str,
 ) -> Deal:
     clean_game_id = buyer_game_id.strip()
-    clean_server = buyer_server.strip()
-    if not clean_game_id:
+    if not clean_game_id or len(clean_game_id) > 128:
         raise HTTPException(status_code=422, detail="Укажите игровой ID")
-    if not clean_server:
-        raise HTTPException(status_code=422, detail="Укажите сервер")
-    if not preferred_time:
-        raise HTTPException(status_code=422, detail="Выберите удобное время")
-    delivery_label = f"Сегодня, {preferred_time}"
 
     async with session.begin():
         deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
@@ -1156,19 +1148,12 @@ async def save_deal_delivery_details(
         if not listing:
             raise HTTPException(status_code=409, detail="Объявление сделки не найдено")
 
-        changed = (
-            deal.buyer_game_id != clean_game_id
-            or deal.buyer_server != clean_server
-            or deal.preferred_delivery_time != delivery_label
-            or deal.delivery_timezone != "Europe/Moscow"
-        )
+        changed = deal.buyer_game_id != clean_game_id
         conversation = await _ensure_deal_conversation_locked(
             session, deal, listing, unhide_both=False, add_context_if_created=True
         )
         deal.buyer_game_id = clean_game_id
-        deal.buyer_server = clean_server
-        deal.preferred_delivery_time = delivery_label
-        deal.delivery_timezone = "Europe/Moscow"
+        # Legacy server/time fields remain untouched for historical records.
         submitted_at = datetime.now(UTC)
         if deal.delivery_details_submitted_at is None:
             deal.delivery_details_submitted_at = submitted_at
@@ -1191,9 +1176,7 @@ async def save_deal_delivery_details(
                     sender_id=buyer.id,
                     body=(
                         "🚗 Данные для передачи\n"
-                        f"ID покупателя: {clean_game_id}\n"
-                        f"Сервер: {clean_server}\n"
-                        f"Удобное время: {delivery_label} МСК"
+                        f"ID покупателя: {clean_game_id}"
                     ),
                     message_type="system",
                 )
@@ -1521,6 +1504,7 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
                 earned_frozen_amount=earned_part,
                 seller_payout=payout,
                 platform_commission=commission,
+                seller_delivery_deadline=datetime.now(UTC) + timedelta(hours=24),
             )
             session.add(deal)
             await session.flush()
@@ -1641,6 +1625,7 @@ async def _purchase_locked_listing(
         earned_frozen_amount=earned_part,
         seller_payout=payout,
         platform_commission=commission,
+        seller_delivery_deadline=datetime.now(UTC) + timedelta(hours=24),
     )
     session.add(deal)
     await session.flush()
@@ -1862,6 +1847,8 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
         if next_status in {"seller_contacted", "transfer_in_progress"} and actor.id != deal.seller_id:
             raise HTTPException(status_code=403, detail="Only the seller can change this status")
         now = datetime.now(UTC)
+        if next_status in {"seller_contacted", "transfer_in_progress"} and delivery_deadline_expired(deal, now):
+            raise HTTPException(status_code=409, detail="Срок передачи истёк. Сделка ожидает автоматического возврата")
         if (
             actor.id == deal.seller_id
             and deal.status in {"paid", "seller_contacted"}
@@ -1871,10 +1858,8 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
             if deal.seller_response_deadline and now >= deal.seller_response_deadline:
                 raise HTTPException(status_code=409, detail="Срок ответа истёк. Сделка ожидает автоматической отмены")
             deal.seller_responded_at = now
-        if next_status == "transfer_in_progress" and not (
-            deal.buyer_game_id and deal.buyer_server and deal.preferred_delivery_time and deal.delivery_timezone
-        ):
-            raise HTTPException(status_code=409, detail="Покупатель ещё не указал игровой ID, сервер и время получения")
+        if next_status == "transfer_in_progress" and not deal.buyer_game_id:
+            raise HTTPException(status_code=409, detail="Покупатель ещё не указал игровой ID")
         previous_status = deal.status
         deal.status = next_status
         audit_deal(session, deal, "status_changed", actor.id, previous_status)
@@ -2114,11 +2099,14 @@ async def auto_cancel_unanswered_deal(
     current_time = now or datetime.now(UTC)
     async with session.begin():
         deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+        response_deadline = deal.seller_response_deadline if deal else None
+        if response_deadline and response_deadline.tzinfo is None:
+            response_deadline = response_deadline.replace(tzinfo=UTC)
         if (
             not deal
             or deal.status not in {"paid", "seller_contacted"}
             or not deal.seller_response_deadline
-            or deal.seller_response_deadline > current_time
+            or response_deadline > current_time
             or deal.seller_responded_at is not None
             or deal.seller_timeout_processed_at is not None
         ):
@@ -2183,6 +2171,86 @@ async def auto_cancel_unanswered_deal(
                 {"deal_id": str(deal.id), "seller_id": str(seller.id)},
             )
         return {"deal": deal, "buyer": buyer, "seller": seller, "administrators": administrators}
+
+
+async def auto_cancel_undelivered_deal(session: AsyncSession, deal_id: uuid.UUID, *, now=None) -> bool:
+    """Reuse the financial hold release, serialized with transfer/settlement."""
+    current_time = now or datetime.now(UTC)
+    async with session.begin():
+        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+        if not deal or not delivery_deadline_expired(deal, current_time):
+            return False
+        listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
+        wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
+        if (not listing or not wallet or listing.status != "reserved"
+                or listing.reserved_by_deal_id != deal.id
+                or money(deal.purchased_frozen_amount + deal.earned_frozen_amount) != money(deal.frozen_amount)):
+            raise HTTPException(409, "Состояние защищённых средств сделки требует проверки")
+        _apply_deal_refund(session, deal, listing, wallet, now=current_time,
+            transaction_type="refund", description="Истекли 24 часа на передачу автомобиля: 100% средств возвращены",
+            external_reference=f"delivery-timeout-refund:{deal.id}")
+        deal.cancellation_reason = "delivery_timeout"
+        listing.status = "paused"
+        if deal.conversation_id:
+            conversation = await session.get(Conversation, deal.conversation_id)
+            if conversation:
+                conversation.archived_at = current_time
+                conversation.inactivity_status = "processed"
+                conversation.inactivity_processed_at = current_time
+        for user_id, text in (
+            (deal.buyer_id, "↩️ Сделка отменена. Продавец не отметил передачу автомобиля за 24 часа. Все защищённые AF Coins возвращены на ваш баланс."),
+            (deal.seller_id, "⚠️ Срок передачи автомобиля истёк. Сделка отменена, средства возвращены покупателю. Объявление снято с публикации."),
+        ):
+            await create_notification(session, user_id, "deal_delivery_timeout", "Срок передачи истёк", text, {"deal_id": str(deal.id)})
+        return True
+
+
+async def add_admin_deal_message_locked(session, admin, deal, body, request_id):
+    """Caller holds the deal row; message and both notices commit together."""
+    if admin.role != "admin":
+        raise HTTPException(403, "Требуется администратор")
+    if not body.strip() or len(body) > 4000:
+        raise HTTPException(422, "Введите сообщение до 4000 символов")
+    existing = await session.scalar(select(ConversationMessage).where(
+        ConversationMessage.deal_id == deal.id, ConversationMessage.sender_id == admin.id,
+        ConversationMessage.client_message_id == request_id))
+    if existing:
+        if existing.body != f"🛡 Администратор\n{body.strip()}":
+            raise HTTPException(409, "Идентификатор сообщения уже использован")
+        return existing
+    if deal.status not in {"paid", "seller_contacted", "transfer_in_progress", "disputed"}:
+        raise HTTPException(409, "Чат закрытой или неоплаченной сделки недоступен")
+    conversation = await session.scalar(select(Conversation).where(Conversation.id == deal.conversation_id).with_for_update())
+    if not conversation or conversation.archived_at:
+        raise HTTPException(409, "Чат сделки недоступен")
+    joined = await session.scalar(select(DealEvent.id).where(
+        DealEvent.deal_id == deal.id, DealEvent.actor_id == admin.id,
+        DealEvent.event_type == "admin_joined").limit(1))
+    if not joined:
+        audit_deal(session, deal, "admin_joined", admin.id)
+    message = ConversationMessage(id=uuid.uuid4(), conversation_id=conversation.id, deal_id=deal.id,
+        sender_id=admin.id, body=f"🛡 Администратор\n{body.strip()}", message_type="system",
+        client_message_id=request_id)
+    session.add(message)
+    conversation.last_message_at = datetime.now(UTC)
+    audit_deal(session, deal, "admin_message", admin.id, details={"message_id": str(message.id)})
+    for user_id in (deal.buyer_id, deal.seller_id):
+        await create_notification(session, user_id, "deal_admin_message", "Администратор в чате",
+            ("🛡 Администратор присоединился к вашему чату. Пожалуйста, ответьте как можно скорее."
+             if not joined else "🛡 Новое сообщение администратора в вашей сделке. Пожалуйста, ответьте как можно скорее."),
+            {"deal_id": str(deal.id), "message_id": str(message.id)})
+    await session.flush()
+    return message
+
+
+async def send_admin_deal_message(session, admin, deal_id, body, request_id):
+    if admin.role != "admin":
+        raise HTTPException(403, "Требуется администратор")
+    async with session.begin():
+        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+        if not deal:
+            raise HTTPException(404, "Сделка не найдена")
+        return await add_admin_deal_message_locked(session, admin, deal, body, request_id)
 
 
 async def unpublish_seller_active_listings(

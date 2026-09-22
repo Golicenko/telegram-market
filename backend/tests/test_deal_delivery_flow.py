@@ -95,13 +95,13 @@ async def test_delivery_details_are_persisted_on_exact_deal_and_message_is_idemp
     session = Session(deal, listing, conversation)
 
     result = await save_deal_delivery_details(
-        session, buyer, deal.id, " 12345678 ", " test server ", "19:00"
+        session, buyer, deal.id, " 12345678 "
     )
 
     assert result.buyer_game_id == "12345678"
-    assert result.buyer_server == "test server"
-    assert result.preferred_delivery_time == "Сегодня, 19:00"
-    assert result.delivery_timezone == "Europe/Moscow"
+    assert result.buyer_server is None
+    assert result.preferred_delivery_time is None
+    assert result.delivery_timezone is None
     assert result.delivery_details_submitted_at is not None
     assert result.delivery_details_submitted_at.tzinfo is not None
     assert result.seller_response_deadline == result.delivery_details_submitted_at + timedelta(hours=24)
@@ -110,11 +110,11 @@ async def test_delivery_details_are_persisted_on_exact_deal_and_message_is_idemp
     assert len(messages) == 1
     assert messages[0].message_type == "system"
     assert "ID покупателя: 12345678" in messages[0].body
-    assert "Сервер: test server" in messages[0].body
-    assert "Сегодня, 19:00 МСК" in messages[0].body
+    assert "Сервер:" not in messages[0].body
+    assert "МСК" not in messages[0].body
 
     retry = Session(deal, listing, conversation)
-    await save_deal_delivery_details(retry, buyer, deal.id, "12345678", "test server", "19:00")
+    await save_deal_delivery_details(retry, buyer, deal.id, "12345678")
     assert not [item for item in retry.added if isinstance(item, ConversationMessage)]
 
 
@@ -125,7 +125,7 @@ async def test_alphanumeric_game_id_is_preserved_exactly(game_id):
     session = Session(deal, listing, conversation)
 
     result = await save_deal_delivery_details(
-        session, buyer, deal.id, game_id, "test server", "19:00"
+        session, buyer, deal.id, game_id
     )
 
     assert result.buyer_game_id == game_id
@@ -141,8 +141,6 @@ def test_game_id_database_column_is_text():
 def test_game_id_request_schema_preserves_letters_and_case(game_id):
     payload = DealDeliveryDetailsCreate(
         buyer_game_id=game_id,
-        buyer_server="test server",
-        preferred_time="19:00",
     )
     assert payload.buyer_game_id == game_id
 
@@ -153,7 +151,7 @@ async def test_only_exact_deal_buyer_can_store_delivery_details():
     outsider = User(id=uuid.uuid4(), telegram_id=303, first_name="Other", role="user")
     with pytest.raises(HTTPException) as error:
         await save_deal_delivery_details(
-            Session(deal, listing, conversation), outsider, deal.id, "123", "server", "19:00"
+            Session(deal, listing, conversation), outsider, deal.id, "123"
         )
     assert error.value.status_code == 404
 
@@ -197,8 +195,6 @@ def test_seller_notification_opens_the_exact_deal():
         public_url="https://market.example/app",
         buyer_name="Максим",
         buyer_game_id="AB123456",
-        buyer_server="test server",
-        preferred_delivery_time="Сегодня, 19:00",
         photo_url="/uploads/car.jpg",
     )
     button_url = payload["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"]
@@ -206,6 +202,9 @@ def test_seller_notification_opens_the_exact_deal():
     assert payload["caption"].count("Вашу машину купили") == 1
     assert payload["caption"].count("AB123456") == 1
     assert "@" not in payload["caption"]
+    assert "Сервер:" not in payload["caption"]
+    assert "Удобное время:" not in payload["caption"]
+    assert "24 часа" in payload["caption"]
     assert payload["photo"] == "https://market.example/uploads/car.jpg"
 
 
@@ -229,9 +228,6 @@ async def test_repeated_notification_dispatch_sends_only_once_per_deal(monkeypat
     seller.bot_started = True
     deal.seller_purchase_notification_status = "pending"
     deal.buyer_game_id = "12345678"
-    deal.buyer_server = "test server"
-    deal.preferred_delivery_time = "Сегодня, 19:00"
-    deal.delivery_timezone = "Europe/Moscow"
     deal.delivery_details_submitted_at = datetime.now(UTC)
     deal.seller_response_deadline = deal.delivery_details_submitted_at + timedelta(seconds=2)
 
@@ -259,7 +255,7 @@ async def test_repeated_notification_dispatch_sends_only_once_per_deal(monkeypat
     assert sent[0][0] == seller.telegram_id
     assert sent[0][1]["deal_id"] == str(deal.id)
     assert sent[0][1]["buyer_game_id"] == "12345678"
-    assert sent[0][1]["buyer_server"] == "test server"
+    assert "buyer_server" not in sent[0][1]
     assert deal.seller_purchase_notification_status == "sent"
     assert deal.delivery_details_submitted_at is not None
     assert deal.seller_response_deadline is not None
