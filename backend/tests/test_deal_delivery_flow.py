@@ -69,6 +69,7 @@ def fixture():
     buyer = User(id=uuid.uuid4(), telegram_id=101, first_name="Buyer", role="user")
     seller = User(id=uuid.uuid4(), telegram_id=202, first_name="Seller", role="user")
     listing = Listing(
+        game_version="car_parking_1",
         id=uuid.uuid4(), seller_id=seller.id, listing_type="regular", status="reserved",
         brand="Any", model="Car", power_hp=1, max_speed_kph=1,
         description="Car", price_af_coins=Decimal("100"), views_count=0, pinned=False,
@@ -908,6 +909,7 @@ async def test_admin_soft_hides_only_active_seller_listings():
     _buyer, seller, listing, _conversation, _deal = fixture()
     admin = User(id=uuid.uuid4(), telegram_id=999, first_name="Admin", role="admin")
     paused = Listing(
+        game_version="car_parking_1",
         id=uuid.uuid4(), seller_id=seller.id, listing_type="regular", status="paused",
         brand="Other", model="Car", power_hp=1, max_speed_kph=1,
         description="Car", price_af_coins=Decimal("1"), views_count=0, pinned=False,

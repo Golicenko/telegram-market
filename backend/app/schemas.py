@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -65,7 +66,11 @@ class ClientDiagnosticCreate(BaseModel):
     client_time: str | None = Field(default=None, max_length=40)
 
 
+GameVersion = Literal["car_parking_1", "car_parking_2"]
+
+
 class ListingCreate(BaseModel):
+    game_version: GameVersion
     client_request_id: uuid.UUID | None = None
     brand: str = Field(min_length=1)
     model: str | None = Field(default=None, min_length=1)
@@ -96,6 +101,7 @@ class UniqueListingCreate(ListingCreate):
 
 
 class ListingUpdate(BaseModel):
+    game_version: GameVersion | None = None
     brand: str | None = Field(default=None, min_length=1)
     model: str | None = Field(default=None, min_length=1)
     power_hp: int | None = Field(default=None, gt=0)
@@ -108,8 +114,17 @@ class ListingUpdate(BaseModel):
     )
     image_urls: list[str] | None = Field(default=None, min_length=1, max_length=10)
 
+    @field_validator("game_version")
+    @classmethod
+    def game_cannot_be_cleared(cls, value: GameVersion | None) -> GameVersion:
+        # Omission in PATCH preserves the stored game; explicit null is invalid.
+        if value is None:
+            raise ValueError("Выберите Car Parking 1 или Car Parking 2")
+        return value
+
 
 class ListingOut(ORMModel):
+    game_version: GameVersion
     id: uuid.UUID
     seller_id: uuid.UUID
     listing_type: str

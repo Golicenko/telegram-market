@@ -39,6 +39,7 @@ class Listing(Base, TimestampMixin):
     seller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     client_request_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     listing_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    game_version: Mapped[str] = mapped_column(String(24), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", index=True)
     brand: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(Text, nullable=False)
@@ -56,6 +57,7 @@ class Listing(Base, TimestampMixin):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         CheckConstraint("listing_type IN ('regular','unique')", name="ck_listings_type"),
+        CheckConstraint("game_version IN ('car_parking_1','car_parking_2')", name="ck_listings_game_version"),
         CheckConstraint("status IN ('active','paused','reserved','sold','deleted')", name="ck_listings_status"),
         CheckConstraint("price_af_coins >= 1", name="ck_listings_min_price"),
         CheckConstraint("power_hp > 0 AND max_speed_kph > 0", name="ck_listings_positive_stats"),

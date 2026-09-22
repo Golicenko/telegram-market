@@ -103,7 +103,20 @@ input::placeholder, textarea::placeholder { color:#677381; }
 .car-card { position:relative; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:linear-gradient(180deg,#111b26,#0b121b); box-shadow:0 10px 26px rgba(0,0,0,.24); }
 .car-card.is-unique { border-color:rgba(255,180,20,.76); background:linear-gradient(180deg,#21170d,#0d131b 65%); box-shadow:0 0 0 1px rgba(255,143,0,.12),0 0 18px rgba(255,151,0,.16); }
 .unique-label { position:absolute; z-index:2; left:7px; top:7px; padding:4px 6px; border:1px solid rgba(255,221,107,.55); border-radius:6px; color:#251603; background:linear-gradient(135deg,#ffd83c,#ff8d00); font-size:9px; font-weight:900; text-transform:uppercase; }
-.pin-label { position:absolute; z-index:2; right:7px; top:7px; color:var(--orange-2); font-size:14px; text-shadow:0 0 8px rgba(255,155,0,.45); }
+.car-card.is-pinned{border-color:rgba(174,130,51,.85);box-shadow:0 0 9px rgba(174,130,51,.13),0 10px 26px rgba(0,0,0,.24)}
+.listing-game-badge{position:absolute;z-index:3;bottom:6px;left:6px;max-width:calc(100% - 12px);padding:4px 6px;border:1px solid rgba(255,255,255,.18);border-radius:6px;background:rgba(4,10,18,.9);color:#fff;font-size:10px;font-weight:700;line-height:1.2;white-space:nowrap;pointer-events:none}
+.listing-page__game{display:grid;gap:4px;margin:0 0 12px;font-size:13px}.listing-page__game strong{color:#ded7bc}.listing-page__game span{color:var(--muted);font-size:12px}
+.listing-game-choice{min-width:0;margin:0;padding:12px;border:1px solid rgba(255,164,23,.3);border-radius:12px;background:var(--panel)}
+.listing-game-choice legend{padding:0 5px;font-size:17px;font-weight:800}
+.listing-game-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.listing-game-options label{position:relative;min-width:0;cursor:pointer}
+.listing-game-options input{position:absolute;width:1px;height:1px;opacity:0}
+.listing-game-options span{display:flex;align-items:center;justify-content:center;min-height:46px;padding:8px 4px;border:1px solid var(--line);border-radius:8px;color:var(--muted);background:var(--panel-2);font-size:14px;white-space:nowrap}
+.listing-game-options input:checked+span{border-color:var(--orange);color:var(--orange-2);background:rgba(255,159,20,.08)}
+.listing-game-options input:focus-visible+span{outline:2px solid var(--orange);outline-offset:2px}
+.listing-game-choice>small{display:block;margin-top:8px;color:var(--muted);font-size:12px}
+.listing-photo-rules{display:grid;gap:5px;margin:10px 0;padding:10px;border-left:2px solid #9f7d46;border-radius:6px;background:rgba(159,125,70,.06)}
+.listing-photo-rules strong{font-size:13px;line-height:1.4;color:#ded7bc}.listing-photo-rules small{font-size:11px;line-height:1.5;color:var(--muted)}
 .car-card__media { position:relative; aspect-ratio:4/3; overflow:hidden; background:#111a24; }
 .car-card__media img { width:100%; height:100%; object-fit:cover; }
 .car-card__media.is-sold{background:#000}.car-card__media.is-sold img,.car-card__media.is-sold .car-placeholder{visibility:hidden}.car-card__sold{position:absolute;z-index:2;inset:0;display:grid;place-items:center;color:#fff;background:#000;font-size:22px;font-weight:950;letter-spacing:.12em}

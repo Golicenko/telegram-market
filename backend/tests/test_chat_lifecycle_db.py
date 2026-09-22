@@ -61,7 +61,7 @@ def db():
     session = Session(engine, expire_on_commit=False)
     buyer = User(id=uuid.uuid4(), telegram_id=1, first_name="Buyer", role="user")
     seller = User(id=uuid.uuid4(), telegram_id=2, first_name="Seller", role="user")
-    listing = Listing(id=uuid.uuid4(), seller_id=seller.id, listing_type="regular", status="active",
+    listing = Listing(game_version="car_parking_1", id=uuid.uuid4(), seller_id=seller.id, listing_type="regular", status="active",
                       brand="Car", model="", power_hp=1, max_speed_kph=1, description="Car", price_af_coins=100)
     with session.begin():
         session.add_all([buyer, seller, listing])
@@ -123,7 +123,7 @@ async def test_dialog_offer_purchase_completion_and_independent_second_car(db):
         assert bridge.session.scalar(select(func.count()).select_from(Conversation).where(active_thread_clause())) == 0
     await send_conversation_message(bridge, buyer, dialog.id, "Still here", uuid.uuid4())
     with bridge.session.begin():
-        second = Listing(id=uuid.uuid4(), seller_id=seller.id, listing_type="regular", status="active",
+        second = Listing(game_version="car_parking_1", id=uuid.uuid4(), seller_id=seller.id, listing_type="regular", status="active",
                          brand="Second", model="", power_hp=1, max_speed_kph=1, description="Car", price_af_coins=50)
         bridge.session.add(second)
     second_deal, _, _ = await purchase_listing(bridge, buyer, second.id)

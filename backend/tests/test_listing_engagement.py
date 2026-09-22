@@ -13,6 +13,7 @@ def make_user() -> User:
 
 def make_listing(seller_id: uuid.UUID, views: int = 0) -> Listing:
     return Listing(
+        game_version="car_parking_1",
         id=uuid.uuid4(), seller_id=seller_id, listing_type="regular", status="active",
         brand="Car", model="", power_hp=1, max_speed_kph=1, description="Car",
         price_af_coins=1, views_count=views, pinned=False,
