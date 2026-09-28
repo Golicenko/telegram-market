@@ -111,14 +111,24 @@ const server = http.createServer((req, res) => {
       assert.match(await page.locator("#toast").textContent(), /Не удалось открыть пересылку/);
       assert.doesNotMatch(await page.locator("#toast").textContent(), /RAW|JSON|trace/);
       errorStatus = 0;
-      // Older SDK can expose the method but reject its version; use fallback without POST.
-      await page.evaluate(() => { window.Telegram.WebApp.isVersionAtLeast = () => false; });
-      const callsBeforeFallback = shareCalls;
+      // Native success passes the exact prepared ID, then unlocks the button.
       await page.locator("#referralShare").click();
-      const fallback = new URL(await page.evaluate(() => window.__links[0]));
-      assert.equal(fallback.searchParams.get("url"), referralUrl);
-      assert.equal(fallback.searchParams.get("text"), shareText);
-      assert.equal(shareCalls, callsBeforeFallback);
+      await page.waitForFunction(() => window.__shared.length === 2);
+      assert.deepEqual(await page.evaluate(() => window.__shared), ["prepared-123", "prepared-123"]);
+      await page.evaluate(() => window.__shareCallback(true));
+      await page.waitForFunction(() => !document.getElementById("referralShare").disabled);
+      // Old clients must not silently send a text-only replacement without the photo/button.
+      await page.evaluate(() => { window.Telegram.WebApp.isVersionAtLeast = () => false; });
+      const callsBeforeUnsupported = shareCalls;
+      await page.locator("#referralShare").click();
+      assert.match(await page.locator("#toast").textContent(), /Обновите Telegram/);
+      assert.deepEqual(await page.evaluate(() => window.__links), []);
+      assert.equal(shareCalls, callsBeforeUnsupported);
+      await page.evaluate(() => { delete window.Telegram.WebApp.shareMessage; });
+      await page.locator("#referralShare").click();
+      assert.match(await page.locator("#toast").textContent(), /Обновите Telegram/);
+      assert.deepEqual(await page.evaluate(() => window.__links), []);
+      assert.equal(shareCalls, callsBeforeUnsupported);
       // Server update (not local reward math) refreshes count, badges and wallet.
       invited = 20; balance = 188.45;
       await page.locator('.bottom-nav [data-nav-target="market"]').click();
@@ -146,7 +156,7 @@ const server = http.createServer((req, res) => {
       await page.locator("#referralRetry").click();
       await page.locator("#referralContent").waitFor({ state: "visible" });
       assert.deepEqual(errors, []);
-      console.log(`${width}px: OK — layout, safe areas, native share/cancel, double tap, copy, fallback, cap, reload, retry`);
+      console.log(`${width}px: OK — layout, safe areas, native share/cancel, double tap, copy, old-client notice, cap, reload, retry`);
       await context.close();
     }
   } finally { await browser.close(); server.close(); }

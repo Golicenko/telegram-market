@@ -2,7 +2,7 @@ import hashlib
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
@@ -12,6 +12,7 @@ from .auth import get_current_user
 from .bot import call_bot_api
 from .config import get_settings
 from .database import get_session
+from .frontend import WEBAPP_DIR
 from .models import ReferralReward, ReferralShare, User
 from .referrals import (
     COMMISSION_PERCENT,
@@ -25,6 +26,27 @@ from .referrals import (
 router = APIRouter(prefix="/api/referrals", tags=["referrals"])
 _identity_cache = None
 _identity_expires = 0
+# Content-addressed, unmodified owner-supplied JPEG, packaged by the existing Docker COPY.
+# When replacing it, use a new hash filename so Telegram cannot reuse the old photo.
+REFERRAL_PHOTO_PATH = "/images/referral-share.ffadf191b10c.jpg"
+
+
+def referral_photo_url():
+    base = get_settings().externally_reachable_url or ""
+    parts = urlsplit(base)
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.hostname in {"localhost", "127.0.0.1", "::1"}
+        or parts.username
+        or parts.password
+        or parts.query
+        or parts.fragment
+        or not (WEBAPP_DIR / REFERRAL_PHOTO_PATH.lstrip("/")).is_file()
+    ):
+        raise HTTPException(503, "Фото приглашения временно недоступно. Попробуйте позже.")
+    # The configured deployment URL, never a client-controlled Host/JSON value.
+    return base.rstrip("/") + REFERRAL_PHOTO_PATH
 
 
 async def referral_url(code):
@@ -110,6 +132,7 @@ async def prepare_referral_share(
         if await referral_count(session, user.id) >= REFERRAL_LIMIT:
             raise HTTPException(409, "Лимит приглашений достигнут")
     url_prefix = await referral_url("")
+    photo_url = referral_photo_url()
     now = datetime.now(UTC)
     # Short DB claim; no wallet locks or HTTP requests inside the transaction.
     async with session.begin():
@@ -121,7 +144,9 @@ async def prepare_referral_share(
         code = await ensure_code(session, user)
         url = url_prefix + code
         message_text = invitation_text(user.first_name)
-        content_hash = hashlib.sha256(f"{url}\n{message_text}".encode()).hexdigest()
+        content_hash = hashlib.sha256(
+            f"photo-v1\n{url}\n{message_text}\n{photo_url}".encode()
+        ).hexdigest()
         cached = await session.get(ReferralShare, user.id)
         if (
             cached
@@ -149,13 +174,13 @@ async def prepare_referral_share(
                     "allow_group_chats": True,
                     "allow_channel_chats": True,
                     "result": {
-                        "type": "article",
+                        "type": "photo",
                         "id": str(uuid.uuid4()),
                         "title": "AutoFlow Market",
-                        "input_message_content": {
-                            "message_text": message_text,
-                            "link_preview_options": {"is_disabled": True},
-                        },
+                        "photo_url": photo_url,
+                        "thumbnail_url": photo_url,
+                        "caption": message_text,
+                        # No input_message_content: it would replace the photo with text.
                         "reply_markup": {
                             "inline_keyboard": [
                                 [{"text": "Перейти в маркет", "url": url}]

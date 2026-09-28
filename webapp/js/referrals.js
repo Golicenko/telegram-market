@@ -108,9 +108,9 @@
             try { telegram.shareMessage(prepared.preparedMessageId, resolve); } catch (error) { reject(error); }
           });
         } else {
-          const url = "https://t.me/share/url?" + new URLSearchParams({ url: data.referralUrl, text: data.shareText });
-          if (typeof telegram?.openTelegramLink === "function") telegram.openTelegramLink(url);
-          else window.open(url, "_blank", "noopener,noreferrer");
+          // share/url cannot attach a photo or a real inline keyboard.
+          // Never silently replace the requested photo invitation with plain text.
+          notify("Обновите Telegram, чтобы переслать приглашение с фото.");
         }
       } catch (error) {
         notify(error.status === 409 ? "Лимит приглашений достигнут" : error.status === 429 ?

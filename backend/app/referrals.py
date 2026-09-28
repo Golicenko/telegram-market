@@ -272,7 +272,8 @@ async def credit_payment_commission(session, referrer_wallet, payment):
 
 
 def invitation_text(first_name):
-    name = (first_name or "").strip()
+    # Telegram names are short; bound legacy/imported names to fit photo captions.
+    name = (first_name or "").strip()[:128]
     heading = (
         f"{name} приглашает тебя в AutoFlow Market 🚗"
         if name and name != "Telegram User"
@@ -280,6 +281,5 @@ def invitation_text(first_name):
     )
     return (
         f"{heading}\n\nЗарабатывай вместе со мной в AutoFlow Market.\n\n"
-        "Покупай и продавай товары для Car Parking Multiplayer, приглашай друзей и получай бонусы.\n\n"
-        f"За приглашённых друзей можно получать AF и {COMMISSION_PERCENT}% с каждого их платного пополнения."
+        "Покупай и продавай машины из Car Parking 1 и Car Parking 2, приглашай друзей и получай бонусы."
     )
