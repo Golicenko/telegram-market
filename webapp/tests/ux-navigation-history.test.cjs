@@ -7,9 +7,11 @@ const root = path.resolve(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const script = fs.readFileSync(path.join(root, "js", "app.js"), "utf8");
 
-test("More and Settings are removed; Profile links to support and information", () => {
+test("More is the referral page; legacy Settings stays removed", () => {
   const profile = html.match(/<section class="view profile-view"[\s\S]*?<\/section>/)?.[0] || "";
-  assert.doesNotMatch(html, /data-view="(?:more|settings)"/);
+  assert.doesNotMatch(html, /data-view="settings"/);
+  assert.match(html, /data-view="more"/);
+  assert.doesNotMatch(html, /moreUpdatesModal/);
   assert.match(profile, /data-open-info/);
   assert.match(profile, /data-open-support/);
   assert.doesNotMatch(profile, /data-refresh-account|data-nav-target="settings"/);

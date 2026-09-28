@@ -6,11 +6,12 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-0bacd2cb9a91" />
-    <link rel="stylesheet" href="css/style.css?v=af-0bacd2cb9a91" />
+    <meta name="autoflow-build" content="af-288c2518058c" />
+    <link rel="stylesheet" href="css/style.css?v=af-288c2518058c" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-0bacd2cb9a91" defer></script>
-    <script src="js/app.js?v=af-0bacd2cb9a91" defer></script>
+    <script src="js/api.js?v=af-288c2518058c" defer></script>
+    <script src="js/referrals.js?v=af-288c2518058c" defer></script>
+    <script src="js/app.js?v=af-288c2518058c" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -289,6 +290,29 @@
         <section class="view form-view" data-view="admin" aria-labelledby="adminTitle" hidden>
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="adminTitle">Администрирование</h1></div><div class="admin-panel"><div class="admin-tabs"><button class="is-active" type="button" data-admin-tab="users">Пользователи</button><button type="button" data-admin-tab="training">Обучение</button><button type="button" data-admin-tab="listings">Объявления</button><button type="button" data-admin-tab="deals">Сделки</button><button type="button" data-admin-tab="withdrawals">Выводы</button><button type="button" data-admin-tab="support">Поддержка</button><button type="button" data-admin-tab="advertisement">Реклама</button></div><section data-admin-panel="users"><div class="admin-balance-panel"><h2>Управление балансом пользователя</h2><form class="admin-balance-lookup" id="adminBalanceLookupForm"><label>Username<input id="adminBalanceUsername" name="username" placeholder="@username" autocomplete="off" autocapitalize="none" spellcheck="false" required /></label><button type="submit">Найти пользователя</button></form><div class="admin-balance-message" id="adminBalanceLookupMessage" role="status" aria-live="polite"></div><div class="admin-balance-user" id="adminBalanceUserCard" hidden></div><form class="admin-balance-change" id="balanceAdjustmentForm" hidden><label>Сумма<input name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="50" required /></label><fieldset><legend>Операция</legend><div class="admin-balance-directions"><button class="is-active" type="button" data-balance-direction="credit">＋ Начислить</button><button type="button" data-balance-direction="debit">− Списать</button></div></fieldset><label>Причина / описание<textarea name="reason" placeholder="Необязательно"></textarea></label><button class="publish-button" type="submit">Подтвердить изменение</button></form><div class="admin-balance-result" id="adminBalanceResult" role="status" aria-live="polite"></div><div class="admin-user-history" id="adminUserHistory" hidden></div></div><h2>Все пользователи</h2><form class="admin-search" id="adminUserSearch"><input name="q" placeholder="Имя, username или Telegram ID" /><button type="submit">Найти</button></form><div id="adminUsers"></div></section><section data-admin-panel="training" hidden><div class="training-admin-heading"><div><span class="eyebrow">Каталог и библиотека</span><h2>Управление обучением</h2></div><button type="button" data-open-training>＋ Создать</button></div><div class="training-stat-grid" id="adminTrainingStats"></div><div class="training-admin-filters" id="adminTrainingFilters"><button class="is-active" type="button" data-training-filter="all">Все</button><button type="button" data-training-filter="published">Опубликованные</button><button type="button" data-training-filter="hidden">Скрытые</button><button type="button" data-training-filter="pinned">Закреплённые</button><button type="button" data-training-filter="personal">Персональные</button><button type="button" data-training-filter="automatic">Автовыдача</button></div><div id="adminTrainingProducts"></div><div class="training-admin-detail" id="adminTrainingDetail" hidden><div class="training-admin-detail__heading"><h3 id="adminTrainingDetailTitle">Управление продуктом</h3><button type="button" data-close-training-detail>×</button></div><div id="adminTrainingBuyers"></div><form class="training-material-form" id="trainingMaterialForm" hidden><input name="material_id" type="hidden" /><label>Название<input name="title" maxlength="180" required /></label><label>Тип<select name="material_type"><option value="text">Текст</option><option value="link">Ссылка</option><option value="photo">Фото</option><option value="video">Видео</option><option value="document">Документ</option></select></label><label>Порядок<input name="position" type="number" min="0" value="0" /></label><label>Текст, ссылка или Telegram file_id<textarea name="delivery_reference" rows="3"></textarea></label><label>Заменить файлом (до 20 МБ)<input name="file" type="file" /></label><button class="publish-button" type="submit">Сохранить материал</button></form><div id="adminTrainingMaterials"></div></div></section><section data-admin-panel="listings" hidden><div id="adminListings"></div></section><section data-admin-panel="deals" hidden><div id="adminDeals"></div></section><section data-admin-panel="withdrawals" hidden><h2>Заявки на вывод</h2><div id="adminWithdrawals"></div></section><section data-admin-panel="support" hidden><div id="adminSupportTickets"></div></section><section data-admin-panel="advertisement" hidden><form id="advertisementForm"><label>Изображение 1200 × 400, до 2 МБ<input name="image" type="file" accept="image/jpeg,image/png,image/webp" /></label><label>Ссылка перехода<input name="link_url" type="url" placeholder="https://..." /></label><label class="switch-row"><span>Показывать баннер</span><input name="is_active" type="checkbox" checked /><i aria-hidden="true"></i></label><div class="advertisement-preview" id="advertisementPreview">Баннер пока не загружен</div><button class="publish-button" type="submit">Сохранить рекламу</button><button class="ghost-button" id="deleteAdvertisementButton" type="button">Удалить рекламу</button></form></section></div>
         </section>
+        <section class="view referral-view" data-view="more" aria-labelledby="referralTitle" hidden>
+          <header class="referral-heading">
+            <span class="referral-symbol" aria-hidden="true">↗</span>
+            <div><h1 id="referralTitle">Реферальная программа</h1><p>Приглашай друзей и получай бонусы</p></div>
+          </header>
+          <div id="referralStatus" class="referral-status" role="status" aria-live="polite">Загрузка программы…</div>
+          <button id="referralRetry" class="ghost-button" type="button" hidden>Попробовать снова</button>
+          <div id="referralContent" hidden>
+            <p class="referral-commission"><strong id="referralPercent"></strong><span>с каждого пополнения друга</span></p>
+            <div class="referral-count" aria-live="polite">Приглашено друзей: <strong id="referralCount"></strong></div>
+            <h2 class="referral-section-title">Награды за приглашения</h2>
+            <div id="referralMilestones" class="referral-milestones"></div>
+            <p id="referralLimit" class="referral-limit" hidden>Максимум приглашённых друзей достигнут</p>
+            <div class="referral-link-panel">
+              <label for="referralUrl">Ваша реферальная ссылка</label>
+              <div class="referral-link-row"><input id="referralUrl" type="text" readonly aria-label="Полная реферальная ссылка" /><button type="button" data-copy-referral aria-label="Скопировать ссылку">⧉</button></div>
+              <div class="referral-actions">
+                <button type="button" class="ghost-button" data-copy-referral>Скопировать</button>
+                <button id="referralShare" type="button" class="publish-button">Переслать</button>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
 
       <nav class="bottom-nav" id="bottomNav" aria-label="Основная навигация">
@@ -296,17 +320,9 @@
         <button class="nav-item" type="button" data-nav-target="training"><span class="nav-icon-wrap"><img class="section-nav-icon section-nav-icon--training" src="images/nav-training.png" alt="" aria-hidden="true" /><span class="content-badge" id="trainingContentBadge" hidden></span></span><span>Обучение</span></button>
         <button class="nav-market is-active" type="button" data-nav-target="market" aria-current="page"><span class="nav-market-disc"><span>★</span><small>Market</small></span></button>
         <button class="nav-item" type="button" data-nav-target="profile"><span class="nav-icon-wrap"><img class="section-nav-icon section-nav-icon--profile" src="images/nav-profile.png" alt="" aria-hidden="true" /></span><span>Профиль</span></button>
-        <button class="nav-item" type="button" data-nav-target="more" aria-haspopup="dialog" aria-controls="moreUpdatesModal" aria-expanded="false"><span class="nav-icon-wrap"><img class="section-nav-icon section-nav-icon--more" src="images/nav-more.png" alt="" aria-hidden="true" /></span><span>Ещё</span></button>
+        <button class="nav-item" type="button" data-nav-target="more"><span class="nav-icon-wrap"><img class="section-nav-icon section-nav-icon--more" src="images/nav-more.png" alt="" aria-hidden="true" /></span><span>Ещё</span></button>
       </nav>
     </div>
-
-    <dialog class="modal more-updates-modal" id="moreUpdatesModal" aria-labelledby="moreUpdatesTitle" aria-describedby="moreUpdatesText">
-      <button class="more-updates-close" type="button" data-close-more aria-label="Закрыть окно">×</button>
-      <h2 id="moreUpdatesTitle">Раздел обновляется</h2>
-      <p id="moreUpdatesText">Мы сейчас готовим обновлённый раздел. Следите за новостями в нашем Telegram-канале.</p>
-      <a class="publish-button more-updates-channel" id="moreUpdatesChannel" href="https://t.me/CarParking_AF" target="_blank" rel="noopener noreferrer">Перейти в канал</a>
-      <button class="ghost-button more-updates-dismiss" type="button" data-close-more>Закрыть</button>
-    </dialog>
 
     <dialog class="modal purchase-modal" id="purchaseModal"><div class="modal-head"><div><span class="eyebrow">Покупка автомобиля</span><h2 id="purchaseModalTitle">Покупка автомобиля</h2></div><button type="button" data-close-purchase aria-label="Закрыть">×</button></div><p id="purchaseModalText">Цена автомобиля</p><div class="purchase-modal__amount" id="purchaseModalAmount"></div><p class="security-note" id="purchaseModalNote">Деньги будут под защитой до получения автомобиля. Продавец получит их только после вашего подтверждения.</p><button class="publish-button" id="purchaseModalAction" type="button">Подтвердить покупку</button><button class="ghost-button" type="button" data-close-purchase>Отмена</button></dialog>
     <dialog class="modal promotion-choice-modal" id="promotionChoiceModal"><div class="modal-head"><div><span class="eyebrow">Продвижение</span><h2>Закрепить объявление?</h2></div></div><p>Ваше объявление будет показываться выше остальных в течение 24 часов.</p><div class="purchase-modal__amount">5 <span class="af-coin af-coin--small" aria-label="AF Coins"></span></div><button class="publish-button" id="promotionChoicePaid" type="button">Закрепить за 5 AF</button><button class="ghost-button" id="promotionChoiceFree" type="button">Опубликовать бесплатно</button></dialog>

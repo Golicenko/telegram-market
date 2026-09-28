@@ -14,7 +14,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -3741,22 +3741,31 @@ async def telegram_webhook(
     start_command = start_text.split(maxsplit=1)[0].split("@", 1)[0] if start_text else ""
     if start_command == "/start" and sender.get("id"):
         start_payload = start_text.split(maxsplit=1)[1].strip() if len(start_text.split(maxsplit=1)) == 2 else None
-        user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])))
+        user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])).with_for_update(key_share=True))
         if not user:
             telegram_id = int(sender["id"])
-            user = User(
-                telegram_id=telegram_id,
-                role="admin" if telegram_id in settings.admin_telegram_ids else "user",
-                first_name=sender.get("first_name") or "Telegram User",
-                last_name=sender.get("last_name"),
-                username=sender.get("username"),
-                bot_started=True,
-            )
-            session.add(user)
-            await session.flush()
-            session.add(Wallet(user_id=user.id))
-        else:
-            user.bot_started = True
+            try:
+                async with session.begin_nested():
+                    user = User(
+                        telegram_id=telegram_id,
+                        role="admin" if telegram_id in settings.admin_telegram_ids else "user",
+                        first_name=sender.get("first_name") or "Telegram User",
+                        last_name=sender.get("last_name"),
+                        username=sender.get("username"),
+                        bot_started=True,
+                    )
+                    session.add(user)
+                    await session.flush()
+                    session.add(Wallet(user_id=user.id))
+            except IntegrityError:
+                # /start and the first Mini App login may register concurrently.
+                user = await session.scalar(select(User).where(User.telegram_id == telegram_id).with_for_update(key_share=True).execution_options(populate_existing=True))
+                if user is None:
+                    raise HTTPException(503, "Не удалось завершить регистрацию. Повторите вход.")
+        user.bot_started = True
+        from .referrals import valid_code
+        if not user.referral_registration_processed and not user.pending_referral_code:
+            user.pending_referral_code = valid_code(start_payload)
         await session.commit()
         background_tasks.add_task(send_bot_menu, int(sender["id"]), start_payload=start_payload)
     payment = message.get("successful_payment")

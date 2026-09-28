@@ -349,7 +349,7 @@ async def test_training_successful_payment_is_credited_once_by_charge_id():
         "telegram_payment_charge_id": "training-charge-unique",
         "total_amount": 100,
     }
-    session = FakeSession([None, intent, buyer, wallet])
+    session = FakeSession([None, intent, buyer, None, wallet])
 
     assert await process_successful_payment(session, buyer.telegram_id, payment) is True
     assert wallet.available_balance == Decimal("100.00")

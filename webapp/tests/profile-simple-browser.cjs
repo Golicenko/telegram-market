@@ -36,7 +36,8 @@ const server=http.createServer((req,res)=>{
       assert.equal(await menu.locator('[data-profile-tab="deals"] .conversation-unread').textContent(),'2');
       assert.equal(await menu.locator("button:visible").count(),role==="admin"?6:5);
       assert.equal(await profile.locator('[data-open-support],[data-open-info]').count(),2);
-      assert.equal(await page.locator('[data-view="more"],[data-view="settings"],[data-refresh-account]').count(),0);
+      assert.equal(await page.locator('[data-view="settings"],[data-refresh-account]').count(),0);
+      assert.equal(await page.locator('[data-view="more"]').count(),1);
       assert.deepEqual(await page.locator('.bottom-nav button').evaluateAll(nodes=>nodes.map(n=>n.dataset.navTarget)),['unique','training','market','profile','more']);
       for(const icon of await page.locator('.bottom-nav img').all()){
         assert(await icon.evaluate(img=>img.complete&&img.naturalWidth>0));

@@ -11,14 +11,15 @@ import re
 ROOT = Path(__file__).resolve().parents[2]
 WEBAPP = ROOT / "webapp"
 INDEX = WEBAPP / "index.html"
-ASSETS = (WEBAPP / "css" / "style.css", WEBAPP / "js" / "api.js", WEBAPP / "js" / "app.js")
+ASSET_URLS = ("css/style.css", "js/api.js", "js/referrals.js", "js/app.js")
+ASSETS = tuple(WEBAPP / url for url in ASSET_URLS)
 
 
 def normalized_index_bytes() -> bytes:
     """Hash HTML changes without feeding the previously stamped build back into the digest."""
     html = INDEX.read_text(encoding="utf-8")
     html = re.sub(r'(<meta name="autoflow-build" content=")[^"]+(" */?>)', r'\g<1>BUILD\2', html)
-    for asset_url in ("css/style.css", "js/api.js", "js/app.js"):
+    for asset_url in ASSET_URLS:
         html = re.sub(rf'({re.escape(asset_url)}\?v=)[^"&]+', rf'\g<1>BUILD', html)
     return html.encode("utf-8")
 
@@ -36,7 +37,7 @@ def calculate_build_id() -> str:
 def stamp_index(build_id: str) -> None:
     html = INDEX.read_text(encoding="utf-8")
     html = re.sub(r'(<meta name="autoflow-build" content=")[^"]+(" */?>)', rf"\g<1>{build_id}\2", html)
-    for asset_url in ("css/style.css", "js/api.js", "js/app.js"):
+    for asset_url in ASSET_URLS:
         html = re.sub(rf'({re.escape(asset_url)}\?v=)[^"&]+', rf"\g<1>{build_id}", html)
     INDEX.write_text(html, encoding="utf-8")
     (WEBAPP / "build-info.json").write_text(json.dumps({"build": build_id}), encoding="utf-8")

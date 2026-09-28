@@ -29,8 +29,49 @@ class User(Base, TimestampMixin):
     viewing_conversation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     chat_presence_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     bot_started: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    referral_code: Mapped[str | None] = mapped_column(String(8), unique=True)
+    pending_referral_code: Mapped[str | None] = mapped_column(String(8))
+    referral_registration_processed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     is_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     __table_args__ = (CheckConstraint("role IN ('user','admin')", name="ck_users_role"),)
+
+
+class Referral(Base):
+    __tablename__ = "referrals"
+    referred_user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), primary_key=True)
+    referrer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)
+    qualified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("referrer_id", "slot", name="uq_referral_slot"),
+        CheckConstraint("slot BETWEEN 1 AND 20", name="ck_referral_slot"),
+        CheckConstraint("referrer_id != referred_user_id", name="ck_referral_not_self"),
+    )
+
+
+class ReferralReward(Base):
+    __tablename__ = "referral_rewards"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    milestone: Mapped[int | None] = mapped_column(Integer)
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("star_payments.id", ondelete="RESTRICT"), unique=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    transaction_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("wallet_transactions.id", ondelete="RESTRICT"), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("user_id", "milestone", name="uq_referral_milestone"),
+        CheckConstraint("(milestone IS NOT NULL AND milestone IN (3,10,20) AND payment_id IS NULL) OR (milestone IS NULL AND payment_id IS NOT NULL)", name="ck_referral_reward_source"),
+        CheckConstraint("amount > 0", name="ck_referral_reward_positive"),
+    )
+
+
+class ReferralShare(Base):
+    __tablename__ = "referral_shares"
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), primary_key=True)
+    prepared_message_id: Mapped[str | None] = mapped_column(String(255))
+    content_hash: Mapped[str | None] = mapped_column(String(64))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class Listing(Base, TimestampMixin):

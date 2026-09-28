@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const primaryViews = new Set(["market", "unique", "training", "accounts", "profile"]);
+  const primaryViews = new Set(["market", "unique", "training", "accounts", "profile", "more"]);
 
   const api = window.AutoFlowApi;
   let telegram = window.Telegram?.WebApp || null;
@@ -90,7 +90,6 @@
     shell: document.querySelector(".app-shell"),
     views: [...document.querySelectorAll("[data-view]")],
     navButtons: [...document.querySelectorAll("[data-nav-target]")],
-    moreUpdatesModal: document.getElementById("moreUpdatesModal"),
     marketCars: document.getElementById("marketCars"),
     uniqueCars: document.getElementById("uniqueCars"),
     marketEmpty: document.getElementById("marketEmptyState"),
@@ -287,29 +286,6 @@
     trainingForm?.elements.price_af_coins?.setAttribute("min", "0.01");
     document.getElementById("trainingMaterialForm")?.elements.title?.removeAttribute("maxlength");
     document.addEventListener("click", handleClick);
-    bind(elements.moreUpdatesModal, "click", (event) => {
-      const rect = elements.moreUpdatesModal.getBoundingClientRect();
-      const outside = event.target === elements.moreUpdatesModal && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom);
-      if (outside || event.target.closest("[data-close-more]")) closeMoreOverlay();
-    }, "moreUpdatesClick");
-    bind(elements.moreUpdatesModal, "cancel", (event) => { event.preventDefault(); closeMoreOverlay(); }, "moreUpdatesCancel");
-    bind(elements.moreUpdatesModal, "close", () => {
-      // An old close event must not reset a newly reopened dialog.
-      if (elements.moreUpdatesModal.open) return;
-      document.documentElement.classList.remove("more-overlay-open");
-      document.querySelector('[data-nav-target="more"]').setAttribute("aria-expanded", "false");
-      syncBackNavigation();
-    }, "moreUpdatesClose");
-    bind(document.getElementById("moreUpdatesChannel"), "click", (event) => {
-      const webApp = window.Telegram?.WebApp;
-      if (typeof webApp?.openTelegramLink !== "function") return; // The anchor is the browser fallback.
-      try {
-        webApp.openTelegramLink(event.currentTarget.href);
-        event.preventDefault();
-      } catch (error) {
-        console.warn("Telegram channel opening failed; using the normal link.", error);
-      }
-    }, "moreUpdatesChannel");
     bind(document.getElementById("infoButton"), "click", () => openSecondary("help"), "infoButton");
     renderHelpCenter();
     bind(document.getElementById("topupAmount"), "input", renderTopupSelection, "topupSelection");
@@ -799,25 +775,21 @@ function handleClick(event) {
     }
   }
 
-  function openMoreOverlay() {
-    if (elements.moreUpdatesModal.open) return;
-    elements.moreUpdatesModal.showModal();
-    document.documentElement.classList.add("more-overlay-open");
-    document.querySelector('[data-nav-target="more"]').setAttribute("aria-expanded", "true");
-    syncBackNavigation();
-  }
-
-  function closeMoreOverlay() {
-    if (!elements.moreUpdatesModal.open) return;
-    elements.moreUpdatesModal.close();
-    document.documentElement.classList.remove("more-overlay-open");
-    document.querySelector('[data-nav-target="more"]').setAttribute("aria-expanded", "false");
-    state.backBlockedUntil = Date.now() + 450;
-    syncBackNavigation();
+  let referralsPage;
+  function syncReferralsPage(viewName) {
+    if (!referralsPage && viewName === "more") {
+      referralsPage = window.AutoFlowReferrals.create({
+        api, notify,
+        async refreshWallet() {
+          state.me = await api.request("/me");
+          renderBalance();
+        },
+      });
+    }
+    referralsPage?.setActive(viewName === "more");
   }
 
   async function goBack() {
-    if (elements.moreUpdatesModal.open) return closeMoreOverlay();
     if (primaryViews.has(state.currentView) || Date.now() < state.backBlockedUntil) return;
     state.backBlockedUntil = Date.now() + 450;
     const entry = state.navigationStack.pop();
@@ -829,7 +801,7 @@ function handleClick(event) {
   }
 
   function syncBackNavigation() {
-    const internal = elements.moreUpdatesModal.open || !primaryViews.has(state.currentView);
+    const internal = !primaryViews.has(state.currentView);
     document.querySelectorAll("[data-back]").forEach(button => {
       button.hidden = primaryViews.has(button.closest("[data-view]")?.dataset.view);
     });
@@ -840,12 +812,10 @@ function handleClick(event) {
   }
 
   async function navigate(viewName, options = {}) {
-    if (viewName === "more") return openMoreOverlay();
     // Preserve old links without keeping removed navigation screens.
     if (viewName === "settings") viewName = "profile";
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
-    if (elements.moreUpdatesModal.open) closeMoreOverlay();
     if (state.currentView === "deal-chat" && viewName !== "deal-chat") {
       releaseChatPresence();
       window.clearInterval(state.dealTimerId);
@@ -860,6 +830,7 @@ function handleClick(event) {
       });
     }
     state.currentView = viewName;
+    syncReferralsPage(viewName);
     syncBackNavigation();
     document.body.classList.toggle("chat-open", viewName === "deal-chat");
     if (viewName !== "deal-chat") document.body.classList.remove("deal-details-required");
@@ -2109,6 +2080,8 @@ function handleClick(event) {
       protection_hold: "🚗 Покупка автомобиля",
       sale_income: "💰 Продажа автомобиля",
       star_payment_credit: "⭐ Пополнение",
+      referral_milestone: "👥 Награда за приглашения",
+      referral_commission: "👥 Реферальный бонус",
       refund: "↩️ Возврат",
       seller_timeout_refund: "↩️ Возврат",
       dispute_refund: "↩️ Возврат",

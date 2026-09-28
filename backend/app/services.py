@@ -2639,28 +2639,27 @@ async def process_successful_payment(session: AsyncSession, telegram_id: int, pa
             return False
         if intent.status not in {"pending", "expired"} or intent.xtr_amount != xtr_amount:
             raise HTTPException(status_code=400, detail="Invoice amount or status mismatch")
-        wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id).with_for_update())
-        if not wallet:
-            raise HTTPException(status_code=409, detail="Wallet not found")
+        from .referrals import payment_wallets, credit_payment_commission
 
+        wallet, referrer_wallet = await payment_wallets(session, user.id)
         amount = money(xtr_amount)
         before_available, before_frozen = wallet.available_balance, wallet.frozen_balance
         wallet.purchased_balance = money(wallet.purchased_balance + amount)
         wallet.version += 1
         intent.status = "paid"
         intent.paid_at = datetime.now(UTC)
-        session.add(
-            StarPayment(
-                user_id=user.id,
-                telegram_payment_charge_id=charge_id,
-                provider_payment_charge_id=payment.get("provider_payment_charge_id"),
-                xtr_amount=xtr_amount,
-                af_coin_amount=amount,
-                status="credited",
-                raw_payload=payment,
-                processed_at=datetime.now(UTC),
-            )
+        credited_payment = StarPayment(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            telegram_payment_charge_id=charge_id,
+            provider_payment_charge_id=payment.get("provider_payment_charge_id"),
+            xtr_amount=xtr_amount,
+            af_coin_amount=amount,
+            status="credited",
+            raw_payload=payment,
+            processed_at=datetime.now(UTC),
         )
+        session.add(credited_payment)
         session.add(
             wallet_transaction(
                 wallet,
@@ -2672,6 +2671,8 @@ async def process_successful_payment(session: AsyncSession, telegram_id: int, pa
                 external_reference=charge_id,
             )
         )
+        if intent.purpose != "training_checkout":
+            await credit_payment_commission(session, referrer_wallet, credited_payment)
         await create_notification(
             session,
             user.id,
