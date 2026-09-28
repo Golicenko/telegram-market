@@ -9,8 +9,8 @@ const app = fs.readFileSync(path.join(root, "js", "app.js"), "utf8");
 const css = fs.readFileSync(path.join(root, "css", "style.css"), "utf8");
 
 test("all first-party frontend assets share a non-legacy build version", () => {
-  const versions = [...html.matchAll(/(?:css\/style\.css|js\/(?:api|app)\.js)\?v=([^"&]+)/g)].map((match) => match[1]);
-  assert.equal(versions.length, 3);
+  const versions = [...html.matchAll(/(?:css\/style\.css|js\/(?:api|referrals|app)\.js)\?v=([^"&]+)/g)].map((match) => match[1]);
+  assert.equal(versions.length, 4);
   assert.equal(new Set(versions).size, 1);
   assert.doesNotMatch(versions[0], /20260819-listing-validation/);
   assert.match(html, new RegExp(`<meta name="autoflow-build" content="${versions[0]}"`));

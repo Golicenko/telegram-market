@@ -24,7 +24,8 @@ def wallet(bridge, user):
 def control(db):
     bridge, buyer, seller, listing = db
     with bridge.session.bind.begin() as connection:
-        for model in (SupportTicket, SupportMessage, SupportCaseEvent, AdminAction, StarPaymentIntent, StarPayment):
+        from app.models import Referral
+        for model in (SupportTicket, SupportMessage, SupportCaseEvent, AdminAction, StarPaymentIntent, StarPayment, Referral):
             connection.execute(CreateTable(model.__table__))
     admin = User(id=uuid.uuid4(), telegram_id=3, first_name="Admin", role="admin")
     with bridge.session.begin():

@@ -367,7 +367,7 @@ async def test_successful_star_payment_is_credited_once():
         "telegram_payment_charge_id": "charge-unique",
         "total_amount": 10,
     }
-    session = FakeSession([None, intent, user, wallet])
+    session = FakeSession([None, intent, user, None, wallet])
     assert await process_successful_payment(session, 99, payment) is True
     assert wallet.available_balance == Decimal("15.00")
     assert intent.status == "paid"

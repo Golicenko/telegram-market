@@ -84,6 +84,18 @@ async def get_current_user(
             user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
             if user is None:
                 raise HTTPException(status_code=503, detail="Не удалось завершить регистрацию. Повторите вход.")
+    # Serialize attribution without blocking ledger inserts' FK KEY SHARE locks.
+    user = await session.scalar(select(User).where(User.id == user.id).with_for_update(key_share=True).execution_options(populate_existing=True))
+    if user.is_blocked:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is blocked")
+    if x_telegram_init_data:
+        from .referrals import ensure_code, qualify_first_login
+
+        # This exact initData has passed HMAC verification above. Never use a
+        # query-string/referral code sent separately by the frontend.
+        signed_start_param = dict(parse_qsl(x_telegram_init_data, strict_parsing=True)).get("start_param")
+        await ensure_code(session, user)
+        await qualify_first_login(session, user, signed_start_param)
     user.role = role
     user.first_name = telegram_user.get("first_name") or user.first_name
     user.last_name = telegram_user.get("last_name")

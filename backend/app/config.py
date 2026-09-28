@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     database_url: str = DEFAULT_DATABASE_URL
     bot_token: str = ""
     telegram_webhook_secret: str = ""
+    # Only set for an actually configured named Mini App. Main App is detected via getMe.
+    telegram_mini_app_short_name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_]+$")
     admin_id: int | None = None
     admin_telegram_ids: set[int] = Field(default_factory=set)
     railway_public_domain: str | None = None

@@ -90,6 +90,13 @@ class StartSession:
     async def scalar(self, _query):
         return self.user
 
+    def begin_nested(self):
+        from contextlib import asynccontextmanager
+        @asynccontextmanager
+        async def transaction():
+            yield
+        return transaction()
+
     def add(self, value):
         self.added.append(value)
         if isinstance(value, User):

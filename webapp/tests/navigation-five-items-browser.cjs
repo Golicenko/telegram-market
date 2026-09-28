@@ -51,7 +51,7 @@ const server = http.createServer((req, res) => {
       await page.locator('#startupStatus').waitFor({ state: 'hidden' });
       await page.waitForTimeout(350);
       const nav = page.locator('.bottom-nav');
-      const modal = page.locator('#moreUpdatesModal');
+      const referralPage = page.locator('[data-view="more"]');
       const more = nav.locator('[data-nav-target="more"]');
       assert.deepEqual(await nav.locator('button').evaluateAll(nodes => nodes.map(n => n.dataset.navTarget)), ['unique', 'training', 'market', 'profile', 'more']);
       const geometry = await nav.evaluate(node => ({
@@ -90,68 +90,26 @@ const server = http.createServer((req, res) => {
         await nav.locator(`[data-nav-target="${view}"]`).click();
         await page.locator(`[data-view="${view}"]`).waitFor({ state: 'visible' });
         assert.equal(await nav.locator('[aria-current="page"]').getAttribute('data-nav-target'), view);
-        const scroll = await page.evaluate(() => scrollY);
         await more.click();
-        assert(await modal.isVisible());
-        assert.equal(await more.getAttribute('aria-expanded'), 'true');
-        assert.equal(await page.evaluate(() => window.__backVisible), true);
-        assert.equal(await nav.locator('[aria-current="page"]').getAttribute('data-nav-target'), view);
-        assert(await page.locator(`[data-view="${view}"]`).isVisible(), 'Underlying screen retained');
-        assert.equal(await page.evaluate(() => scrollY), scroll);
-        await modal.locator('.more-updates-dismiss').click();
-        await modal.waitFor({ state: 'hidden' });
-        assert.equal(await more.getAttribute('aria-expanded'), 'false');
+        assert(await referralPage.isVisible());
         assert.equal(await page.evaluate(() => window.__backVisible), false);
-        assert.equal(await nav.locator('[aria-current="page"]').getAttribute('data-nav-target'), view);
+        assert.equal(await nav.locator('[aria-current="page"]').getAttribute('data-nav-target'), 'more');
+        assert(!await page.locator(`[data-view="${view}"]`).isVisible(), 'More is a full page');
+        assert(await page.locator('.app-header').isVisible(), 'Shared header preserved');
       }
-      // Rapid open is idempotent. Native modal traps focus and blocks the background.
+      // Rapid opening keeps one page, with no modal or overlay.
       await more.evaluate(button => { button.click(); button.click(); });
-      assert.equal(await page.locator('#moreUpdatesModal[open]').count(), 1);
-      await modal.locator('#moreUpdatesChannel').click();
-      assert.deepEqual(await page.evaluate(() => window.__channelLinks), ['https://t.me/CarParking_AF']);
-      if (width === 390) {
-        const output = path.join(os.tmpdir(), 'autoflow-more-overlay-390.png');
-        await page.screenshot({ path: output });
-        console.log('Screenshot: ' + output);
-      }
-      await modal.locator('.more-updates-close').click();
-      await more.click();
-      await page.mouse.click(4, 100); // Outside the card, on the dimmed background.
-      await modal.waitFor({ state: 'hidden' });
-      await more.click();
-      await page.keyboard.press('Escape');
-      await modal.waitFor({ state: 'hidden' });
-      // Telegram Back must close just the overlay, even on an internal page.
-      await page.locator('[data-view="profile"] [data-open-info]').click();
-      await page.locator('[data-view="help"]').waitFor({ state: 'visible' });
-      await more.click();
+      assert.equal(await page.locator('#moreUpdatesModal').count(), 0);
       await page.evaluate(async () => { await window.__back(); await window.__back(); });
-      await modal.waitFor({ state: 'hidden' });
-      assert(await page.locator('[data-view="help"]').isVisible());
-      assert.equal(await page.evaluate(() => window.__backVisible), true);
+      assert(await referralPage.isVisible());
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-      // Plain anchor works when the native API is missing OR throws.
-      for (const mode of ['missing', 'throws']) {
-        await more.click();
-        await page.evaluate(mode => {
-          window.Telegram.WebApp.openTelegramLink = mode === 'missing' ? undefined : () => { throw new Error('Fixture: unavailable'); };
-        }, mode);
-        const popupPromise = page.waitForEvent('popup');
-        await modal.locator('#moreUpdatesChannel').click();
-        const popup = await popupPromise;
-        await popup.waitForLoadState();
-        assert.equal(popup.url(), 'https://t.me/CarParking_AF');
-        await popup.close();
-        await modal.locator('.more-updates-close').click();
-      }
-      // Legacy ?view=more opens the same overlay, not a blank/old More view.
+      // Legacy ?view=more now opens the referral screen.
       await page.goto(url + '?view=more');
-      await modal.waitFor({ state: 'visible' });
-      await modal.locator('.more-updates-close').click();
-      assert(await page.locator('[data-view="market"]').isVisible());
-      assert.equal(await page.locator('[data-view="more"]').count(), 0);
+      await referralPage.waitFor({ state: 'visible' });
+      assert(!await page.locator('[data-view="market"]').isVisible());
+      assert.equal(await page.locator('[data-view="more"]').count(), 1);
       assert.deepEqual(errors, []);
-      console.log(`${width}px OK: equal cells, centered Market, 4 PNGs, safe area, routes, badges, overlay close/Back, Telegram link/fallback`);
+      console.log(`${width}px OK: equal cells, centered Market, 4 PNGs, safe area, routes, badges, referral page/header`);
       await context.close();
     }
   } finally { await browser.close(); server.close(); }

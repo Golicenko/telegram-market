@@ -196,7 +196,7 @@ async def test_successful_listing_topup_is_credited_once_even_below_ten_xtr():
         missing_af_coins=Decimal("3"), checkout_status="pending", status="pending",
     )
     payment = {"currency": "XTR", "invoice_payload": intent.invoice_payload, "telegram_payment_charge_id": "listing-charge", "total_amount": 3}
-    session = FakeSession([None, intent, buyer, wallet])
+    session = FakeSession([None, intent, buyer, None, wallet])
 
     assert await process_successful_payment(session, buyer.telegram_id, payment) is True
     assert wallet.available_balance == Decimal("100.00")
