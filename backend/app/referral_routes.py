@@ -55,6 +55,7 @@ async def referral_url(code):
 
 
 @router.get("")
+@router.get("/me")
 async def referral_summary(
     response: Response,
     user: User = Depends(get_current_user),

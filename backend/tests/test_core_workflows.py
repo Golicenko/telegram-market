@@ -96,11 +96,11 @@ def test_purchase_hold_preserves_fund_origin_and_refund():
         user_id=uuid.uuid4(), purchased_balance=Decimal("70"), earned_balance=Decimal("50"),
         purchased_frozen_balance=0, earned_frozen_balance=0, total_earned=Decimal("50"), version=0,
     )
-    purchased, earned = hold_for_purchase(wallet, Decimal("100"))
+    purchased, earned, bonus = hold_for_purchase(wallet, Decimal("100"))
     assert (purchased, earned) == (Decimal("70.00"), Decimal("30.00"))
     assert wallet.available_balance == Decimal("20.00")
     assert wallet.frozen_balance == Decimal("100.00")
-    release_purchase_hold(wallet, purchased, earned)
+    release_purchase_hold(wallet, purchased, earned, bonus)
     assert wallet.purchased_balance == Decimal("70.00")
     assert wallet.earned_balance == Decimal("50.00")
 

@@ -9,7 +9,7 @@ from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pillow_heif import register_heif_opener
 from sqlalchemy import and_, delete, func, or_, select, update
@@ -24,9 +24,8 @@ from .bot import (
     answer_bot_callback,
     answer_pre_checkout_query,
     create_star_invoice_link,
-    send_deal_support_case_notification,
     send_deal_purchase_notification,
-    send_inactive_seller_admin_notification,
+    send_inactive_seller_admin_notification as send_inactive_seller_admin_notification,
     send_deal_transfer_reminder,
     send_personal_training_order_notification,
     send_bot_notification,
@@ -134,7 +133,6 @@ from .services import (
     decide_withdrawal,
     delete_account_listing,
     delete_listing,
-    delete_special_listing,
     delete_training_product,
     delete_training_material,
     begin_training_delivery,
@@ -155,7 +153,6 @@ from .services import (
     set_listing_publication,
     update_account_listing,
     update_listing,
-    update_special_listing,
     update_training_product,
     update_training_material,
     update_training_purchase_status,
@@ -2757,7 +2754,7 @@ async def send_message(
     recipient_id = deal.seller_id if user.id == deal.buyer_id else deal.buyer_id
     await create_notification(session, recipient_id, "conversation_message", "Новое сообщение по сделке", payload.body[:240],
         {"deal_id": str(deal.id), "conversation_id": str(conversation.id), "message_id": str(message.id)})
-    recipient = await session.get(User, recipient_id)
+    await session.get(User, recipient_id)
     await session.commit()
     await session.refresh(message)
     # Legacy clients use the same durable outbox and visible conversation history.
@@ -3069,7 +3066,8 @@ async def admin_platform_financial_summary(
 @router.get("/admin/deals/{deal_id}/control")
 async def admin_deal_control(deal_id: uuid.UUID, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     deal = await session.get(Deal, deal_id)
-    if not deal: raise HTTPException(404, "Сделка не найдена")
+    if not deal:
+        raise HTTPException(404, "Сделка не найдена")
     buyer = await session.get(User, deal.buyer_id)
     seller = await session.get(User, deal.seller_id)
     listing = await session.get(Listing, deal.listing_id)
@@ -3079,7 +3077,8 @@ async def admin_deal_control(deal_id: uuid.UUID, admin: User = Depends(require_a
     messages = list((await session.scalars(select(ConversationMessage).where(ConversationMessage.deal_id == deal.id).order_by(ConversationMessage.created_at.desc()).limit(200))).all())
     closed = deal.status in {"completed", "cancelled"}
     actions = ["comment"] if closed or deal.status == "pending_payment" else ["complete", "refund", "review", "comment"]
-    if deal.status == "disputed": actions.append("resume")
+    if deal.status == "disputed":
+        actions.append("resume")
     return {
         "deal": DealOut.model_validate(deal), "product": f"{listing.brand} {listing.model}".strip() if listing else "Объявление недоступно",
         "buyer": UserOut.model_validate(buyer), "seller": UserOut.model_validate(seller),
@@ -3516,7 +3515,7 @@ async def resolve_support_ticket_financially(
     # Finish the read transaction before the service obtains all financial row locks.
     target_deal_id, target_ticket_id = ticket.deal_id, ticket.id
     await session.commit()
-    deal = await resolve_dispute(
+    await resolve_dispute(
         session,
         admin,
         target_deal_id,
@@ -3741,6 +3740,8 @@ async def telegram_webhook(
     start_command = start_text.split(maxsplit=1)[0].split("@", 1)[0] if start_text else ""
     if start_command == "/start" and sender.get("id"):
         start_payload = start_text.split(maxsplit=1)[1].strip() if len(start_text.split(maxsplit=1)) == 2 else None
+        from .referrals import valid_code
+        registration_code = valid_code(start_payload)
         user = await session.scalar(select(User).where(User.telegram_id == int(sender["id"])).with_for_update(key_share=True))
         if not user:
             telegram_id = int(sender["id"])
@@ -3753,6 +3754,8 @@ async def telegram_webhook(
                         last_name=sender.get("last_name"),
                         username=sender.get("username"),
                         bot_started=True,
+                        pending_referral_code=registration_code,
+                        referral_candidate_at_registration=bool(registration_code),
                     )
                     session.add(user)
                     await session.flush()
@@ -3763,9 +3766,6 @@ async def telegram_webhook(
                 if user is None:
                     raise HTTPException(503, "Не удалось завершить регистрацию. Повторите вход.")
         user.bot_started = True
-        from .referrals import valid_code
-        if not user.referral_registration_processed and not user.pending_referral_code:
-            user.pending_referral_code = valid_code(start_payload)
         await session.commit()
         background_tasks.add_task(send_bot_menu, int(sender["id"]), start_payload=start_payload)
     payment = message.get("successful_payment")

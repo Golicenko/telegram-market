@@ -18,6 +18,7 @@ from .message_notifications import run_message_notification_worker
 from .frontend import FRONTEND_BUILD, WEBAPP_DIR, versioned_webapp_url
 from .routes import UPLOAD_DIR, recover_deal_purchase_notifications, recover_training_background_jobs, run_deal_transfer_reminder_worker, run_seller_response_timeout_worker, router
 from .referral_routes import router as referral_router
+from .referrals import backfill_referral_codes
 
 
 settings = get_settings()
@@ -61,6 +62,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(run_startup_job("seller_response_timeout_worker", run_seller_response_timeout_worker)),
         asyncio.create_task(run_startup_job("message_notification_worker", run_message_notification_worker)),
         asyncio.create_task(run_startup_job("broadcast_recovery", recover_admin_broadcasts)),
+        asyncio.create_task(run_startup_job("referral_code_backfill", backfill_referral_codes)),
     ]
     try:
         yield

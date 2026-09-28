@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from typing import Awaitable, Callable
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +21,6 @@ from .models import (
     ConversationMessage,
     Deal,
     DealEvent,
-    DealMessage,
     Listing,
     ListingImage,
     Notification,
@@ -67,6 +66,7 @@ def wallet_transaction(
     withdrawal_id: uuid.UUID | None = None,
     training_purchase_id: uuid.UUID | None = None,
     external_reference: str | None = None,
+    funding: tuple[Decimal, Decimal, Decimal] | None = None,
 ) -> WalletTransaction:
     return WalletTransaction(
         user_id=wallet.user_id,
@@ -81,6 +81,13 @@ def wallet_transaction(
         related_training_purchase_id=training_purchase_id,
         external_reference=external_reference,
         description=description,
+        balance_breakdown={
+            **{name: str(money(getattr(wallet, name, 0) or 0)) for name in (
+                "purchased_balance", "earned_balance", "bonus_balance",
+                "purchased_frozen_balance", "earned_frozen_balance", "bonus_frozen_balance",
+            )},
+            **({"funding": dict(zip(("purchased", "earned", "bonus"), map(str, funding)))} if funding else {}),
+        },
     )
 
 
@@ -88,42 +95,79 @@ def wallet_snapshot(wallet: Wallet) -> tuple[Decimal, Decimal]:
     return money(wallet.available_balance), money(wallet.frozen_balance)
 
 
-def hold_for_purchase(wallet: Wallet, amount: Decimal) -> tuple[Decimal, Decimal]:
-    """Move spendable funds into protected buckets, purchased funds first."""
+async def lock_wallets(session: AsyncSession, *user_ids) -> dict:
+    """Shared ordering for top-ups, referral credits and multi-party settlement."""
+    wallets = {}
+    for user_id in sorted(set(user_ids) - {None}, key=str):
+        wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user_id)
+                                      .with_for_update().execution_options(populate_existing=True))
+        if wallet is not None:
+            wallets[wallet.user_id] = wallet
+    return wallets
+
+
+def hold_for_purchase(wallet: Wallet, amount: Decimal) -> tuple[Decimal, Decimal, Decimal]:
+    """Protect each source separately: bonus first, then purchased, then earned."""
     amount = money(amount)
     if wallet.available_balance < amount:
         raise HTTPException(status_code=402, detail=f"Не хватает {money(amount - wallet.available_balance)} AF Coins")
-    purchased = min(money(wallet.purchased_balance), amount)
-    earned = money(amount - purchased)
+    if amount <= 0:
+        raise HTTPException(422, "Сумма должна быть положительной")
+    bonus = min(money(wallet.bonus_balance or 0), amount)
+    purchased = min(money(wallet.purchased_balance), amount - bonus)
+    earned = money(amount - bonus - purchased)
+    wallet.bonus_balance = money((wallet.bonus_balance or 0) - bonus)
+    wallet.bonus_frozen_balance = money((wallet.bonus_frozen_balance or 0) + bonus)
     wallet.purchased_balance = money(wallet.purchased_balance - purchased)
     wallet.earned_balance = money(wallet.earned_balance - earned)
     wallet.purchased_frozen_balance = money(wallet.purchased_frozen_balance + purchased)
     wallet.earned_frozen_balance = money(wallet.earned_frozen_balance + earned)
-    return purchased, earned
+    return purchased, earned, bonus
 
 
-def release_purchase_hold(wallet: Wallet, purchased: Decimal, earned: Decimal) -> None:
+def release_purchase_hold(wallet: Wallet, purchased: Decimal, earned: Decimal, bonus: Decimal = Decimal("0")) -> None:
     purchased, earned = money(purchased), money(earned)
-    if wallet.purchased_frozen_balance < purchased or wallet.earned_frozen_balance < earned:
+    bonus = money(bonus or 0)
+    if min(purchased, earned, bonus) < 0 or wallet.purchased_frozen_balance < purchased or wallet.earned_frozen_balance < earned or (wallet.bonus_frozen_balance or 0) < bonus:
         raise HTTPException(status_code=409, detail="Состояние защищённых средств не совпадает")
     wallet.purchased_frozen_balance = money(wallet.purchased_frozen_balance - purchased)
     wallet.earned_frozen_balance = money(wallet.earned_frozen_balance - earned)
     wallet.purchased_balance = money(wallet.purchased_balance + purchased)
     wallet.earned_balance = money(wallet.earned_balance + earned)
+    wallet.bonus_frozen_balance = money((wallet.bonus_frozen_balance or 0) - bonus)
+    wallet.bonus_balance = money((wallet.bonus_balance or 0) + bonus)
 
 
-def consume_purchase_hold(wallet: Wallet, purchased: Decimal, earned: Decimal) -> None:
+def consume_purchase_hold(wallet: Wallet, purchased: Decimal, earned: Decimal, bonus: Decimal = Decimal("0")) -> None:
     purchased, earned = money(purchased), money(earned)
-    if wallet.purchased_frozen_balance < purchased or wallet.earned_frozen_balance < earned:
+    bonus = money(bonus or 0)
+    if min(purchased, earned, bonus) < 0 or wallet.purchased_frozen_balance < purchased or wallet.earned_frozen_balance < earned or (wallet.bonus_frozen_balance or 0) < bonus:
         raise HTTPException(status_code=409, detail="Состояние защищённых средств не совпадает")
     wallet.purchased_frozen_balance = money(wallet.purchased_frozen_balance - purchased)
     wallet.earned_frozen_balance = money(wallet.earned_frozen_balance - earned)
+    wallet.bonus_frozen_balance = money((wallet.bonus_frozen_balance or 0) - bonus)
 
 
-def debit_spendable(wallet: Wallet, amount: Decimal) -> tuple[Decimal, Decimal]:
-    purchased, earned = hold_for_purchase(wallet, amount)
-    consume_purchase_hold(wallet, purchased, earned)
-    return purchased, earned
+def debit_spendable(wallet: Wallet, amount: Decimal) -> tuple[Decimal, Decimal, Decimal]:
+    funding = hold_for_purchase(wallet, amount)
+    consume_purchase_hold(wallet, *funding)
+    return funding
+
+
+def credit_sale_proceeds(wallet: Wallet, payout: Decimal, price: Decimal, bonus_funding: Decimal) -> None:
+    """Bonus-funded proceeds remain bonus, including between cooperating accounts.
+
+    Round bonus up, never converting fractional bonus dust into withdrawable AF.
+    Ordinary paid sales keep their existing earned-balance treatment.
+    """
+    payout, price, bonus_funding = money(payout), money(price), money(bonus_funding or 0)
+    if price <= 0 or not Decimal("0") <= bonus_funding <= price or not Decimal("0") <= payout <= price:
+        raise HTTPException(409, "Источники оплаты сделки не согласованы")
+    bonus_proceeds = (payout * bonus_funding / price).quantize(AF, rounding=ROUND_CEILING)
+    earned_proceeds = money(payout - bonus_proceeds)
+    wallet.bonus_balance = money((wallet.bonus_balance or 0) + bonus_proceeds)
+    wallet.earned_balance = money(wallet.earned_balance + earned_proceeds)
+    wallet.total_earned = money(wallet.total_earned + earned_proceeds)
 
 
 async def create_notification(session: AsyncSession, user_id: uuid.UUID, kind: str, title: str, body: str, payload: dict | None = None) -> Notification:
@@ -206,7 +250,7 @@ async def create_listing(
                     session.add(ListingImage(listing_id=listing.id, url=url, position=position))
                 if paid_pinned and promotion_wallet and promotion_before:
                     before_available, before_frozen = promotion_before
-                    debit_spendable(promotion_wallet, promotion_cost)
+                    funding = debit_spendable(promotion_wallet, promotion_cost)
                     promotion_wallet.version += 1
                     session.add(
                         wallet_transaction(
@@ -217,6 +261,7 @@ async def create_listing(
                             before_frozen,
                             f"Закрепление объявления до {listing.pinned_until.isoformat()}",
                             external_reference=f"listing-promotion:{listing.id}:initial",
+                            funding=funding,
                         )
                     )
                 if listing_type == "unique":
@@ -270,7 +315,7 @@ async def charge_listing_promotion(session: AsyncSession, actor: User, listing: 
     listing.pinned = True
     listing.pinned_until = now + timedelta(hours=settings.listing_promotion_hours)
     before_available, before_frozen = wallet_snapshot(wallet)
-    debit_spendable(wallet, cost)
+    funding = debit_spendable(wallet, cost)
     wallet.version += 1
     session.add(
         wallet_transaction(
@@ -281,6 +326,7 @@ async def charge_listing_promotion(session: AsyncSession, actor: User, listing: 
             before_frozen,
             f"Закрепление объявления до {listing.pinned_until.isoformat()}",
             external_reference=f"listing-promotion:{listing.id}:{listing.pinned_until.isoformat()}",
+            funding=funding,
         )
     )
 
@@ -616,9 +662,8 @@ async def delete_training_material(session: AsyncSession, admin: User, material_
         session.add(AdminAction(admin_id=admin.id, action="delete_training_material", target_type="training_material", target_id=material.id))
 
 
-def credit_training_seller(wallet: Wallet, amount: Decimal) -> None:
-    wallet.earned_balance = money(wallet.earned_balance + amount)
-    wallet.total_earned = money(wallet.total_earned + amount)
+def credit_training_seller(wallet: Wallet, amount: Decimal, price: Decimal, bonus_funding: Decimal) -> None:
+    credit_sale_proceeds(wallet, amount, price, bonus_funding)
 
 
 async def purchase_training_product(
@@ -653,7 +698,8 @@ async def purchase_training_product(
             ).limit(1)
         ):
             raise HTTPException(status_code=409, detail="Материалы курса ещё не подготовлены")
-        buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id).with_for_update())
+        participants = await lock_wallets(session, buyer.id, product.admin_id if product.product_type == "automatic" else None)
+        buyer_wallet = participants.get(buyer.id)
         if not buyer_wallet:
             raise HTTPException(status_code=409, detail="Кошелёк пользователя не найден")
 
@@ -673,13 +719,13 @@ async def purchase_training_product(
         payout, commission = settlement_amounts(price, training=True)
         buyer_available_before, buyer_frozen_before = wallet_snapshot(buyer_wallet)
         if product.product_type == "personal":
-            purchased_part, earned_part = hold_for_purchase(buyer_wallet, price)
+            purchased_part, earned_part, bonus_part = hold_for_purchase(buyer_wallet, price)
             status_value = "awaiting_start"
             delivery_status = "not_applicable"
             settled_at = None
             completed_at = None
         else:
-            purchased_part, earned_part = debit_spendable(buyer_wallet, price)
+            purchased_part, earned_part, bonus_part = debit_spendable(buyer_wallet, price)
             status_value = "completed"
             delivery_status = "pending"
             settled_at = now
@@ -705,6 +751,7 @@ async def purchase_training_product(
             delivery_status=delivery_status,
             purchased_frozen_amount=purchased_part if product.product_type == "personal" else Decimal("0"),
             earned_frozen_amount=earned_part if product.product_type == "personal" else Decimal("0"),
+            bonus_frozen_amount=bonus_part if product.product_type == "personal" else Decimal("0"),
             settled_at=settled_at,
             completed_at=completed_at,
         )
@@ -719,15 +766,16 @@ async def purchase_training_product(
             f"Покупка обучения: {product.title}",
             training_purchase_id=purchase.id,
             external_reference=f"training:{purchase.id}:buyer",
+            funding=(purchased_part, earned_part, bonus_part),
         ))
         buyer_wallet.version += 1
 
         if product.product_type == "automatic":
-            seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == product.admin_id).with_for_update())
+            seller_wallet = participants.get(product.admin_id)
             if not seller_wallet:
                 raise HTTPException(status_code=409, detail="Кошелёк продавца не найден")
             seller_available_before, seller_frozen_before = wallet_snapshot(seller_wallet)
-            credit_training_seller(seller_wallet, payout)
+            credit_training_seller(seller_wallet, payout, price, bonus_part)
             seller_wallet.version += 1
             session.add(wallet_transaction(
                 seller_wallet,
@@ -904,14 +952,14 @@ async def update_training_purchase_status(
             raise HTTPException(status_code=409, detail="Сначала начните обучение")
         purchase.status = next_status
         if next_status == "completed":
-            buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == purchase.buyer_id).with_for_update())
-            seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == purchase.seller_id).with_for_update())
+            participants = await lock_wallets(session, purchase.buyer_id, purchase.seller_id)
+            buyer_wallet, seller_wallet = participants.get(purchase.buyer_id), participants.get(purchase.seller_id)
             if not buyer_wallet or not seller_wallet:
                 raise HTTPException(status_code=409, detail="Кошелёк участника не найден")
             buyer_available_before, buyer_frozen_before = wallet_snapshot(buyer_wallet)
             seller_available_before, seller_frozen_before = wallet_snapshot(seller_wallet)
-            consume_purchase_hold(buyer_wallet, purchase.purchased_frozen_amount, purchase.earned_frozen_amount)
-            credit_training_seller(seller_wallet, purchase.seller_payout)
+            consume_purchase_hold(buyer_wallet, purchase.purchased_frozen_amount, purchase.earned_frozen_amount, purchase.bonus_frozen_amount)
+            credit_training_seller(seller_wallet, purchase.seller_payout, purchase.price_af_coins, purchase.bonus_frozen_amount)
             now = datetime.now(UTC)
             purchase.completed_at = now
             purchase.settled_at = now
@@ -1491,7 +1539,7 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
         deals: list[Deal] = []
         for listing in ordered:
             agreed_price = effective_prices[listing.id]
-            purchased_part, earned_part = hold_for_purchase(wallet, agreed_price)
+            purchased_part, earned_part, bonus_part = hold_for_purchase(wallet, agreed_price)
             payout, commission = settlement_amounts(agreed_price)
             deal = Deal(
                 listing_id=listing.id,
@@ -1502,6 +1550,7 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
                 frozen_amount=agreed_price,
                 purchased_frozen_amount=purchased_part,
                 earned_frozen_amount=earned_part,
+                bonus_frozen_amount=bonus_part,
                 seller_payout=payout,
                 platform_commission=commission,
                 seller_delivery_deadline=datetime.now(UTC) + timedelta(hours=24),
@@ -1559,6 +1608,7 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
                 available_before,
                 frozen_before,
                 "Деньги переведены под защиту для покупки",
+                funding=tuple(sum((getattr(deal, field) or 0 for deal in deals), Decimal("0")) for field in ("purchased_frozen_amount", "earned_frozen_amount", "bonus_frozen_amount")),
             )
         )
         await session.execute(delete(CartItem).where(CartItem.user_id == buyer.id))
@@ -1611,7 +1661,7 @@ async def _purchase_locked_listing(
         )
 
     available_before, frozen_before = wallet_snapshot(wallet)
-    purchased_part, earned_part = hold_for_purchase(wallet, agreed_price)
+    purchased_part, earned_part, bonus_part = hold_for_purchase(wallet, agreed_price)
     wallet.version += 1
     payout, commission = settlement_amounts(agreed_price)
     deal = Deal(
@@ -1623,6 +1673,7 @@ async def _purchase_locked_listing(
         frozen_amount=agreed_price,
         purchased_frozen_amount=purchased_part,
         earned_frozen_amount=earned_part,
+        bonus_frozen_amount=bonus_part,
         seller_payout=payout,
         platform_commission=commission,
         seller_delivery_deadline=datetime.now(UTC) + timedelta(hours=24),
@@ -1669,6 +1720,7 @@ async def _purchase_locked_listing(
             "Деньги переведены под защиту для покупки",
             deal_id=deal.id,
             external_reference=f"deal:{deal.id}:protection_hold",
+            funding=(purchased_part, earned_part, bonus_part),
         )
     )
     seller = await session.get(User, listing.seller_id)
@@ -1863,7 +1915,8 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
         previous_status = deal.status
         deal.status = next_status
         audit_deal(session, deal, "status_changed", actor.id, previous_status)
-        if next_status == "disputed": stop_reminders(deal)
+        if next_status == "disputed":
+            stop_reminders(deal)
         if actor.id == deal.seller_id and deal.conversation_id:
             conversation = await session.get(Conversation, deal.conversation_id)
             if conversation:
@@ -1986,17 +2039,16 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
         if datetime.now(UTC) - deal.transfer_started_at < timedelta(seconds=60):
             raise HTTPException(status_code=409, detail="Подтверждение станет доступно через 60 секунд после начала передачи")
         listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
-        buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
-        seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.seller_id).with_for_update())
+        participants = await lock_wallets(session, deal.buyer_id, deal.seller_id)
+        buyer_wallet, seller_wallet = participants.get(deal.buyer_id), participants.get(deal.seller_id)
         if not listing or not buyer_wallet or not seller_wallet:
             raise HTTPException(status_code=409, detail="Settlement state is inconsistent")
 
         buyer_avail_before, buyer_frozen_before = buyer_wallet.available_balance, buyer_wallet.frozen_balance
         seller_avail_before, seller_frozen_before = seller_wallet.available_balance, seller_wallet.frozen_balance
-        consume_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount)
+        consume_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount, deal.bonus_frozen_amount)
         buyer_wallet.version += 1
-        seller_wallet.earned_balance = money(seller_wallet.earned_balance + deal.seller_payout)
-        seller_wallet.total_earned = money(seller_wallet.total_earned + deal.seller_payout)
+        credit_sale_proceeds(seller_wallet, deal.seller_payout, deal.price_af_coins, deal.bonus_frozen_amount)
         seller_wallet.version += 1
 
         now = datetime.now(UTC)
@@ -2032,7 +2084,7 @@ def _apply_deal_refund(
 ) -> None:
     """Use the existing hold-release mechanism for one already locked deal."""
     available_before, frozen_before = buyer_wallet.available_balance, buyer_wallet.frozen_balance
-    release_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount)
+    release_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount, deal.bonus_frozen_amount)
     buyer_wallet.version += 1
     deal.status = "cancelled"
     deal.cancelled_at = now
@@ -2120,7 +2172,7 @@ async def auto_cancel_unanswered_deal(
             raise HTTPException(status_code=409, detail="Seller timeout refund state is inconsistent")
         if listing.status != "reserved" or listing.reserved_by_deal_id != deal.id:
             raise HTTPException(status_code=409, detail="Listing reservation does not match the timed out deal")
-        if money(deal.purchased_frozen_amount + deal.earned_frozen_amount) != money(deal.frozen_amount):
+        if money(deal.purchased_frozen_amount + deal.earned_frozen_amount + (deal.bonus_frozen_amount or 0)) != money(deal.frozen_amount):
             raise HTTPException(status_code=409, detail="Protected deal components do not match the frozen amount")
 
         _apply_deal_refund(
@@ -2184,7 +2236,7 @@ async def auto_cancel_undelivered_deal(session: AsyncSession, deal_id: uuid.UUID
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
         if (not listing or not wallet or listing.status != "reserved"
                 or listing.reserved_by_deal_id != deal.id
-                or money(deal.purchased_frozen_amount + deal.earned_frozen_amount) != money(deal.frozen_amount)):
+                or money(deal.purchased_frozen_amount + deal.earned_frozen_amount + (deal.bonus_frozen_amount or 0)) != money(deal.frozen_amount)):
             raise HTTPException(409, "Состояние защищённых средств сделки требует проверки")
         _apply_deal_refund(session, deal, listing, wallet, now=current_time,
             transaction_type="refund", description="Истекли 24 часа на передачу автомобиля: 100% средств возвращены",
@@ -2292,9 +2344,12 @@ async def resolve_dispute(
     allow_active: bool = False,
     request_id: uuid.UUID | None = None,
 ) -> Deal:
-    if admin.role != "admin": raise HTTPException(403, "Требуется администратор")
-    if outcome not in {"complete", "refund"}: raise HTTPException(422, "Неверное финансовое решение")
-    if len(reason.strip()) < 5: raise HTTPException(422, "Укажите причину решения")
+    if admin.role != "admin":
+        raise HTTPException(403, "Требуется администратор")
+    if outcome not in {"complete", "refund"}:
+        raise HTTPException(422, "Неверное финансовое решение")
+    if len(reason.strip()) < 5:
+        raise HTTPException(422, "Укажите причину решения")
     async with session.begin():
         deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
         if request_id and deal:
@@ -2308,12 +2363,12 @@ async def resolve_dispute(
             raise HTTPException(status_code=404, detail="Disputed deal not found")
         previous_status = deal.status
         listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
-        buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
-        seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.seller_id).with_for_update())
+        participants = await lock_wallets(session, deal.buyer_id, deal.seller_id)
+        buyer_wallet, seller_wallet = participants.get(deal.buyer_id), participants.get(deal.seller_id)
         if not listing or not buyer_wallet or not seller_wallet:
             raise HTTPException(status_code=409, detail="Settlement state is inconsistent")
         buyer_available_before, buyer_frozen_before = buyer_wallet.available_balance, buyer_wallet.frozen_balance
-        if allow_active and (listing.status != "reserved" or listing.reserved_by_deal_id != deal.id or money(deal.purchased_frozen_amount + deal.earned_frozen_amount) != money(deal.frozen_amount)):
+        if allow_active and (listing.status != "reserved" or listing.reserved_by_deal_id != deal.id or money(deal.purchased_frozen_amount + deal.earned_frozen_amount + (deal.bonus_frozen_amount or 0)) != money(deal.frozen_amount)):
             raise HTTPException(409, "Резерв сделки не согласован. Финансовая операция остановлена")
         now = datetime.now(UTC)
         support_ticket = None
@@ -2326,7 +2381,7 @@ async def resolve_dispute(
             if support_ticket.status in {"resolved", "closed"}:
                 raise HTTPException(status_code=409, detail="Обращение уже решено")
         if outcome == "refund":
-            release_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount)
+            release_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount, deal.bonus_frozen_amount)
             buyer_wallet.version += 1
             deal.status = "cancelled"
             deal.cancelled_at = now
@@ -2339,10 +2394,9 @@ async def resolve_dispute(
             seller_body = "Сделка отменена, средства возвращены покупателю"
         else:
             seller_available_before, seller_frozen_before = seller_wallet.available_balance, seller_wallet.frozen_balance
-            consume_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount)
+            consume_purchase_hold(buyer_wallet, deal.purchased_frozen_amount, deal.earned_frozen_amount, deal.bonus_frozen_amount)
             buyer_wallet.version += 1
-            seller_wallet.earned_balance = money(seller_wallet.earned_balance + deal.seller_payout)
-            seller_wallet.total_earned = money(seller_wallet.total_earned + deal.seller_payout)
+            credit_sale_proceeds(seller_wallet, deal.seller_payout, deal.price_af_coins, deal.bonus_frozen_amount)
             seller_wallet.version += 1
             deal.status = "completed"
             deal.completed_at = now
@@ -2618,6 +2672,8 @@ async def validate_star_pre_checkout(
 
 
 async def process_successful_payment(session: AsyncSession, telegram_id: int, payment: dict) -> bool:
+    if payment.get("is_test"):
+        raise HTTPException(status_code=400, detail="Test payments cannot credit production balances")
     if payment.get("currency") != "XTR":
         raise HTTPException(status_code=400, detail="Only XTR top-ups are accepted")
     invoice_payload = str(payment.get("invoice_payload") or "")
@@ -2628,6 +2684,8 @@ async def process_successful_payment(session: AsyncSession, telegram_id: int, pa
 
     async with session.begin():
         if await session.scalar(select(StarPayment.id).where(StarPayment.telegram_payment_charge_id == charge_id)):
+            from .referrals import logger as referral_logger
+            referral_logger.info("referral_duplicate_payment_prevented")
             return False
         intent = await session.scalar(
             select(StarPaymentIntent).where(StarPaymentIntent.invoice_payload == invoice_payload).with_for_update()
@@ -2671,7 +2729,7 @@ async def process_successful_payment(session: AsyncSession, telegram_id: int, pa
                 external_reference=charge_id,
             )
         )
-        if intent.purpose != "training_checkout":
+        if intent.purpose in {"topup", "cart_checkout", "listing_checkout", "training_topup", "listing_promotion_topup"}:
             await credit_payment_commission(session, referrer_wallet, credited_payment)
         await create_notification(
             session,

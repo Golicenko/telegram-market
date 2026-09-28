@@ -205,6 +205,7 @@ async def test_bot_start_waits_for_login_and_first_attribution_stays(db):
         first_name="Bot user",
         bot_started=True,
         pending_referral_code=owner.referral_code,
+        referral_candidate_at_registration=True,
     )
     db.add(bot_user)
     await db.flush()
