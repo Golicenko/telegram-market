@@ -49,6 +49,13 @@ class ReferralDB(DB):
         self.session.refresh(obj)
 
 
+@pytest.fixture(autouse=True)
+def share_public_url(monkeypatch):
+    monkeypatch.setattr(
+        referral_routes, "get_settings", lambda: Settings(public_base_url="https://market.example")
+    )
+
+
 @pytest.fixture
 def db(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'referrals.db'}")
@@ -333,7 +340,7 @@ async def test_native_share_is_current_user_scoped_cached_and_plain_text(
 
     monkeypatch.setattr(referral_routes, "call_bot_api", bot)
     monkeypatch.setattr(referral_routes, "_identity_cache", None)
-    monkeypatch.setattr(referral_routes, "get_settings", lambda: Settings())
+    monkeypatch.setattr(referral_routes, "get_settings", lambda: Settings(public_base_url="https://market.example"))
     app = FastAPI()
     app.include_router(referral_routes.router)
     app.dependency_overrides[get_session] = lambda: db
@@ -370,12 +377,16 @@ async def test_native_share_is_current_user_scoped_cached_and_plain_text(
         payload for method, payload in calls if method == "savePreparedInlineMessage"
     ]
     assert len(prepared) == 1 and prepared[0]["user_id"] == 1
-    article = prepared[0]["result"]
-    assert article["reply_markup"]["inline_keyboard"] == [
+    photo = prepared[0]["result"]
+    assert photo["type"] == "photo"
+    assert photo["photo_url"] == "https://market.example" + referral_routes.REFERRAL_PHOTO_PATH
+    assert photo["thumbnail_url"] == photo["photo_url"]
+    assert photo["reply_markup"]["inline_keyboard"] == [
         [{"text": "Перейти в маркет", "url": body["referralUrl"]}]
     ]
-    assert "Имя <без username>" in article["input_message_content"]["message_text"]
-    assert "parse_mode" not in article["input_message_content"]
+    assert "Имя <без username>" in photo["caption"]
+    assert "Car Parking 1 и Car Parking 2" in photo["caption"]
+    assert "parse_mode" not in photo and "input_message_content" not in photo
     assert "Тебя приглашают" in referrals.invitation_text(None)
 
 
