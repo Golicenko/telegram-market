@@ -1,5 +1,7 @@
 FROM python:3.12-slim
 
+# Redeploy request 2026-09-29: main already includes referral backend PR #58.
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
