@@ -27,8 +27,10 @@ class WalletOut(ORMModel):
     total_earned: Decimal
     purchased_balance: Decimal
     earned_balance: Decimal
+    bonus_balance: Decimal
     purchased_frozen_balance: Decimal
     earned_frozen_balance: Decimal
+    bonus_frozen_balance: Decimal
 
 
 class MeOut(BaseModel):

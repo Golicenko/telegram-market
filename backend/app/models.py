@@ -31,6 +31,7 @@ class User(Base, TimestampMixin):
     bot_started: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     referral_code: Mapped[str | None] = mapped_column(String(8), unique=True)
     pending_referral_code: Mapped[str | None] = mapped_column(String(8))
+    referral_candidate_at_registration: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     referral_registration_processed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     is_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     __table_args__ = (CheckConstraint("role IN ('user','admin')", name="ck_users_role"),)
@@ -301,6 +302,7 @@ class TrainingPurchase(Base, TimestampMixin):
     delivery_status: Mapped[str] = mapped_column(String(24), nullable=False, default="not_applicable", index=True)
     purchased_frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
     earned_frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    bonus_frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
     delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_delivery_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     delivery_lock_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
@@ -316,6 +318,7 @@ class TrainingPurchase(Base, TimestampMixin):
         CheckConstraint("delivery_status IN ('not_applicable','pending','sending','delivered','failed')", name="ck_training_purchases_delivery_status"),
         CheckConstraint("price_af_coins >= 0 AND seller_payout >= 0 AND platform_commission >= 0", name="ck_training_purchases_amounts"),
         CheckConstraint("purchased_frozen_amount >= 0 AND earned_frozen_amount >= 0", name="ck_training_purchases_frozen"),
+        CheckConstraint("bonus_frozen_amount >= 0", name="ck_training_purchases_bonus_nonnegative"),
         CheckConstraint("delivery_attempts >= 0", name="ck_training_purchases_delivery_attempts"),
         Index("ix_training_purchases_buyer_created", "buyer_id", "created_at"),
         Index("ix_training_purchases_product_status", "product_id", "status"),
@@ -370,6 +373,7 @@ class Deal(Base, TimestampMixin):
     frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     purchased_frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
     earned_frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    bonus_frozen_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
     seller_payout: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     platform_commission: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     buyer_game_id: Mapped[str | None] = mapped_column(String(128))
@@ -414,6 +418,7 @@ class Deal(Base, TimestampMixin):
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         CheckConstraint("status IN ('pending_payment','paid','seller_contacted','transfer_in_progress','buyer_confirmed','completed','disputed','cancelled')", name="ck_deals_status"),
+        CheckConstraint("bonus_frozen_amount >= 0", name="ck_deals_bonus_nonnegative"),
         CheckConstraint(
             "seller_purchase_notification_status IN ('pending','sending','sent','failed')",
             name="ck_deals_seller_purchase_notification_status",
@@ -596,12 +601,15 @@ class Wallet(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, unique=True)
     purchased_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
     earned_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    bonus_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
     purchased_frozen_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
     earned_frozen_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    bonus_frozen_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
     total_earned: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     __table_args__ = (
+        CheckConstraint("bonus_balance >= 0 AND bonus_frozen_balance >= 0", name="ck_wallet_bonus_nonnegative"),
         CheckConstraint(
             "purchased_balance >= 0 AND earned_balance >= 0 "
             "AND purchased_frozen_balance >= 0 AND earned_frozen_balance >= 0 "
@@ -612,11 +620,11 @@ class Wallet(Base):
 
     @property
     def available_balance(self) -> Decimal:
-        return Decimal(self.purchased_balance or 0) + Decimal(self.earned_balance or 0)
+        return Decimal(self.purchased_balance or 0) + Decimal(self.earned_balance or 0) + Decimal(self.bonus_balance or 0)
 
     @property
     def frozen_balance(self) -> Decimal:
-        return Decimal(self.purchased_frozen_balance or 0) + Decimal(self.earned_frozen_balance or 0)
+        return Decimal(self.purchased_frozen_balance or 0) + Decimal(self.earned_frozen_balance or 0) + Decimal(self.bonus_frozen_balance or 0)
 
 
 class WalletTransaction(Base):
@@ -634,6 +642,7 @@ class WalletTransaction(Base):
     related_training_purchase_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("training_purchases.id", ondelete="SET NULL"), index=True)
     external_reference: Mapped[str | None] = mapped_column(String(255), unique=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    balance_breakdown: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 

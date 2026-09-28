@@ -63,6 +63,11 @@ async def get_current_user(
     request.state.telegram_user_id = telegram_id
     role = "admin" if telegram_id in settings.admin_telegram_ids else "user"
     user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    from .referrals import valid_code
+    signed_start_param = (
+        valid_code(dict(parse_qsl(x_telegram_init_data, strict_parsing=True)).get("start_param"))
+        if x_telegram_init_data else None
+    )
     now = datetime.now(UTC)
     if user is None:
         try:
@@ -75,6 +80,8 @@ async def get_current_user(
                     username=telegram_user.get("username"),
                     photo_url=telegram_user.get("photo_url"),
                     mini_app_last_active_at=now,
+                    pending_referral_code=signed_start_param,
+                    referral_candidate_at_registration=bool(signed_start_param),
                 )
                 session.add(user)
                 await session.flush()
@@ -93,7 +100,6 @@ async def get_current_user(
 
         # This exact initData has passed HMAC verification above. Never use a
         # query-string/referral code sent separately by the frontend.
-        signed_start_param = dict(parse_qsl(x_telegram_init_data, strict_parsing=True)).get("start_param")
         await ensure_code(session, user)
         await qualify_first_login(session, user, signed_start_param)
     user.role = role
