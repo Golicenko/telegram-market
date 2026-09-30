@@ -179,7 +179,17 @@ async def test_transfer_schedules_one_reminder_in_the_same_status_transition():
     deal.seller_response_deadline = deal.delivery_details_submitted_at + timedelta(hours=24)
     before = datetime.now(UTC)
 
-    await set_deal_status(Session(deal, listing, conversation), seller, deal.id, "transfer_in_progress")
+    class TransferSession(Session):
+        async def scalar(self, query):
+            model = query.column_descriptions[0]["entity"]
+            if model is Listing:
+                return listing
+            if model is Wallet:
+                return Wallet(user_id=deal.buyer_id, purchased_frozen_balance=100,
+                    earned_frozen_balance=0, bonus_frozen_balance=0)
+            return await super().scalar(query)
+
+    await set_deal_status(TransferSession(deal, listing, conversation), seller, deal.id, "transfer_in_progress")
 
     assert deal.status == "transfer_in_progress"
     assert deal.seller_responded_at is not None

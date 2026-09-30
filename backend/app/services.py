@@ -1884,6 +1884,28 @@ async def complete_listing_payment_intent(
     return intent, deal, seller_telegram_id
 
 
+def validate_deal_hold(deal: Deal, listing: Listing | None, wallet: Wallet | None) -> None:
+    """Check the existing paid reservation without consuming or moving any funds."""
+    funding = tuple(money(value or 0) for value in (
+        deal.purchased_frozen_amount, deal.earned_frozen_amount, deal.bonus_frozen_amount,
+    ))
+    if (
+        not listing or not wallet
+        or listing.reserved_by_deal_id != deal.id or listing.status != "reserved"
+        or listing.seller_id != deal.seller_id
+        or deal.price_af_coins <= 0
+        or min(funding) < 0
+        or sum(funding) != deal.frozen_amount
+        or deal.frozen_amount != deal.price_af_coins
+        or any(held < required for held, required in zip((
+            wallet.purchased_frozen_balance or 0,
+            wallet.earned_frozen_balance or 0,
+            wallet.bonus_frozen_balance or 0,
+        ), funding))
+    ):
+        raise HTTPException(status_code=409, detail="Состояние оплаты сделки не подтверждено")
+
+
 async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID, next_status: str) -> Deal:
     allowed = {
         "seller_contacted": {"paid"},
@@ -1891,44 +1913,70 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
         "disputed": {"paid", "seller_contacted", "transfer_in_progress"},
     }
     async with session.begin():
-        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
-        if not deal or actor.id not in {deal.buyer_id, deal.seller_id}:
+        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update().execution_options(populate_existing=True))
+        if not deal:
             raise HTTPException(status_code=404, detail="Deal not found")
-        if deal.status not in allowed[next_status]:
-            raise HTTPException(status_code=409, detail=f"Cannot change {deal.status} to {next_status}")
+        if actor.id not in {deal.buyer_id, deal.seller_id}:
+            raise HTTPException(status_code=403, detail="Вы не являетесь участником сделки")
         if next_status in {"seller_contacted", "transfer_in_progress"} and actor.id != deal.seller_id:
             raise HTTPException(status_code=403, detail="Only the seller can change this status")
+        if next_status == "transfer_in_progress" and (deal.cancelled_at or deal.completed_at or deal.buyer_confirmed_at):
+            raise HTTPException(status_code=409, detail="Сделка уже закрыта")
+        # Replay only this seller's already committed transition. Never reschedule
+        # reminders, append events or touch money for a repeated request.
+        if next_status == "transfer_in_progress" and deal.status == next_status and deal.transfer_started_at:
+            return deal
+        if deal.status not in allowed[next_status]:
+            raise HTTPException(status_code=409, detail=f"Cannot change {deal.status} to {next_status}")
         now = datetime.now(UTC)
         if next_status in {"seller_contacted", "transfer_in_progress"} and delivery_deadline_expired(deal, now):
             raise HTTPException(status_code=409, detail="Срок передачи истёк. Сделка ожидает автоматического возврата")
-        if (
+        needs_response_marker = (
             actor.id == deal.seller_id
             and deal.status in {"paid", "seller_contacted"}
             and deal.seller_response_deadline
             and not deal.seller_responded_at
-        ):
-            if deal.seller_response_deadline and now >= deal.seller_response_deadline:
+        )
+        if needs_response_marker:
+            response_deadline = deal.seller_response_deadline
+            if response_deadline.tzinfo is None:
+                response_deadline = response_deadline.replace(tzinfo=UTC)
+            if now >= response_deadline:
                 raise HTTPException(status_code=409, detail="Срок ответа истёк. Сделка ожидает автоматической отмены")
-            deal.seller_responded_at = now
         if next_status == "transfer_in_progress" and not deal.buyer_game_id:
             raise HTTPException(status_code=409, detail="Покупатель ещё не указал игровой ID")
+        if next_status == "transfer_in_progress":
+            # This step never changes the listing. Holding its lock after the
+            # deal lock could deadlock with a retry of purchase_listing, which
+            # locks listing -> deal. Settlement/refund serialize on this Deal.
+            listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id))
+            wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
+            validate_deal_hold(deal, listing, wallet)
+        # Finish all reads before changing Deal: multiple autoflush UPDATEs in
+        # one transaction cause PostgreSQL to recheck unchanged foreign keys,
+        # taking a Listing KEY SHARE lock in the reverse purchase lock order.
+        conversation = None
+        if actor.id == deal.seller_id and deal.conversation_id:
+            conversation = await session.get(Conversation, deal.conversation_id)
         previous_status = deal.status
         deal.status = next_status
+        if needs_response_marker:
+            deal.seller_responded_at = now
         audit_deal(session, deal, "status_changed", actor.id, previous_status)
         if next_status == "disputed":
             stop_reminders(deal)
-        if actor.id == deal.seller_id and deal.conversation_id:
-            conversation = await session.get(Conversation, deal.conversation_id)
-            if conversation:
-                record_seller_response(conversation, now)
+        if conversation:
+            record_seller_response(conversation, now)
         if next_status == "transfer_in_progress":
             deal.transfer_started_at = now
+            audit_deal(session, deal, "seller_marked_transferred", actor.id, previous_status)
             if deal.buyer_transfer_reminder_status in {None, "not_scheduled"}:
                 deal.buyer_transfer_reminder_status = "pending"
                 deal.buyer_transfer_reminder_scheduled_at = now
                 deal.buyer_transfer_reminder_error = None
         other_id = deal.seller_id if actor.id == deal.buyer_id else deal.buyer_id
-        await create_notification(session, other_id, "deal_status", "Статус сделки изменён", f"Новый статус: {next_status}", {"deal_id": str(deal.id)})
+        body = "Продавец сообщил, что автомобиль передан. Проверьте получение на ваш ID." if next_status == "transfer_in_progress" else f"Новый статус: {next_status}"
+        await create_notification(session, other_id, "deal_status", "Статус сделки изменён", body, {"deal_id": str(deal.id)})
     return deal
 
 
@@ -2031,18 +2079,30 @@ async def create_deal_support_case(
 
 async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) -> Deal:
     async with session.begin():
-        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
-        if not deal or deal.buyer_id != buyer.id:
+        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update().execution_options(populate_existing=True))
+        if not deal:
             raise HTTPException(status_code=404, detail="Deal not found")
+        if deal.buyer_id != buyer.id:
+            raise HTTPException(status_code=403, detail="Только покупатель может подтвердить получение")
+        # Returning the committed result is safe after a lost response/retry.
+        # Admin-completed deals are not buyer-confirmation replays.
+        if deal.status == "completed" and deal.buyer_confirmed_at and deal.completed_at:
+            return deal
+        if deal.cancelled_at or deal.completed_at or deal.buyer_confirmed_at:
+            raise HTTPException(status_code=409, detail="Сделка уже закрыта")
         if deal.status != "transfer_in_progress" or not deal.transfer_started_at:
             raise HTTPException(status_code=409, detail="Transfer has not started")
-        if datetime.now(UTC) - deal.transfer_started_at < timedelta(seconds=60):
+        transfer_started_at = deal.transfer_started_at
+        if transfer_started_at.tzinfo is None:  # SQLite test bridge; PostgreSQL uses timestamptz.
+            transfer_started_at = transfer_started_at.replace(tzinfo=UTC)
+        if datetime.now(UTC) - transfer_started_at < timedelta(seconds=60):
             raise HTTPException(status_code=409, detail="Подтверждение станет доступно через 60 секунд после начала передачи")
         listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
         participants = await lock_wallets(session, deal.buyer_id, deal.seller_id)
         buyer_wallet, seller_wallet = participants.get(deal.buyer_id), participants.get(deal.seller_id)
         if not listing or not buyer_wallet or not seller_wallet:
             raise HTTPException(status_code=409, detail="Settlement state is inconsistent")
+        validate_deal_hold(deal, listing, buyer_wallet)
 
         buyer_avail_before, buyer_frozen_before = buyer_wallet.available_balance, buyer_wallet.frozen_balance
         seller_avail_before, seller_frozen_before = seller_wallet.available_balance, seller_wallet.frozen_balance
@@ -2057,6 +2117,7 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
         deal.completed_at = now
         stop_reminders(deal)
         audit_deal(session, deal, "buyer_confirmed", buyer.id, "transfer_in_progress")
+        audit_deal(session, deal, "order_completed", buyer.id, "transfer_in_progress")
         if deal.conversation_id:
             conversation = await session.get(Conversation, deal.conversation_id)
             if conversation:
@@ -2067,7 +2128,7 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
         session.add(wallet_transaction(buyer_wallet, "purchase_completed", Decimal("0"), buyer_avail_before, buyer_frozen_before, "Покупка завершена", deal_id=deal.id))
         session.add(wallet_transaction(seller_wallet, "sale_income", deal.seller_payout, seller_avail_before, seller_frozen_before, f"Продажа автомобиля: продавцу начислено {deal.seller_payout} AF Coins", deal_id=deal.id))
         session.add(wallet_transaction(buyer_wallet, "platform_commission", -deal.platform_commission, buyer_wallet.available_balance, buyer_wallet.frozen_balance, f"Комиссия продажи: {deal.platform_commission} AF Coins", deal_id=deal.id))
-        await create_notification(session, deal.seller_id, "deal_completed", "Сделка завершена", f"Начислено {deal.seller_payout} AF Coins", {"deal_id": str(deal.id)})
+        await create_notification(session, deal.seller_id, "deal_completed", "Сделка завершена", f"Покупатель подтвердил получение автомобиля. Начислено {deal.seller_payout} AF Coins", {"deal_id": str(deal.id)})
     return deal
 
 

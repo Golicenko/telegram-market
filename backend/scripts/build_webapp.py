@@ -11,7 +11,7 @@ import re
 ROOT = Path(__file__).resolve().parents[2]
 WEBAPP = ROOT / "webapp"
 INDEX = WEBAPP / "index.html"
-ASSET_URLS = ("css/style.css", "js/api.js", "js/referrals.js", "js/app.js")
+ASSET_URLS = ("css/style.css", "js/api.js", "js/referrals.js", "js/deal-confirmation.js", "js/app.js")
 ASSETS = tuple(WEBAPP / url for url in ASSET_URLS)
 
 
@@ -20,7 +20,7 @@ def normalized_index_bytes() -> bytes:
     html = INDEX.read_text(encoding="utf-8")
     html = re.sub(r'(<meta name="autoflow-build" content=")[^"]+(" */?>)', r'\g<1>BUILD\2', html)
     for asset_url in ASSET_URLS:
-        html = re.sub(rf'({re.escape(asset_url)}\?v=)[^"&]+', rf'\g<1>BUILD', html)
+        html = re.sub(rf'({re.escape(asset_url)}\?v=)[^"&]+', r'\g<1>BUILD', html)
     return html.encode("utf-8")
 
 
