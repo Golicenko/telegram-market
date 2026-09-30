@@ -790,6 +790,7 @@ function handleClick(event) {
   }
 
   async function goBack() {
+    if (window.AutoFlowDealConfirmation.dismiss()) return;
     if (primaryViews.has(state.currentView) || Date.now() < state.backBlockedUntil) return;
     state.backBlockedUntil = Date.now() + 450;
     const entry = state.navigationStack.pop();
@@ -2379,7 +2380,7 @@ async function hideCurrentConversation() {
       return;
     }
     if (deal.status === "transfer_in_progress") {
-      title.textContent = isBuyer ? "🚗 Продавец сообщил о передаче" : "⏳ Ожидаем подтверждение покупателя";
+      title.textContent = isBuyer ? "🚗 Продавец сообщил, что автомобиль передан" : "⏳ Ожидаем подтверждения покупателя";
       copy.textContent = isBuyer
         ? "Вы получили автомобиль?"
         : "Вы сообщили, что автомобиль передан.\nДеньги будут начислены после подтверждения покупателя.";
@@ -2446,19 +2447,26 @@ async function hideCurrentConversation() {
     }
   }
 
-  async function copyBuyerGameId(value) {
+  async function copyBuyerGameId(value, container = document.body) {
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
-      else {
+      let copied = false;
+      if (navigator.clipboard?.writeText) {
+        try { await navigator.clipboard.writeText(value); copied = true; }
+        catch (_error) { /* iOS WebViews can deny Clipboard API; try selection. */ }
+      }
+      if (!copied) {
         const input = document.createElement("textarea");
-        input.value = value; input.setAttribute("readonly", ""); input.style.position = "fixed"; input.style.opacity = "0";
-        document.body.append(input); input.select();
-        const copied = document.execCommand("copy");
-        input.remove();
+        input.value = value; input.setAttribute("readonly", ""); input.style.cssText = "position:fixed;opacity:0;font-size:16px";
+        container.append(input);
+        try {
+          input.focus({ preventScroll: true }); input.select(); input.setSelectionRange(0, value.length);
+          copied = document.execCommand("copy");
+        } finally { input.remove(); }
         if (!copied) throw new Error("copy_failed");
       }
       notify("✅ ID скопирован");
-    } catch (_error) { notify("Не удалось скопировать ID"); }
+      return true;
+    } catch (_error) { notify("Не удалось скопировать ID"); return false; }
   }
 
   function renderOffers() {
@@ -2521,7 +2529,7 @@ async function hideCurrentConversation() {
       const confirm = document.createElement("button");
       confirm.className = "deal-confirm";
       confirm.dataset.dealAction = "confirm";
-      confirm.textContent = "✅ Да, машина у меня";
+      confirm.textContent = "Подтвердить получение";
       confirm.hidden = true;
       const availableAt = new Date(deal.transfer_started_at).getTime() + 60 * 1000;
       const updateTimer = () => {
@@ -2541,7 +2549,7 @@ async function hideCurrentConversation() {
       const support = document.createElement("button");
       support.className = "deal-support";
       support.dataset.dealAction = "support";
-      support.textContent = "Есть проблема";
+      support.textContent = "Автомобиль не получен";
       elements.dealControls.append(warning, timer, confirm, support);
     }
     if (["paid", "seller_contacted"].includes(deal.status)) {
@@ -2557,19 +2565,45 @@ async function hideCurrentConversation() {
     state.dealActionPending = true;
     const endpoint = action === "seller-contacted" ? "seller-contacted" : action === "transfer" ? "transfer" : action === "confirm" ? "confirm" : action === "cancel" ? "cancel" : "dispute";
     try {
-      const confirmation = {
-        transfer: ["Вы уверены, что автомобиль уже передан покупателю? После подтверждения покупателю будет предложено завершить сделку. Деньги пока останутся под защитой.", "Да, автомобиль передан"],
-        confirm: ["Подтверждайте получение только после того, как действительно получили товар. Сделка будет завершена, средства начислены продавцу.", "Да, машина у меня"],
-        cancel: ["Отменить сделку? Защищённые средства вернутся покупателю, чат сделки закроется. Отмена доступна только до передачи.", "Отменить сделку"],
-      }[action];
-      if (confirmation && !(await confirmCriticalAction(...confirmation))) return;
-      if (state.currentConversation?.deal?.id !== id) return;
-      const result = await api.request(`/deals/${id}/${endpoint}`, { method: "POST" });
-      if (["completed", "cancelled"].includes(result.status)) return await closeDealChat();
+      const submit = () => {
+        if (state.currentConversation?.deal?.id !== id) throw new Error("Deal context changed");
+        return api.request(`/deals/${id}/${endpoint}`, { method: "POST" });
+      };
+      let result;
+      if (["transfer", "confirm"].includes(action)) {
+        result = await confirmDealTransfer(action, state.currentConversation.deal, submit);
+        if (!result) return;
+      } else {
+        if (action === "cancel" && !(await confirmCriticalAction("Отменить сделку? Защищённые средства вернутся покупателю, чат сделки закроется. Отмена доступна только до передачи.", "Отменить сделку"))) return;
+        result = await submit();
+      }
+      // Only a successful server result may replace the displayed deal state.
+      if (state.currentConversation?.deal?.id === id) {
+        state.currentConversation.deal = result;
+        renderDealDeliveryPanel(); renderDealControls();
+      }
+      if (["completed", "cancelled"].includes(result.status)) {
+        await closeDealChat();
+        if (result.status === "completed") notify("Сделка завершена");
+        return;
+      }
       await openDealConversation(id); await refreshMarketplace();
     }
     catch (error) { notify(error.message); }
     finally { state.dealActionPending = false; }
+  }
+
+  function confirmDealTransfer(action, deal, submit) {
+    return window.AutoFlowDealConfirmation.confirm({
+      seller: action === "transfer",
+      gameId: deal.buyer_game_id,
+      submit,
+      copyId: copyBuyerGameId,
+      haptic: (kind) => safeTelegramCall("deal-confirm-haptic", () => {
+        if (kind === "open") telegram?.HapticFeedback?.impactOccurred?.("light");
+        else telegram?.HapticFeedback?.notificationOccurred?.(kind);
+      }),
+    });
   }
 
   function confirmCriticalAction(message, label) {

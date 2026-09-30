@@ -682,3 +682,29 @@ main{padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));p
 [data-view="training-purchase"] small{overflow-wrap:anywhere;color:var(--muted)}
 @media(prefers-reduced-motion:reduce){.help-center *{scroll-behavior:auto}}
 .critical-confirm p{white-space:pre-line;line-height:1.5;font-size:15px}.critical-confirm button{min-height:48px;width:100%;margin-top:10px}.deal-transfer-critical{grid-column:1/-1;border:2px solid #ffbc45!important;padding:12px!important;min-height:48px!important;box-shadow:0 0 0 3px rgba(255,160,30,.08)}.deal-control-panel{scroll-margin-top:var(--safe-top)}.deal-control-panel p{white-space:pre-line;overflow-wrap:anywhere;font-size:13px;line-height:1.5}.deal-control-panel textarea{width:100%;font-size:16px}.deal-control-panel button{min-height:44px}.deal-timeline p{border-bottom:1px solid var(--line);padding:8px 0}.deal-timeline h3{font-size:16px}
+.deal-confirmation{inset:var(--safe-top) 0 var(--safe-bottom);margin:auto;width:min(calc(100% - 32px),400px);max-height:calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px);overflow-y:auto;overscroll-behavior:contain;padding:22px 18px;border-color:rgba(255,171,50,.24);border-radius:20px;background:linear-gradient(150deg,#111e2b,#080f19);text-align:center;animation:deal-confirm-in .2s ease-out both}
+.deal-confirmation::backdrop{background:rgba(1,6,13,.52);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:deal-backdrop-in .2s ease-out both}
+.deal-confirmation.is-closing{animation:deal-confirm-out .2s ease-in both}
+.deal-confirmation.is-closing::backdrop{animation:deal-backdrop-out .2s ease-in both}
+.deal-confirmation h2{margin:12px 0;font-size:21px;line-height:1.25}
+.deal-confirmation p{font-size:14px;line-height:1.5;overflow-wrap:anywhere}
+.deal-confirmation .deal-confirmation__note{font-size:12px;color:#a2afbe}
+.deal-confirmation__mark{display:grid;place-items:center;margin:auto;width:48px;height:48px;border-radius:15px;background:rgba(255,158,26,.09);color:#ffb545;font-size:26px}
+.deal-confirmation__recipient{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 10px;margin:16px 0;padding:10px;border:1px solid var(--line);border-radius:12px;text-align:left;background:rgba(0,0,0,.15)}
+.deal-confirmation__recipient small{grid-column:1/-1;color:#a2afbe}
+.deal-confirmation__recipient strong{overflow-wrap:anywhere;font-size:16px;user-select:all}
+.deal-confirmation button{min-height:46px;min-width:44px;padding:10px;border:1px solid var(--line);border-radius:11px;font-size:13px;font-weight:700;color:var(--text);background:#182536;cursor:pointer}
+.deal-confirmation button:focus-visible{outline:2px solid #ffc15d;outline-offset:3px}
+.deal-confirmation__buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.deal-confirmation .publish-button{margin:0;color:#211405;border:0;background:linear-gradient(135deg,#ffb318,#ff7b00)}
+.deal-confirmation button:disabled{opacity:.6;cursor:default}
+.deal-confirmation__status{min-height:21px;margin:10px 0;color:#ffc36d!important}
+.deal-confirmation.is-success .deal-confirmation__mark{color:#7ee7b1;background:rgba(70,191,132,.12);animation:deal-confirm-in .2s ease-out}
+.deal-confirmation.is-success .deal-confirmation__status{color:#7ee7b1!important}
+.deal-confirmation.is-pending .publish-button::before{content:"";display:inline-block;width:12px;height:12px;margin-right:6px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-2px;animation:deal-confirm-spin .8s linear infinite}
+@keyframes deal-confirm-in{from{opacity:0;transform:translateY(8px) scale(.96)}to{opacity:1;transform:none}}
+@keyframes deal-confirm-out{from{opacity:1;transform:none}to{opacity:0;transform:translateY(6px) scale(.96)}}
+@keyframes deal-backdrop-in{from{background:rgba(1,6,13,0);backdrop-filter:blur(0);-webkit-backdrop-filter:blur(0)}to{background:rgba(1,6,13,.52);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}}
+@keyframes deal-backdrop-out{from{background:rgba(1,6,13,.52);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}to{background:rgba(1,6,13,0);backdrop-filter:blur(0);-webkit-backdrop-filter:blur(0)}}
+@keyframes deal-confirm-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.deal-confirmation,.deal-confirmation::backdrop,.deal-confirmation.is-success .deal-confirmation__mark,.deal-confirmation.is-pending .publish-button::before{animation:none!important}}

@@ -29,7 +29,7 @@ test("deal delivery form persists via the backend and has a mobile-safe layout",
   assert.match(css, /\.deal-delivery__form input\[type="text"\].*font-size:16px/);
   assert.match(app, /hasDeliveryDetails && \["paid", "seller_contacted"\]/);
   assert.match(app, /✅ Машина передана/);
-  assert.match(app, /✅ Да, машина у меня/);
+  assert.match(app, /Подтвердить получение/);
 });
 
 test("game id keeps letters and opens a normal mobile keyboard", () => {
