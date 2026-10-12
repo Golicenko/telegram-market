@@ -12,7 +12,7 @@ from app.models import Deal, DealEvent, Listing, Notification, User, Wallet, Wal
 from app.message_notifications import claim_delivery
 from app.seller_orders import queue_seller_order_reminder, recover_seller_order_reminders
 from app.services import (purchase_listing, set_deal_status, save_deal_delivery_details,
-    send_conversation_message, auto_cancel_undelivered_deal)
+    send_conversation_message, auto_cancel_undelivered_deal, complete_deal)
 from test_referral_bonus_postgres import isolated_pg, signed_login, apply_revisions
 
 
@@ -230,3 +230,61 @@ def test_reminder_configuration_rejects_unbounded_schedule(offsets):
 
 def test_reminder_configuration_can_be_disabled():
     assert Settings(seller_order_reminder_seconds=[]).seller_order_reminder_seconds == []
+
+
+@pytest.mark.asyncio
+async def test_full_accept_transfer_receipt_flow_settles_once():
+    async with isolated_pg() as (_, sessions):
+        buyer, seller, _, deal = await paid_order(sessions)
+        async with sessions() as session:
+            accepted = await set_deal_status(session, seller, deal.id, "seller_contacted")
+        async with sessions() as session:
+            await save_deal_delivery_details(session, buyer, deal.id, "AB123456")
+        async def transfer():
+            async with sessions() as session:
+                return await set_deal_status(session, seller, deal.id, "transfer_in_progress")
+        assert all(r.status == "transfer_in_progress" for r in await asyncio.gather(*(transfer() for _ in range(5))))
+        async with sessions() as session:
+            assert not await auto_cancel_undelivered_deal(session, deal.id, now=deal.seller_delivery_deadline + timedelta(seconds=1))
+        async with sessions() as session, session.begin():
+            stored = await session.get(Deal, deal.id)
+            assert stored.seller_accepted_at == accepted.seller_accepted_at
+            assert stored.seller_delivery_deadline == deal.seller_delivery_deadline
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).frozen_balance == 100
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))).available_balance == 0
+            stored.transfer_started_at = datetime.now(UTC) - timedelta(seconds=61)
+        async def receipt():
+            async with sessions() as session:
+                return await complete_deal(session, buyer, deal.id)
+        assert all(r.status == "completed" for r in await asyncio.gather(*(receipt() for _ in range(5))))
+        async with sessions() as session:
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).frozen_balance == 0
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))).available_balance == deal.seller_payout
+            for kind in ("seller_order_accepted", "seller_marked_transferred", "buyer_confirmed"):
+                assert await session.scalar(select(func.count()).select_from(DealEvent).where(DealEvent.event_type == kind)) == 1
+            assert await session.scalar(select(func.count()).select_from(WalletTransaction).where(WalletTransaction.transaction_type == "sale_income")) == 1
+
+
+@pytest.mark.asyncio
+async def test_blocked_bot_does_not_block_order_or_timeout_refund(monkeypatch):
+    from app import message_notifications
+    async with isolated_pg() as (_, sessions):
+        buyer, seller, _, deal = await paid_order(sessions)
+        monkeypatch.setattr(message_notifications, "SessionLocal", sessions)
+        sends = []
+        async def blocked(job):
+            sends.append(job)
+            return "blocked", "telegram_bot_blocked_by_user"
+        monkeypatch.setattr(message_notifications, "send_delivery", blocked)
+        await message_notifications.recover_message_notifications()
+        await message_notifications.recover_message_notifications()
+        assert len(sends) == 1 and sends[0]["telegram_id"] == seller.telegram_id
+        async with sessions() as session:
+            assert (await session.scalar(select(Notification).where(Notification.notification_type == "deal_created"))).delivery_status == "blocked"
+            assert (await session.get(Deal, deal.id)).status == "paid"
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).frozen_balance == 100
+        async with sessions() as session:
+            assert await auto_cancel_undelivered_deal(session, deal.id, now=deal.seller_delivery_deadline + timedelta(seconds=1))
+        async with sessions() as session:
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).available_balance == 100
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).frozen_balance == 0
