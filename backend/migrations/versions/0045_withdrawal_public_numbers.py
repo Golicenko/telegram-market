@@ -29,6 +29,9 @@ def upgrade():
     op.add_column("support_tickets", sa.Column("withdrawal_id", postgresql.UUID(as_uuid=True),
         sa.ForeignKey("withdrawal_requests.id", ondelete="RESTRICT")))
     op.create_unique_constraint("uq_support_withdrawal", "support_tickets", ["withdrawal_id"])
+    op.execute("""CREATE INDEX ix_notification_withdrawal_delivery ON notifications
+        ((payload->>'withdrawal_id'), created_at DESC, id DESC)
+        WHERE notification_type = 'withdrawal_support_reply'""")
 
 
 def downgrade():

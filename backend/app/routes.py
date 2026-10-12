@@ -3146,11 +3146,11 @@ async def admin_withdrawals(
         raise HTTPException(422, "Введите номер заявки, например #000057")
     delivery = select(Notification.delivery_status).where(
         Notification.notification_type == "withdrawal_support_reply",
-        Notification.payload["withdrawal_id"].as_string() == func.cast(WithdrawalRequest.id, String),
+        Notification.payload["withdrawal_id"].astext == func.cast(WithdrawalRequest.id, String),
     ).order_by(Notification.created_at.desc(), Notification.id.desc()).limit(1).correlate(WithdrawalRequest).scalar_subquery()
     delivery_error = select(Notification.delivery_error).where(
         Notification.notification_type == "withdrawal_support_reply",
-        Notification.payload["withdrawal_id"].as_string() == func.cast(WithdrawalRequest.id, String),
+        Notification.payload["withdrawal_id"].astext == func.cast(WithdrawalRequest.id, String),
     ).order_by(Notification.created_at.desc(), Notification.id.desc()).limit(1).correlate(WithdrawalRequest).scalar_subquery()
     rows = (
         await session.execute(

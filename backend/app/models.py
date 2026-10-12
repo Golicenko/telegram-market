@@ -662,6 +662,8 @@ class Notification(Base):
     delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     delivery_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    __table_args__ = (Index("ix_notification_withdrawal_delivery", payload["withdrawal_id"].astext,
+        created_at.desc(), id.desc(), postgresql_where=sql_text("notification_type = 'withdrawal_support_reply'")),)
 
 
 class StarPayment(Base):
