@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     telegram_mini_app_short_name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_]+$")
     admin_id: int | None = None
     admin_telegram_ids: set[int] = Field(default_factory=set)
+    # Support never receives the legacy financial administrator role.
+    support_telegram_ids: set[int] = Field(default_factory=set)
     railway_public_domain: str | None = None
     public_base_url: str | None = None
     upload_dir: str | None = None
@@ -100,7 +102,7 @@ class Settings(BaseSettings):
             return normalize_database_url(value)
         return value
 
-    @field_validator("admin_telegram_ids", mode="before")
+    @field_validator("admin_telegram_ids", "support_telegram_ids", mode="before")
     @classmethod
     def parse_admin_ids(cls, value):
         if isinstance(value, str):

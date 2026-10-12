@@ -2342,7 +2342,8 @@ async def auto_cancel_undelivered_deal(session: AsyncSession, deal_id: uuid.UUID
 
 async def add_admin_deal_message_locked(session, admin, deal, body, request_id):
     """Caller holds the deal row; message and both notices commit together."""
-    if admin.role != "admin":
+    from .admin_access import can_support
+    if not can_support(admin):
         raise HTTPException(403, "Требуется администратор")
     if not body.strip() or len(body) > 4000:
         raise HTTPException(422, "Введите сообщение до 4000 символов")

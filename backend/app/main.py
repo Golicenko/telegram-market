@@ -18,6 +18,7 @@ from .message_notifications import run_message_notification_worker
 from .frontend import FRONTEND_BUILD, WEBAPP_DIR, versioned_webapp_url
 from .routes import UPLOAD_DIR, recover_deal_purchase_notifications, recover_training_background_jobs, run_deal_transfer_reminder_worker, run_seller_response_timeout_worker, router
 from .referral_routes import router as referral_router
+from .admin_operations import router as admin_operations_router
 from .referrals import backfill_referral_codes
 
 
@@ -124,6 +125,7 @@ app.add_middleware(
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.include_router(router)
 app.include_router(referral_router)
+app.include_router(admin_operations_router)
 
 
 @app.get("/", include_in_schema=False)

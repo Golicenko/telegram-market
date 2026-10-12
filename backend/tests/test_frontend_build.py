@@ -12,6 +12,7 @@ def test_build_script_stamps_all_assets_with_one_content_hash(tmp_path, monkeypa
     (webapp / "js" / "app.js").write_text("app", encoding="utf-8")
     (webapp / "js" / "referrals.js").write_text("referrals", encoding="utf-8")
     (webapp / "js" / "deal-confirmation.js").write_text("confirmation", encoding="utf-8")
+    (webapp / "js" / "admin-operations.js").write_text("admin", encoding="utf-8")
     index = webapp / "index.html"
     index.write_text(
         '<meta name="autoflow-build" content="source">'
@@ -19,6 +20,7 @@ def test_build_script_stamps_all_assets_with_one_content_hash(tmp_path, monkeypa
         '<script src="js/api.js?v=old"></script>'
         '<script src="js/referrals.js?v=old"></script>'
         '<script src="js/deal-confirmation.js?v=old"></script>'
+        '<script src="js/admin-operations.js?v=old"></script>'
         '<script src="js/app.js?v=old"></script>',
         encoding="utf-8",
     )
@@ -31,7 +33,7 @@ def test_build_script_stamps_all_assets_with_one_content_hash(tmp_path, monkeypa
     build_webapp.stamp_index(build_id)
 
     stamped = index.read_text(encoding="utf-8")
-    assert stamped.count(f"v={build_id}") == 5
+    assert stamped.count(f"v={build_id}") == len(build_webapp.ASSET_URLS)
     assert f'content="{build_id}"' in stamped
     assert json.loads((webapp / "build-info.json").read_text(encoding="utf-8")) == {"build": build_id}
 
