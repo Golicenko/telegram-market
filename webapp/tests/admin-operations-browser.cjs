@@ -20,7 +20,7 @@ const server = http.createServer((req, res) => {
       const calls = [], errors = [];
       const user = { id: "admin", telegram_id: 1, first_name: "Длинное имя администратора", role: role === "admin" ? "admin" : "user" };
       const wallet = { available_balance: 0, frozen_balance: 0, total_earned: 0 };
-      const tabs = role === "admin" ? ["overview", "users", "listings", "deals", "support", "withdrawals", "training", "audit", "advertisement", "broadcasts"] : ["support"];
+      const tabs = role === "admin" ? ["overview", "analytics", "users", "listings", "deals", "support", "withdrawals", "training", "audit", "advertisement", "broadcasts"] : ["support"];
       page.on("pageerror", error => errors.push(error.message));
       await page.addInitScript(() => { window.Telegram = { WebApp: { initData: "fixture", ready() {}, expand() {}, onEvent() {}, BackButton: { show() {}, hide() {}, onClick() {} } } }; });
       await page.route(/^https:/, route => route.abort());
@@ -35,6 +35,8 @@ const server = http.createServer((req, res) => {
         else if (endpoint === "/admin/platform-financial-summary") body = { completed_deals: 0, platform_commission_af_coins: 0 };
         else if (endpoint === "/admin/users") body = Number(url.searchParams.get("offset")) ? [] : Array.from({ length: 50 }, (_, i) => ({ user: { ...user, id: String(i) }, wallet, listings_count: 0, deals_count: 0 }));
         else if (endpoint === "/admin/audit") body = { items: [], has_more: false };
+        else if (endpoint === "/admin/analytics") body = { timezone: "Europe/Bratislava", server_events: { topup_success: { count: 1, amount: 25, unit: "Stars" } }, previous_server_events: { topup_success: { count: 0 } }, client_data_available: true, client_period_partial: true, funnels: { topup: { opened_users: 3, invoice_users: 2, paid_users: 1 }, training: { viewed_user_products: 2, paid_user_products: 1 } }, daily_activity: [{ day: "2026-10-13", dau: 3, opens: 5 }], client_observations: [{ event_name: "topup_failure", platform: "ios", reason: "network", events: 1, users: 1 }], seller_accept_seconds: { sample: 0 }, definitions: ["Тестовые данные, не production"] };
+        else if (endpoint === "/admin/analytics/training") body = { items: [{ title: "Длинное название курса обучения для проверки мобильной вёрстки", views: 3, viewers: 2, paid: 1, fulfilled: 0, delivery_failed: 1 }], has_more: false, views_partial: true, definition: "Тестовая строка обучения" };
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
       });
       await page.goto(`http://127.0.0.1:${server.address().port}/`);
@@ -53,10 +55,14 @@ const server = http.createServer((req, res) => {
         assert(calls.some(value => value.includes("offset=50")));
         await page.locator('[data-admin-tab="audit"]').click();
         await page.locator("#adminAudit").getByText("Записей нет", { exact: true }).waitFor();
+        await page.locator('[data-admin-tab="analytics"]').click();
+        await page.locator("#adminAnalytics").getByText("Обучение: товары", { exact: true }).waitFor();
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+        await page.screenshot({ path: path.join(__dirname, `admin-analytics-${width}.png`), fullPage: true, animations: "disabled" });
       } else {
         await page.locator("#adminSupportTickets").getByText("Обращений пока нет", { exact: true }).waitFor();
         assert.deepEqual(calls, ["/admin/support/tickets?status=new"]);
-        for (const tab of ["overview", "users", "withdrawals", "audit"]) assert.equal(await page.locator(`[data-admin-tab="${tab}"]`).isVisible(), false);
+        for (const tab of ["overview", "analytics", "users", "withdrawals", "audit"]) assert.equal(await page.locator(`[data-admin-tab="${tab}"]`).isVisible(), false);
       }
       assert.deepEqual(errors, []); await page.close(); console.log(`${role} ${width}px PASS`);
     }

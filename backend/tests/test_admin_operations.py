@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 
 from app import admin_access
 from app.admin_operations import date_window, overview_data, router as operations_router
+from app.analytics import router as analytics_router
 from app.auth import get_current_user
 from app.config import Settings
 from app.database import get_session
@@ -54,7 +55,7 @@ SUPPORT_ALLOWED = {
     ("POST", "/api/admin/support/tickets/{ticket_id}/messages"),
     ("PATCH", "/api/admin/support/tickets/{ticket_id}"),
 }
-ADMIN_ROUTES = [(method, route.path) for source in (router, operations_router)
+ADMIN_ROUTES = [(method, route.path) for source in (router, operations_router, analytics_router)
                 for route in source.routes if route.path.startswith("/api/admin/") for method in route.methods]
 
 
@@ -65,6 +66,7 @@ async def test_every_admin_endpoint_denies_unauthorized_role_before_database(mon
     app = FastAPI()
     app.include_router(router)
     app.include_router(operations_router)
+    app.include_router(analytics_router)
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid.uuid4(), telegram_id=telegram_id, role="user", is_blocked=False)
 
     async def no_database():
