@@ -18,7 +18,7 @@ const server = http.createServer((req,res)=>{
   try{
     for(const width of [320,360,390,430]){
       const page=await browser.newPage({viewport:{width,height:width===320?568:844},isMobile:true,hasTouch:true});
-      let transfers=0, receipts=0, failTransfer=true; const errors=[];
+      let accepts=0, transfers=0, receipts=0, failTransfer=true; const errors=[];
       let user={id:"seller",telegram_id:2,first_name:"Seller",role:"user"};
       const wallet={available_balance:200,frozen_balance:0,total_earned:0};
       const listing={id:"car",seller_id:"seller",brand:"Car",model:"",description:"Test",images:[],price_af_coins:100,status:"reserved",listing_type:"regular"};
@@ -41,6 +41,10 @@ const server = http.createServer((req,res)=>{
         else if(endpoint==="/conversations/unread-summary")body={total_unread:0,conversations:[]};
         else if(endpoint==="/deals/deal")body={deal};
         else if(endpoint==="/deals/deal/conversation" || endpoint==="/conversations/thread")body=conversation;
+        else if(endpoint==="/deals/deal/seller-contacted"){
+          accepts++; await new Promise(resolve=>setTimeout(resolve,400));
+          deal.status="seller_contacted";deal.seller_accepted_at=new Date().toISOString();body=deal;
+        }
         else if(endpoint==="/deals/deal/transfer"){
           transfers++; await new Promise(resolve=>setTimeout(resolve,400));
           if(failTransfer){failTransfer=false;return route.fulfill({status:500,contentType:"application/json",body:JSON.stringify({detail:"RAW_STACK_TRACE"})});}
@@ -54,7 +58,25 @@ const server = http.createServer((req,res)=>{
       });
       const base="http://127.0.0.1:"+server.address().port;
       await page.goto(base+"/?deal_id=deal");
+      const accept=page.locator('[data-deal-action="seller-contacted"]');await accept.waitFor();
+      assert.equal(await page.locator('[data-deal-action="transfer"]').count(),0);
+      assert.equal(await page.locator('.deal-progress li').count(),3);
+      assert(await page.getByRole('button',{name:'Нужна помощь',exact:true}).isVisible());
+      for (const button of await page.locator('.deal-controls button:visible').all()) {
+        const box=await button.boundingBox();assert(box.height>=44 && box.x>=0 && box.x+box.width<=width && box.y+box.height<=page.viewportSize().height, JSON.stringify({label:await button.textContent(),box,viewport:page.viewportSize()}));
+      }
+      await page.getByRole('button',{name:'Нужна помощь',exact:true}).click();
+      await page.locator('[data-view="support"]').waitFor({state:'visible'});
+      assert.equal(await page.locator('#supportForm [name="deal_id"]').inputValue(),'deal');
+      assert.equal(deal.status,'paid');assert.equal(accepts,0);assert.equal(transfers,0);
+      await page.evaluate(()=>window.testBack());
+      await accept.waitFor({state:'visible'});
+      await accept.evaluate(el=>{el.click();el.click();});
+      assert(await accept.isDisabled());
+      await accept.waitFor({state:"hidden"});assert.equal(accepts,1);
+      await page.reload();
       const transfer=page.locator('[data-deal-action="transfer"]');await transfer.waitFor();
+      assert.equal(await page.locator('[data-deal-action="seller-contacted"]').count(),0);
       await page.waitForTimeout(300); // Let initial read receipts/optional rendering settle.
       // Two initial taps open only one confirmation and no mutation request.
       await transfer.click({clickCount:2});
@@ -85,7 +107,7 @@ const server = http.createServer((req,res)=>{
       await confirm.evaluate(el=>{el.click();el.click();});
       assert(await confirm.isDisabled());
       await modal.getByText("Не удалось подтвердить передачу. Попробуйте ещё раз.",{exact:true}).waitFor();
-      assert.equal(transfers,1);assert.equal(deal.status,"paid");
+      assert.equal(transfers,1);assert.equal(deal.status,"seller_contacted");
       assert(!(await modal.innerText()).includes("RAW_STACK_TRACE"));assert(!(await confirm.isDisabled()));
       await confirm.evaluate(el=>{el.click();el.click();});
       await page.evaluate(()=>window.testBack()); // Pending request cannot navigate or resubmit.
@@ -105,6 +127,7 @@ const server = http.createServer((req,res)=>{
       deal.transfer_started_at=new Date(Date.now()-61000).toISOString();
       await page.reload();
       const receipt=page.locator('[data-deal-action="confirm"]');await receipt.waitFor({state:"visible"});
+      assert(await page.getByRole('button',{name:'Автомобиль не получен',exact:true}).isVisible());
       await receipt.click();await modal.waitFor();
       await modal.getByRole("heading",{name:"Автомобиль получен?"}).waitFor();
       assert.equal(receipts,0);

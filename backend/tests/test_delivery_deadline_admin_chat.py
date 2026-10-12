@@ -132,6 +132,12 @@ async def test_admin_message_notifies_both_exact_deal_once_even_after_read(contr
     deal, _, _ = await purchase_listing(bridge, buyer, listing.id)
     with bridge.session.begin():
         buyer.bot_started = seller.bot_started = True
+    # Purchase now queues an immediate notice; deliver it before the admin joins.
+    purchase_job = await claim_delivery(bridge, seller.id, datetime.now(UTC))
+    assert "Вашу машину купили" in purchase_job["text"]
+    with bridge.session.begin():
+        for notice_id in purchase_job["ids"]:
+            bridge.session.get(Notification, notice_id).delivery_status = "sent"
     request = uuid.uuid4()
     first = await send_admin_deal_message(bridge, admin, deal.id, "Пожалуйста, ответьте", request)
     again = await send_admin_deal_message(bridge, admin, deal.id, "Пожалуйста, ответьте", request)

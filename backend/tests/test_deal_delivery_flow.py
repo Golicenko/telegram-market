@@ -37,6 +37,12 @@ class Session:
         return Transaction()
 
     async def scalar(self, _query):
+        model = _query.column_descriptions[0]["entity"]
+        if model is Listing:
+            return self.values[(Listing, self.deal.listing_id)]
+        if model is Wallet:
+            return Wallet(user_id=self.deal.buyer_id, purchased_frozen_balance=100,
+                earned_frozen_balance=0, bonus_frozen_balance=0)
         return self.deal
 
     async def scalars(self, _query):

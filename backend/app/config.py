@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     deal_notification_retry_base_seconds: int = Field(default=30, ge=1, le=3600)
     deal_notification_max_attempts: int = Field(default=5, ge=1, le=20)
     seller_response_timeout_seconds: int = Field(default=86400, ge=1, le=604800)
+    seller_order_reminder_seconds: list[int] = Field(default_factory=lambda: [7200, 43200, 82800])
+
+    @field_validator("seller_order_reminder_seconds")
+    @classmethod
+    def validate_seller_reminders(cls, value):
+        if len(value) > 3 or value != sorted(set(value)) or any(v < 1 or v >= 86400 for v in value):
+            raise ValueError("Use up to 3 increasing unique reminder offsets within 24 hours")
+        return value
+
     debug: bool = False
     dev_telegram_id: int | None = None
     dev_telegram_name: str = "Local User"

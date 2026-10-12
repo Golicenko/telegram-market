@@ -9,10 +9,11 @@ import httpx
 from sqlalchemy import select, update, or_
 
 from .chat_access import active_thread_clause
+from .deal_lifecycle import delivery_deadline_expired
 from .config import get_settings
 from .database import SessionLocal
 from .frontend import versioned_webapp_url
-from .models import Conversation, ConversationMessage, Notification, User
+from .models import Conversation, ConversationMessage, Deal, DealEvent, Notification, User
 
 logger = logging.getLogger("autoflow.message_notifications")
 
@@ -56,6 +57,27 @@ async def claim_delivery(session, user_id, now):
         ).order_by(Notification.created_at, Notification.id).with_for_update())).all())
         if not pending:
             return None
+        relevant = []
+        for notice in pending:
+            if notice.notification_type in {"seller_order_reminder", "deal_created", "seller_order_accepted"}:
+                deal = await session.get(Deal, uuid.UUID(notice.payload["deal_id"]))
+                stale = not deal or deal.status not in {"paid", "seller_contacted"} or delivery_deadline_expired(deal, now)
+                if not stale and notice.notification_type == "seller_order_reminder":
+                    from .seller_orders import utc
+                    replied = await session.scalar(select(DealEvent.id).where(DealEvent.deal_id == deal.id,
+                        DealEvent.actor_id == deal.seller_id, DealEvent.event_type == "message_sent").limit(1))
+                    stale = bool(deal.seller_accepted_at or deal.seller_responded_at or replied
+                        or notice.payload.get("stage", 0) < deal.seller_reminder_stage
+                        or (deal.seller_delivery_deadline and utc(deal.seller_delivery_deadline) <= now)
+                        or (deal.seller_response_deadline and utc(deal.seller_response_deadline) <= now))
+                if stale:
+                    notice.delivery_status = "suppressed"
+                    notice.delivery_error = "deal_no_longer_requires_action"
+                    continue
+            relevant.append(notice)
+        pending = relevant
+        if not pending:
+            return None
         if not user.bot_started or user.is_blocked:
             for notice in pending:
                 notice.delivery_status = "suppressed"
@@ -89,7 +111,7 @@ async def claim_delivery(session, user_id, now):
                       {"admin_deal_id": latest.payload["admin_deal_id"]} if latest.payload.get("admin_deal_id") else
                       {"admin_withdrawal_id": latest.payload["admin_withdrawal_id"]} if latest.payload.get("admin_withdrawal_id") else
                       {"support_case": latest.payload["ticket_id"]} if latest.payload.get("ticket_id") else
-                      {"deal_id": latest.payload["deal_id"]} if latest.notification_type in {"deal_review_status", "deal_admin_message", "deal_delivery_timeout"} else
+                      {"deal_id": latest.payload["deal_id"]} if latest.notification_type in {"deal_review_status", "deal_admin_message", "deal_delivery_timeout", "deal_created", "seller_order_reminder", "seller_order_accepted"} else
                       {"view": "profile"})
         for notice in eligible:
             notice.delivery_status = "sending"

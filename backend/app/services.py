@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
 from .deal_lifecycle import audit_deal, stop_reminders, delivery_deadline_expired
+from .seller_orders import paid_order_body
 from .chat_access import ACTIVE_DEAL_STATUSES, require_active_chat, require_active_chat_by_id
 from .inactivity import record_buyer_request, record_seller_response, hide_active_listings, offer_response_expired, SELLER_NOTICE, BUYER_NOTICE
 from .models import (
@@ -172,7 +173,7 @@ def credit_sale_proceeds(wallet: Wallet, payout: Decimal, price: Decimal, bonus_
 
 async def create_notification(session: AsyncSession, user_id: uuid.UUID, kind: str, title: str, body: str, payload: dict | None = None) -> Notification:
     notification = Notification(user_id=user_id, notification_type=kind, title=title, body=body, payload=payload or {})
-    if kind in {"withdrawal_support_reply", "conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden", "deal_completed", "deal_cancelled", "dispute_resolved", "deal_support_case", "withdrawal_created", "withdrawal_paid", "withdrawal_rejected", "withdrawal_approved", "deal_admin_message", "deal_delivery_timeout"}:
+    if kind in {"deal_created", "seller_order_accepted", "withdrawal_support_reply", "conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden", "deal_completed", "deal_cancelled", "dispute_resolved", "deal_support_case", "withdrawal_created", "withdrawal_paid", "withdrawal_rejected", "withdrawal_approved", "deal_admin_message", "deal_delivery_timeout"}:
         notification.delivery_status = "pending"
     session.add(notification)
     return notification
@@ -1229,7 +1230,7 @@ async def save_deal_delivery_details(
                     message_type="system",
                 )
             )
-            if deal.seller_purchase_notification_status == "sent":
+            if deal.seller_purchase_notification_status in {"sent", "outbox"}:
                 await create_notification(session, deal.seller_id, "conversation_message", "Данные передачи обновлены",
                     "Покупатель обновил данные передачи автомобиля", {"conversation_id": str(conversation.id),
                     "deal_id": str(deal.id), "message_id": str(message_id)})
@@ -1554,6 +1555,7 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
                 seller_payout=payout,
                 platform_commission=commission,
                 seller_delivery_deadline=datetime.now(UTC) + timedelta(hours=24),
+                seller_purchase_notification_status="outbox",
             )
             session.add(deal)
             await session.flush()
@@ -1595,8 +1597,8 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
                     session,
                     seller.id,
                     "deal_created",
-                    "Ваш товар хотят купить",
-                    "Откройте AUTOFLOW MARKET, чтобы ответить покупателю",
+                    "Вашу машину купили",
+                    paid_order_body(deal, listing),
                     {"deal_id": str(deal.id)},
                 )
 
@@ -1677,6 +1679,7 @@ async def _purchase_locked_listing(
         seller_payout=payout,
         platform_commission=commission,
         seller_delivery_deadline=datetime.now(UTC) + timedelta(hours=24),
+        seller_purchase_notification_status="outbox",
     )
     session.add(deal)
     await session.flush()
@@ -1729,8 +1732,8 @@ async def _purchase_locked_listing(
             session,
             seller.id,
             "deal_created",
-            "Ваш товар хотят купить",
-            "Покупатель оплатил. Откройте AUTOFLOW MARKET, чтобы продолжить сделку",
+            "Вашу машину купили",
+            paid_order_body(deal, listing),
             {"deal_id": str(deal.id)},
         )
     return deal, seller.telegram_id if seller and seller.bot_started else None
@@ -1908,7 +1911,7 @@ def validate_deal_hold(deal: Deal, listing: Listing | None, wallet: Wallet | Non
 
 async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID, next_status: str) -> Deal:
     allowed = {
-        "seller_contacted": {"paid"},
+        "seller_contacted": {"paid", "seller_contacted"},
         "transfer_in_progress": {"paid", "seller_contacted"},
         "disputed": {"paid", "seller_contacted", "transfer_in_progress"},
     }
@@ -1920,11 +1923,13 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
             raise HTTPException(status_code=403, detail="Вы не являетесь участником сделки")
         if next_status in {"seller_contacted", "transfer_in_progress"} and actor.id != deal.seller_id:
             raise HTTPException(status_code=403, detail="Only the seller can change this status")
-        if next_status == "transfer_in_progress" and (deal.cancelled_at or deal.completed_at or deal.buyer_confirmed_at):
+        if next_status in {"seller_contacted", "transfer_in_progress"} and (deal.cancelled_at or deal.completed_at or deal.buyer_confirmed_at):
             raise HTTPException(status_code=409, detail="Сделка уже закрыта")
         # Replay only this seller's already committed transition. Never reschedule
         # reminders, append events or touch money for a repeated request.
         if next_status == "transfer_in_progress" and deal.status == next_status and deal.transfer_started_at:
+            return deal
+        if next_status == "seller_contacted" and deal.seller_accepted_at and deal.status in {"seller_contacted", "transfer_in_progress"}:
             return deal
         if deal.status not in allowed[next_status]:
             raise HTTPException(status_code=409, detail=f"Cannot change {deal.status} to {next_status}")
@@ -1945,7 +1950,7 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
                 raise HTTPException(status_code=409, detail="Срок ответа истёк. Сделка ожидает автоматической отмены")
         if next_status == "transfer_in_progress" and not deal.buyer_game_id:
             raise HTTPException(status_code=409, detail="Покупатель ещё не указал игровой ID")
-        if next_status == "transfer_in_progress":
+        if next_status in {"seller_contacted", "transfer_in_progress"}:
             # This step never changes the listing. Holding its lock after the
             # deal lock could deadlock with a retry of purchase_listing, which
             # locks listing -> deal. Settlement/refund serialize on this Deal.
@@ -1960,6 +1965,10 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
             conversation = await session.get(Conversation, deal.conversation_id)
         previous_status = deal.status
         deal.status = next_status
+        if next_status == "seller_contacted":
+            deal.seller_accepted_at = now
+            deal.seller_responded_at = now
+            audit_deal(session, deal, "seller_order_accepted", actor.id, previous_status)
         if needs_response_marker:
             deal.seller_responded_at = now
         audit_deal(session, deal, "status_changed", actor.id, previous_status)
@@ -1975,8 +1984,9 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
                 deal.buyer_transfer_reminder_scheduled_at = now
                 deal.buyer_transfer_reminder_error = None
         other_id = deal.seller_id if actor.id == deal.buyer_id else deal.buyer_id
-        body = "Продавец сообщил, что автомобиль передан. Проверьте получение на ваш ID." if next_status == "transfer_in_progress" else f"Новый статус: {next_status}"
-        await create_notification(session, other_id, "deal_status", "Статус сделки изменён", body, {"deal_id": str(deal.id)})
+        body = ("Продавец сообщил, что автомобиль передан. Проверьте получение на ваш ID." if next_status == "transfer_in_progress" else
+                "Продавец принял заказ. Средства остаются под защитой до подтверждения получения. Срок передачи не продлён." if next_status == "seller_contacted" else f"Новый статус: {next_status}")
+        await create_notification(session, other_id, "seller_order_accepted" if next_status == "seller_contacted" else "deal_status", "Статус сделки изменён", body, {"deal_id": str(deal.id)})
     return deal
 
 

@@ -713,3 +713,9 @@ main{padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));p
 #withdrawalFilters button,.admin-withdrawal__actions button,.admin-withdrawal__actions a{min-height:44px;display:inline-flex;align-items:center;justify-content:center;padding:8px 10px;box-sizing:border-box;white-space:normal}
 .admin-withdrawal details{overflow-wrap:anywhere}.admin-withdrawal details small{display:block;margin:8px 0}.admin-withdrawal summary{cursor:pointer;min-height:44px;display:flex;align-items:center}
 .admin-withdrawal{padding:12px;gap:8px}.admin-withdrawal>strong{font-size:14px;line-height:1.4}.admin-withdrawal>span,.admin-withdrawal>small{font-size:12px;line-height:1.5}.admin-withdrawal__actions button,.admin-withdrawal__actions a{font-size:12px}.admin-withdrawal__actions a{color:#acd5ff;text-decoration:none;border:1px solid var(--line);border-radius:7px;background:#17212d}
+.deal-progress{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;padding:8px 0;margin:0;list-style:none;font-size:11px;line-height:1.4;color:var(--muted)}.deal-progress li{min-width:0;padding:6px;border-bottom:2px solid var(--line);overflow-wrap:anywhere}.deal-progress [aria-current="step"]{color:var(--text);border-color:#ffab19;background:rgba(255,171,25,.07);border-radius:6px 6px 0 0}
+/* Override legacy chat rules that hid secondary actions despite their DOM presence. */
+.chat-view .deal-controls button.deal-support,.chat-view .deal-controls button.deal-secondary{display:block}
+.chat-view .deal-controls button{min-height:44px;font-size:12px}
+.deal-secondary-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.chat-listing.is-without-image{grid-template-columns:minmax(0,1fr) auto}

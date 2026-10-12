@@ -39,6 +39,7 @@ from .bot import (
 )
 from .config import Settings, get_settings
 from .deal_lifecycle import audit_deal, schedule_next_reminder, recover_lifecycle_state, admin_nonfinancial_action, last_activity_query
+from .seller_orders import recover_seller_order_reminders
 from .models import DealEvent
 from .database import SessionLocal, get_session
 from .chat_access import ACTIVE_DEAL_STATUSES, active_thread_clause, require_active_chat
@@ -764,6 +765,7 @@ async def run_seller_response_timeout_worker() -> None:
         for job_name, recovery in (
             ("seller_response_timeout", recover_seller_response_timeouts),
             ("seller_purchase_notification", recover_deal_purchase_notifications),
+            ("seller_order_reminders", recover_seller_order_reminders),
         ):
             try:
                 await recovery()
@@ -2764,7 +2766,7 @@ async def send_message(
 @router.post("/deals/{deal_id}/seller-contacted", response_model=DealOut)
 async def seller_contacted(deal_id: uuid.UUID, background_tasks: BackgroundTasks, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     deal = await set_deal_status(session, user, deal_id, "seller_contacted")
-    await queue_counterparty_notification(session, background_tasks, deal, user, "Продавец ответил по сделке в AUTOFLOW MARKET")
+    # Acceptance and its one notification commit together in the durable outbox.
     return deal
 
 
