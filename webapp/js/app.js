@@ -61,6 +61,8 @@
     confirmedTopupPayments: new Set(),
     adminBalanceUser: null,
     adminBalanceDirection: "credit",
+    adminBalanceBusy: false,
+    adminBalanceRequest: null,
     purchaseFlow: null,
     dealActionPending: false,
     adminDealControl: null,
@@ -4481,6 +4483,7 @@ async function hideCurrentConversation() {
 
   async function createBalanceAdjustment(event) {
     event.preventDefault();
+    if (state.adminBalanceBusy) return;
     const formElement = event.currentTarget;
     const selected = state.adminBalanceUser;
     const data = new FormData(formElement);
@@ -4490,21 +4493,32 @@ async function hideCurrentConversation() {
     const signedAmount = state.adminBalanceDirection === "debit" ? -rawAmount : rawAmount;
     const username = selected.user.username ? `@${selected.user.username}` : `Telegram ID ${selected.user.telegram_id}`;
     const action = signedAmount > 0 ? "Начислить" : "Списать";
-    if (!(await confirmAction(`${action} ${formatNumber(rawAmount)} AF Coins ${signedAmount > 0 ? "пользователю" : "у пользователя"} ${username}?`))) return;
     const button = formElement.querySelector("button[type=submit]");
+    state.adminBalanceBusy = true;
     button.disabled = true;
-    elements.adminBalanceResult.textContent = "Сохраняем операцию…";
     try {
+      if (!(await confirmAction(`${action} ${formatNumber(rawAmount)} AF Coins ${signedAmount > 0 ? "пользователю" : "у пользователя"} ${username}?`))) return;
+      const command = {
+        user_id: selected.user.id,
+        amount: signedAmount,
+        reason: String(data.get("reason") || "").trim() || "Корректировка баланса администратором",
+      };
+      const signature = JSON.stringify(command);
+      // A lost response must reuse the command identity, not create a new credit.
+      if (state.adminBalanceRequest?.signature !== signature) {
+        state.adminBalanceRequest = { signature, id: createRequestId() };
+      }
+      elements.adminBalanceResult.textContent = "Сохраняем операцию…";
       const before = selected.wallet.available_balance;
       const wallet = await api.request("/admin/balance-adjustments", {
         method: "POST",
         body: JSON.stringify({
-          user_id: selected.user.id,
-          amount: signedAmount,
-          reason: String(data.get("reason") || "").trim() || "Корректировка баланса администратором",
+          ...command,
+          request_id: state.adminBalanceRequest.id,
         }),
       });
       selected.wallet = wallet;
+      state.adminBalanceRequest = null;
       elements.adminBalanceResult.classList.remove("is-error");
       renderAdminBalanceUser(selected);
       const title = document.createElement("strong"); title.textContent = "✅ Баланс изменён";
@@ -4514,10 +4528,10 @@ async function hideCurrentConversation() {
       setAdminBalanceDirection(state.adminBalanceDirection);
       await loadAdminFinancialHistory(selected.user.id);
     } catch (error) {
-      const message = error.status === 409 ? "Недостаточно AF Coins для списания" : "Не удалось изменить баланс. Проверьте данные и попробуйте снова.";
+      const message = error.status === 409 ? error.message : "Не удалось изменить баланс. Проверьте данные и попробуйте снова.";
       elements.adminBalanceResult.textContent = message;
       elements.adminBalanceResult.classList.add("is-error");
-    } finally { button.disabled = false; }
+    } finally { state.adminBalanceBusy = false; button.disabled = false; }
   }
 
   function renderBalance() {

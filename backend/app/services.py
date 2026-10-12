@@ -1190,7 +1190,7 @@ async def save_deal_delivery_details(
         deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
         if not deal or deal.buyer_id != buyer.id:
             raise HTTPException(status_code=404, detail="Сделка не найдена")
-        if deal.status not in {"paid", "seller_contacted", "transfer_in_progress"}:
+        if deal.status not in {"paid", "seller_contacted"} or deal.transfer_started_at:
             raise HTTPException(status_code=409, detail="Для этой сделки данные передачи уже нельзя изменить")
         listing = await session.get(Listing, deal.listing_id)
         if not listing:
@@ -2077,9 +2077,25 @@ async def create_deal_support_case(
     return ticket, listing, buyer, seller, administrators
 
 
+async def lock_deal_and_listing(session: AsyncSession, deal_id: uuid.UUID):
+    """Match purchase's Listing -> Deal order for settlement/refund transactions.
+
+    The first read only resolves an immutable FK; state checks use the fresh row
+    acquired after both locks. Do not take a Deal lock before calling this helper.
+    """
+    listing_id = await session.scalar(select(Deal.listing_id).where(Deal.id == deal_id))
+    if listing_id is None:
+        return None, None
+    listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update().execution_options(populate_existing=True))
+    deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update().execution_options(populate_existing=True))
+    if deal and deal.listing_id != listing_id:
+        raise HTTPException(409, "Объявление сделки изменилось. Повторите запрос.")
+    return deal, listing
+
+
 async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) -> Deal:
     async with session.begin():
-        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update().execution_options(populate_existing=True))
+        deal, listing = await lock_deal_and_listing(session, deal_id)
         if not deal:
             raise HTTPException(status_code=404, detail="Deal not found")
         if deal.buyer_id != buyer.id:
@@ -2097,7 +2113,6 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
             transfer_started_at = transfer_started_at.replace(tzinfo=UTC)
         if datetime.now(UTC) - transfer_started_at < timedelta(seconds=60):
             raise HTTPException(status_code=409, detail="Подтверждение станет доступно через 60 секунд после начала передачи")
-        listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
         participants = await lock_wallets(session, deal.buyer_id, deal.seller_id)
         buyer_wallet, seller_wallet = participants.get(deal.buyer_id), participants.get(deal.seller_id)
         if not listing or not buyer_wallet or not seller_wallet:
@@ -2170,13 +2185,12 @@ def _apply_deal_refund(
 async def cancel_deal(session: AsyncSession, actor: User, deal_id: uuid.UUID) -> Deal:
     """Cancel an unstarted transfer and atomically release the buyer's reservation."""
     async with session.begin():
-        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+        deal, listing = await lock_deal_and_listing(session, deal_id)
         if not deal or actor.id not in {deal.buyer_id, deal.seller_id}:
             raise HTTPException(status_code=404, detail="Deal not found")
         if deal.status not in {"paid", "seller_contacted"}:
             raise HTTPException(status_code=409, detail="This deal can no longer be cancelled automatically")
 
-        listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
         buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
         if not listing or not buyer_wallet:
             raise HTTPException(status_code=409, detail="Cancellation state is inconsistent")
@@ -2211,7 +2225,7 @@ async def auto_cancel_unanswered_deal(
     """Atomically refund one expired deal; repeated workers become no-ops."""
     current_time = now or datetime.now(UTC)
     async with session.begin():
-        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+        deal, listing = await lock_deal_and_listing(session, deal_id)
         response_deadline = deal.seller_response_deadline if deal else None
         if response_deadline and response_deadline.tzinfo is None:
             response_deadline = response_deadline.replace(tzinfo=UTC)
@@ -2225,7 +2239,6 @@ async def auto_cancel_unanswered_deal(
         ):
             return None
 
-        listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
         buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
         buyer = await session.get(User, deal.buyer_id)
         seller = await session.get(User, deal.seller_id)
@@ -2290,10 +2303,9 @@ async def auto_cancel_undelivered_deal(session: AsyncSession, deal_id: uuid.UUID
     """Reuse the financial hold release, serialized with transfer/settlement."""
     current_time = now or datetime.now(UTC)
     async with session.begin():
-        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+        deal, listing = await lock_deal_and_listing(session, deal_id)
         if not deal or not delivery_deadline_expired(deal, current_time):
             return False
-        listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
         if (not listing or not wallet or listing.status != "reserved"
                 or listing.reserved_by_deal_id != deal.id
@@ -2412,7 +2424,7 @@ async def resolve_dispute(
     if len(reason.strip()) < 5:
         raise HTTPException(422, "Укажите причину решения")
     async with session.begin():
-        deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
+        deal, listing = await lock_deal_and_listing(session, deal_id)
         if request_id and deal:
             previous_event = await session.scalar(select(DealEvent).where(DealEvent.deal_id == deal.id, DealEvent.request_id == request_id))
             if previous_event:
@@ -2423,7 +2435,6 @@ async def resolve_dispute(
         if not deal or deal.status not in allowed_states:
             raise HTTPException(status_code=404, detail="Disputed deal not found")
         previous_status = deal.status
-        listing = await session.scalar(select(Listing).where(Listing.id == deal.listing_id).with_for_update())
         participants = await lock_wallets(session, deal.buyer_id, deal.seller_id)
         buyer_wallet, seller_wallet = participants.get(deal.buyer_id), participants.get(deal.seller_id)
         if not listing or not buyer_wallet or not seller_wallet:
@@ -2602,11 +2613,28 @@ async def cancel_withdrawal(session: AsyncSession, user: User, withdrawal_id: uu
 
 
 async def adjust_balance(session: AsyncSession, admin: User, payload) -> Wallet:
+    if admin.role != "admin":
+        raise HTTPException(403, "Требуется администратор")
+    if not getattr(payload, "request_id", None):
+        raise HTTPException(422, "Обновите приложение: требуется идентификатор операции")
     amount = money(payload.amount)
+    if not amount.is_finite() or amount == 0:
+        raise HTTPException(422, "Укажите ненулевую сумму")
     async with session.begin():
+        # Serialize actor commands even if a reused key targets different wallets.
+        # NO KEY UPDATE permits concurrent ledger FK checks while acquiring wallets.
+        await session.scalar(select(User).where(User.id == admin.id).with_for_update(key_share=True))
+        previous = await session.scalar(select(AdminBalanceAdjustment).where(
+            AdminBalanceAdjustment.admin_id == admin.id,
+            AdminBalanceAdjustment.request_id == payload.request_id,
+        ))
+        if previous and (previous.user_id != payload.user_id or previous.amount != amount or previous.reason != payload.reason):
+            raise HTTPException(409, "Идентификатор операции уже использован с другими данными")
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == payload.user_id).with_for_update())
         if not wallet:
             raise HTTPException(status_code=404, detail="Wallet not found")
+        if previous:
+            return wallet
         before_available, before_frozen = wallet.available_balance, wallet.frozen_balance
         if wallet.available_balance + amount < 0:
             raise HTTPException(status_code=409, detail="Adjustment would make balance negative")
@@ -2618,8 +2646,8 @@ async def adjust_balance(session: AsyncSession, admin: User, payload) -> Wallet:
         transaction = wallet_transaction(wallet, "admin_adjustment", amount, before_available, before_frozen, payload.reason)
         session.add(transaction)
         await session.flush()
-        session.add(AdminBalanceAdjustment(admin_id=admin.id, user_id=payload.user_id, amount=amount, reason=payload.reason, wallet_transaction_id=transaction.id))
-        session.add(AdminAction(admin_id=admin.id, action="balance_adjustment", target_type="user", target_id=payload.user_id, reason=payload.reason, metadata_json={"amount": str(amount)}))
+        session.add(AdminBalanceAdjustment(admin_id=admin.id, request_id=payload.request_id, user_id=payload.user_id, amount=amount, reason=payload.reason, wallet_transaction_id=transaction.id))
+        session.add(AdminAction(admin_id=admin.id, action="balance_adjustment", target_type="user", target_id=payload.user_id, reason=payload.reason, metadata_json={"amount": str(amount), "request_id": str(payload.request_id), "available_before": str(before_available), "available_after": str(wallet.available_balance), "frozen_before": str(before_frozen), "frozen_after": str(wallet.frozen_balance)}))
     return wallet
 
 
