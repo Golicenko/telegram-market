@@ -116,6 +116,20 @@
     const values = await api.request(`/admin/${key}?${new URLSearchParams({ ...query, limit: 50, offset: pages.get(key) || 0 })}`);
     return versions.get(key) === generation ? values : null;
   }
+  function filters(host, key, fields, reload) {
+    let form = document.getElementById(`admin-filters-${key}`);
+    if (!form) {
+      form = node("form", null, "admin-report-filters"); form.id = `admin-filters-${key}`;
+      for (const [name, title, options] of fields) {
+        const label = node("label", title), select = node("select"); select.name = name;
+        for (const [value, text] of options) { const option = node("option", text); option.value = value; select.append(option); }
+        select.addEventListener("change", () => { pages.set(key, 0); reload().catch(error => errorState(host, error, reload)); });
+        label.append(select); form.append(label);
+      }
+      form.addEventListener("submit", event => event.preventDefault()); host.before(form);
+    }
+    return Object.fromEntries([...new FormData(form)].filter(([, value]) => value));
+  }
   function pager(host, key, count, reload) {
     if (!count) host.append(node("p", "Записей нет"));
     const controls = node("div", null, "admin-report-filters"), offset = pages.get(key) || 0;
@@ -124,5 +138,5 @@
     const next = button("Далее", () => void move(50)); next.disabled = count < 50;
     controls.append(prev, node("span", `Страница ${offset / 50 + 1}`), next); host.append(controls);
   }
-  root.AutoFlowAdmin = { mount, overview, audit, page, pager, errorState, reset: key => pages.set(key, 0) };
+  root.AutoFlowAdmin = { mount, overview, audit, page, pager, filters, errorState, reset: key => pages.set(key, 0) };
 })(window);

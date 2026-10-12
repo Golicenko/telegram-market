@@ -4034,7 +4034,11 @@ async function hideCurrentConversation() {
   }
 
   async function loadAdminListings() {
-    const listings = await window.AutoFlowAdmin.page(api, "listings");
+    const filters = window.AutoFlowAdmin.filters(elements.adminListings, "listings", [
+      ["game", "Игра", [["", "Все игры"], ["car_parking_1", "Car Parking 1"], ["car_parking_2", "Car Parking 2"]]],
+      ["status", "Статус", [["", "Все, кроме удалённых"], ["active", "Активные"], ["paused", "Скрытые"], ["reserved", "В сделке"], ["sold", "Проданные"], ["deleted", "Удалённые"]]],
+    ], loadAdminListings);
+    const listings = await window.AutoFlowAdmin.page(api, "listings", filters);
     if (!listings) return;
     elements.adminListings.replaceChildren(...listings.map((listing) => {
       const card = document.createElement("div"); card.className = "admin-record";
@@ -4055,7 +4059,10 @@ async function hideCurrentConversation() {
   }
 
   async function loadAdminDeals() {
-    const deals = await window.AutoFlowAdmin.page(api, "deals");
+    const filters = window.AutoFlowAdmin.filters(elements.adminDeals, "deals", [
+      ["status", "Статус заказа", [["", "Все статусы"], ...["pending_payment", "paid", "seller_contacted", "transfer_in_progress", "completed", "cancelled", "disputed"].map(value => [value, dealStatusLabel(value)])]],
+    ], loadAdminDeals);
+    const deals = await window.AutoFlowAdmin.page(api, "deals", filters);
     if (!deals) return;
     elements.adminDeals.replaceChildren(...deals.map((deal) => {
       const card = document.createElement("div"); card.className = "admin-record";

@@ -44,7 +44,7 @@ const server = http.createServer((req, res) => {
       if (role === "admin") {
         await page.locator("#adminOverview .admin-metric").first().waitFor();
         assert.deepEqual(calls.map(value => value.split("?")[0]), ["/admin/overview"]);
-        await page.screenshot({ path: path.join(__dirname, `admin-overview-${width}.png`), fullPage: true });
+        await page.screenshot({ path: path.join(__dirname, `admin-overview-${width}.png`), fullPage: true, animations: "disabled" });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
         await page.locator('[data-admin-tab="users"]').click();
         await page.locator("#adminUsers .admin-record").first().waitFor();
