@@ -506,6 +506,15 @@ class TimeoutSession:
     async def scalar(self, _query):
         if "EXISTS" in str(_query):
             return self.conversation.id if self.conversation else None
+        column = _query.column_descriptions[0]
+        if column.get("entity") is Deal and column.get("name") == "listing_id":
+            deal = next((v for v in self.scalar_values if isinstance(v, Deal)), None)
+            return deal.listing_id if deal else None
+        if column.get("entity") is Listing:
+            for index, value in enumerate(self.scalar_values):
+                if isinstance(value, Listing):
+                    return self.scalar_values.pop(index)
+            return None
         if _query.column_descriptions[0].get("entity") is Deal and self.scalar_values and isinstance(self.scalar_values[0], Conversation):
             return next((v for v in self.scalar_values if isinstance(v, Deal)), None)
         return self.scalar_values.pop(0) if self.scalar_values else None
@@ -762,6 +771,8 @@ class ConcurrentRefundSession:
 
     async def scalar(self, query):
         entity = query.column_descriptions[0].get("entity")
+        if entity is Deal and query.column_descriptions[0].get("name") == "listing_id":
+            return self.state.deal.listing_id
         return {Deal: self.state.deal, Listing: self.state.listing, Wallet: self.state.wallet}.get(entity)
 
     async def scalars(self, _query):
