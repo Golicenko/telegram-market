@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pillow_heif import register_heif_opener
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import String, and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -3132,14 +3132,34 @@ async def admin_conversation(conversation_id: uuid.UUID, admin: User = Depends(r
 
 @router.get("/admin/withdrawals", response_model=list[AdminWithdrawalOut])
 async def admin_withdrawals(
+    q: str | None = Query(default=None, max_length=32),
+    status: str | None = Query(default=None, pattern="^(pending|approved|paid|rejected|cancelled)$"),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    withdrawal_id: uuid.UUID | None = None,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
+    from .withdrawal_support import profile_url
+    number = (q or "").strip().lstrip("#")
+    if number and (not number.isascii() or not number.isdigit() or len(number) > 18):
+        raise HTTPException(422, "Введите номер заявки, например #000057")
+    delivery = select(Notification.delivery_status).where(
+        Notification.notification_type == "withdrawal_support_reply",
+        Notification.payload["withdrawal_id"].astext == func.cast(WithdrawalRequest.id, String),
+    ).order_by(Notification.created_at.desc(), Notification.id.desc()).limit(1).correlate(WithdrawalRequest).scalar_subquery()
+    delivery_error = select(Notification.delivery_error).where(
+        Notification.notification_type == "withdrawal_support_reply",
+        Notification.payload["withdrawal_id"].astext == func.cast(WithdrawalRequest.id, String),
+    ).order_by(Notification.created_at.desc(), Notification.id.desc()).limit(1).correlate(WithdrawalRequest).scalar_subquery()
     rows = (
         await session.execute(
-            select(WithdrawalRequest, User)
+            select(WithdrawalRequest, User, delivery, delivery_error)
             .join(User, User.id == WithdrawalRequest.user_id)
-            .order_by(WithdrawalRequest.created_at.desc())
+            .where(WithdrawalRequest.public_number == int(number) if number else True,
+                   WithdrawalRequest.status == status if status else True,
+                   WithdrawalRequest.id == withdrawal_id if withdrawal_id else True)
+            .order_by(WithdrawalRequest.public_number.desc()).limit(limit).offset(offset)
         )
     ).all()
 
@@ -3151,9 +3171,18 @@ async def admin_withdrawals(
                 filter(None, [user.first_name, user.last_name])
             ),
             user_username=user.username,
+            profile_url=profile_url(user),
+            contact_delivery_status=delivery_status,
+            contact_delivery_error=error,
         )
-        for withdrawal, user in rows
+        for withdrawal, user, delivery_status, error in rows
     ]
+
+@router.post("/withdrawals/{withdrawal_id}/support", response_model=SupportTicketOut)
+async def open_withdrawal_support(withdrawal_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    from .withdrawal_support import withdrawal_support_ticket
+    ticket = await withdrawal_support_ticket(session, user, withdrawal_id)
+    return await support_ticket_out(session, ticket)
 
 @router.post("/admin/withdrawals/{withdrawal_id}/{action}", response_model=WithdrawalOut)
 async def admin_withdrawal_action(
@@ -3166,7 +3195,7 @@ async def admin_withdrawal_action(
 ):
     if action not in {"approve", "paid", "reject"}:
         raise HTTPException(status_code=404, detail="Unknown withdrawal action")
-    withdrawal = await decide_withdrawal(session, admin, withdrawal_id, action, payload.reason)
+    withdrawal = await decide_withdrawal(session, admin, withdrawal_id, action, payload.reason, payload.payout_reference)
     return withdrawal
 
 
@@ -3283,6 +3312,14 @@ async def create_support_ticket(
     return await support_ticket_out(session, ticket)
 
 
+@router.get("/support/tickets/{ticket_id}", response_model=SupportTicketOut)
+async def own_support_ticket(ticket_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    ticket = await session.get(SupportTicket, ticket_id)
+    if not ticket or user.id not in {ticket.author_id, ticket.buyer_id, ticket.seller_id}:
+        raise HTTPException(404, "Обращение не найдено")
+    return await support_ticket_out(session, ticket)
+
+
 @router.post("/support/tickets/{ticket_id}/messages", response_model=SupportMessageOut, status_code=201)
 async def reply_to_support_ticket(
     ticket_id: uuid.UUID,
@@ -3339,6 +3376,7 @@ async def reply_to_support_ticket(
 
 @router.get("/admin/support/tickets", response_model=list[SupportTicketOut])
 async def admin_support_tickets(
+    q: str | None = Query(default=None, max_length=32),
     status_filter: str | None = Query(default=None, alias="status", pattern="^(new|open|in_progress|resolved|closed)$"),
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
@@ -3349,6 +3387,7 @@ async def admin_support_tickets(
         (
             await session.scalars(
                 select(SupportTicket)
+                .where(SupportTicket.topic.contains(q.strip(), autoescape=True) if q else True)
                 .where(
                     SupportTicket.status.in_({"new", "open"})
                     if status_filter == "new"
@@ -3408,6 +3447,12 @@ async def admin_reply_to_support_ticket(
     ticket = await session.get(SupportTicket, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Обращение не найдено")
+    if ticket.withdrawal_id:
+        ticket = await session.scalar(select(SupportTicket).where(SupportTicket.id == ticket_id).with_for_update().execution_options(populate_existing=True))
+    if ticket.withdrawal_id and not payload.client_request_id:
+        raise HTTPException(422, "Требуется идентификатор сообщения")
+    if ticket.withdrawal_id and len(payload.message.strip()) > 3500:
+        raise HTTPException(422, "Сообщение по выводу: не более 3500 символов")
     deal = None
     if ticket.case_type == "deal" and ticket.deal_id:
         deal = await session.scalar(select(Deal).where(Deal.id == ticket.deal_id).with_for_update())
@@ -3418,6 +3463,8 @@ async def admin_reply_to_support_ticket(
             SupportMessage.client_request_id == payload.client_request_id,
         ))
         if existing:
+            if ticket.withdrawal_id and existing.body != payload.message.strip():
+                raise HTTPException(409, "Идентификатор сообщения уже использован")
             return existing
     message = SupportMessage(
         ticket_id=ticket.id,
@@ -3448,15 +3495,18 @@ async def admin_reply_to_support_ticket(
         await create_notification(
             session,
             recipient_id,
-            "support_reply",
+            "withdrawal_support_reply" if ticket.withdrawal_id else "support_reply",
             "🛡 AutoFlow Support",
-            payload.message.strip()[:240],
-            {"ticket_id": str(ticket.id)},
+            f"🛡 AutoFlow Support · {ticket.topic}\n{payload.message.strip()}\nОтветьте в обращении по кнопке ниже." if ticket.withdrawal_id else payload.message.strip()[:240],
+            {"ticket_id": str(ticket.id), **({"withdrawal_id": str(ticket.withdrawal_id)} if ticket.withdrawal_id else {})},
         )
+    if ticket.withdrawal_id:
+        session.add(AdminAction(admin_id=admin.id, action="withdrawal_support_message", target_type="withdrawal",
+            target_id=ticket.withdrawal_id, reason="Сообщение поддержки", metadata_json={"ticket_id": str(ticket.id)}))
     await session.commit()
     await session.refresh(message)
     recipients = list((await session.scalars(select(User).where(User.id.in_(recipient_ids), User.bot_started.is_(True)))).all()) if recipient_ids else []
-    for recipient in recipients:
+    for recipient in recipients if not ticket.withdrawal_id else []:
         background_tasks.add_task(send_bot_notification, recipient.telegram_id, "🛡 AutoFlow Support ответила по вашему обращению")
     return message
 

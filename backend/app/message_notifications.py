@@ -95,7 +95,14 @@ async def claim_delivery(session, user_id, now):
             notice.delivery_status = "sending"
             notice.delivery_claimed_at = now
             notice.delivery_attempts = int(notice.delivery_attempts or 0) + 1
-        return {"ids": [notice.id for notice in eligible], "telegram_id": user.telegram_id, "text": text, "params": params}
+        contact_url = None
+        if latest.notification_type == "withdrawal_created" and latest.payload.get("withdrawal_user_id"):
+            from .withdrawal_support import profile_url
+            target_user = await session.get(User, uuid.UUID(latest.payload["withdrawal_user_id"]))
+            if target_user:
+                contact_url = profile_url(target_user)
+        return {"ids": [notice.id for notice in eligible], "telegram_id": user.telegram_id, "text": text,
+                "params": params, "contact_url": contact_url}
 
 
 async def send_delivery(job):
@@ -106,6 +113,12 @@ async def send_delivery(job):
     target = versioned_webapp_url(f"{base.rstrip('/')}/?{urlencode(job['params'])}")
     payload = {"chat_id": job["telegram_id"], "text": job["text"], "reply_markup": {
         "inline_keyboard": [[{"text": "Открыть", "web_app": {"url": target}}]]}}
+    if job.get("contact_url"):
+        payload["reply_markup"]["inline_keyboard"] = [
+            [{"text": "Открыть пользователя", "url": job["contact_url"]},
+             {"text": "Открыть заявку", "web_app": {"url": target}}],
+            [{"text": "Связаться через бота", "web_app": {"url": target + "&contact=1"}}],
+        ]
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.post(f"https://api.telegram.org/bot{settings.bot_token}/sendMessage", json=payload)

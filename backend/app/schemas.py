@@ -490,10 +490,13 @@ class WithdrawalQuoteCreate(BaseModel):
 
 class WithdrawalDecision(BaseModel):
     reason: str | None = Field(default=None, max_length=2000)
+    payout_reference: str | None = Field(default=None, max_length=200)
 
 
 class WithdrawalOut(ORMModel):
     id: uuid.UUID
+    public_number: int
+    public_id: str
     user_id: uuid.UUID
     amount: Decimal
     fee_af: Decimal | None = None
@@ -504,12 +507,19 @@ class WithdrawalOut(ORMModel):
     status: str
     rejection_reason: str | None
     created_at: datetime
+    reviewed_at: datetime | None = None
+    paid_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    payout_reference: str | None = None
 
 
 class AdminWithdrawalOut(WithdrawalOut):
     user_telegram_id: int
     user_name: str
     user_username: str | None = None
+    profile_url: str
+    contact_delivery_status: str | None = None
+    contact_delivery_error: str | None = None
 
 
 class BalanceAdjustmentCreate(BaseModel):
@@ -608,6 +618,7 @@ class SupportCaseEventOut(ORMModel):
 
 class SupportTicketOut(ORMModel):
     id: uuid.UUID
+    withdrawal_id: uuid.UUID | None = None
     user_id: uuid.UUID
     author_id: uuid.UUID
     case_type: str

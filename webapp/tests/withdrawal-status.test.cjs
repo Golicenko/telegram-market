@@ -8,3 +8,7 @@ test('withdrawal replay displays the current server state, not an assumed pendin
   assert.doesNotMatch(render({id:'one',status:'paid'}),/Ожидает|Зарезервировано/);
   for(const status of ['rejected','cancelled'])assert.match(render({id:'one',status}),/Резерв возвращён/);
 });
+test('public number and honest deadline replace technical UUID in customer text',()=>{
+  const text=render({id:'private-uuid',public_id:'#000057',amount:'21.43',status:'pending'});
+  assert.match(text,/#000057/);assert.match(text,/24 часов/);assert.doesNotMatch(text,/private-uuid/);
+});
