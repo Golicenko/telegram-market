@@ -3491,10 +3491,11 @@ async def admin_reply_to_support_ticket(
             SupportMessage.client_request_id == payload.client_request_id,
         ))
         if existing:
-            if ticket.withdrawal_id and existing.body != payload.message.strip():
+            if existing.body != payload.message.strip():
                 raise HTTPException(409, "Идентификатор сообщения уже использован")
             return existing
     message = SupportMessage(
+        id=uuid.uuid4(),
         ticket_id=ticket.id,
         sender_id=admin.id,
         client_request_id=payload.client_request_id,

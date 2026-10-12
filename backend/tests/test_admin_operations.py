@@ -5,17 +5,19 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from fastapi import FastAPI, HTTPException
-from sqlalchemy import select
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from sqlalchemy import func, select
 
 from app import admin_access
 from app.admin_operations import date_window, overview_data, router as operations_router
 from app.auth import get_current_user
 from app.config import Settings
 from app.database import get_session
-from app.models import AdminAction, StarPayment, StarPaymentIntent, SupportTicket, User
-from app.routes import router
+from app.models import AdminAction, StarPayment, StarPaymentIntent, SupportTicket, User, Wallet, Notification, ConversationMessage
+from app.routes import router, admin_reply_to_support_ticket
+from app.schemas import SupportReplyCreate
 from test_referral_bonus_postgres import isolated_pg, signed_login
+from test_seller_orders_postgres import paid_order
 
 
 def configured(monkeypatch):
@@ -129,3 +131,32 @@ async def test_pg_overview_audit_and_support_access(monkeypatch):
         async with sessions() as session:
             assert (await session.get(User, support.id)).role == "user"
             assert await session.scalar(select(AdminAction.id).where(AdminAction.admin_id == support.id))
+
+
+@pytest.mark.asyncio
+async def test_support_reply_in_paid_deal_replays_once_without_releasing_escrow(monkeypatch):
+    configured(monkeypatch)
+    async with isolated_pg() as (_, sessions):
+        buyer, seller, listing, deal = await paid_order(sessions)
+        support = await signed_login(sessions, 3)
+        async with sessions() as session, session.begin():
+            ticket = SupportTicket(user_id=buyer.id, author_id=buyer.id, buyer_id=buyer.id,
+                seller_id=seller.id, listing_id=listing.id, deal_id=deal.id, case_type="deal", topic="Help", status="open")
+            session.add(ticket)
+        payload = SupportReplyCreate(message="Пожалуйста, проверьте передачу", client_request_id=uuid.uuid4())
+        for _ in range(2):
+            async with sessions() as session:
+                tasks = BackgroundTasks()
+                await admin_reply_to_support_ticket(ticket.id, payload, tasks, support, session)
+                assert not tasks.tasks  # Uses transactional deal outbox, never direct Telegram calls.
+        async with sessions() as session:
+            with pytest.raises(HTTPException) as conflict:
+                await admin_reply_to_support_ticket(ticket.id, payload.model_copy(update={"message": "Другой текст"}), BackgroundTasks(), support, session)
+            assert conflict.value.status_code == 409
+        async with sessions() as session:
+            buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))
+            seller_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))
+            assert buyer_wallet.frozen_balance == 100
+            assert seller_wallet.available_balance == 0
+            assert await session.scalar(select(func.count()).select_from(ConversationMessage).where(ConversationMessage.sender_id == support.id)) == 1
+            assert await session.scalar(select(func.count()).select_from(Notification).where(Notification.notification_type == "deal_admin_message")) == 2
