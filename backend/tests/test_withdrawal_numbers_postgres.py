@@ -27,6 +27,7 @@ async def test_100_parallel_requests_unique_numbers_and_quote_replay(monkeypatch
             wallet.earned_balance = 3000
             stored_admin = await session.get(type(admin), admin.id)
             stored_admin.role = "admin"
+            stored_admin.bot_started = True
             quotes = [GiftWithdrawalQuote(user_id=user.id, budget=30, gross_af=Decimal("21.43"),
                 fee_af=Decimal("6.43"), payout_stars=15, gift_plan=[{"gift_id":"gift15","star_count":15,"quantity":1}],
                 expires_at=datetime.now(UTC) + timedelta(minutes=5)) for _ in range(100)]
@@ -39,6 +40,13 @@ async def test_100_parallel_requests_unique_numbers_and_quote_replay(monkeypatch
         assert sorted(r.public_number for r in requests) == list(range(1, 101))
         retries = await asyncio.gather(*(reserve(quotes[0]) for _ in range(10)))
         assert {r.id for r in retries} == {requests[0].id}
+        from app.message_notifications import claim_delivery
+        async with sessions() as session:
+            job = await claim_delivery(session, admin.id, datetime.now(UTC))
+        assert "💸 Заявка на вывод #" in job["text"] and "К отправке: 15 ⭐" in job["text"]
+        assert "Telegram ID" not in job["text"] and "Резерв" not in job["text"]
+        assert job["contact_url"] == "tg://user?id=9601"
+        assert "admin_withdrawal_id" in job["params"]
         admin.role = "admin"
         async def decide(action):
             async with sessions() as session:

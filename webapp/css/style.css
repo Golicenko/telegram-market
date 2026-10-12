@@ -708,3 +708,8 @@ main{padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));p
 @keyframes deal-backdrop-out{from{background:rgba(1,6,13,.52);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}to{background:rgba(1,6,13,0);backdrop-filter:blur(0);-webkit-backdrop-filter:blur(0)}}
 @keyframes deal-confirm-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.deal-confirmation,.deal-confirmation::backdrop,.deal-confirmation.is-success .deal-confirmation__mark,.deal-confirmation.is-pending .publish-button::before{animation:none!important}}
+#withdrawalFilters{display:grid;grid-template-columns:minmax(0,1fr)!important;gap:8px;margin:10px 0}
+#withdrawalFilters input,#withdrawalFilters select,.admin-withdrawal [name="payout_reference"]{box-sizing:border-box;width:100%;min-width:0;min-height:44px;font-size:16px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text)}
+#withdrawalFilters button,.admin-withdrawal__actions button,.admin-withdrawal__actions a{min-height:44px;display:inline-flex;align-items:center;justify-content:center;padding:8px 10px;box-sizing:border-box;white-space:normal}
+.admin-withdrawal details{overflow-wrap:anywhere}.admin-withdrawal details small{display:block;margin:8px 0}.admin-withdrawal summary{cursor:pointer;min-height:44px;display:flex;align-items:center}
+.admin-withdrawal{padding:12px;gap:8px}.admin-withdrawal>strong{font-size:14px;line-height:1.4}.admin-withdrawal>span,.admin-withdrawal>small{font-size:12px;line-height:1.5}.admin-withdrawal__actions button,.admin-withdrawal__actions a{font-size:12px}.admin-withdrawal__actions a{color:#acd5ff;text-decoration:none;border:1px solid var(--line);border-radius:7px;background:#17212d}

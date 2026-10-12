@@ -61,6 +61,7 @@ const server=http.createServer((req,res)=>{
       await page.getByText('Вывод #000057', {exact:false}).first().waitFor();
       assert.equal(await page.locator('.admin-withdrawal a').getAttribute('href'),'tg://user?id=2');
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+      if(process.env.AUTOFLOW_SCREENSHOT_DIR){fs.mkdirSync(process.env.AUTOFLOW_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:path.join(process.env.AUTOFLOW_SCREENSHOT_DIR,`withdrawals-${width}.png`),fullPage:true});}
       await page.locator('[data-withdrawal-action=paid]').click();
       assert.equal(paid,0);
       const dialog=page.locator('dialog[open]');await dialog.waitFor({state:'visible'});

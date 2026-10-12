@@ -3650,14 +3650,22 @@ async function hideCurrentConversation() {
   }
 
   async function replySupportTicket(ticketId, adminMode) {
-    const message = window.prompt("Введите ответ");
-    if (!message?.trim()) return;
-    const path = adminMode ? `/admin/support/tickets/${ticketId}/messages` : `/support/tickets/${ticketId}/messages`;
+    state.supportReplyBusy ||= new Set(); state.supportReplyRequests ||= {};
+    const key = `${adminMode}:${ticketId}`;
+    if (state.supportReplyBusy.has(key)) return;
+    state.supportReplyBusy.add(key);
     try {
-      await api.request(path, { method: "POST", body: JSON.stringify({ message: message.trim(), client_request_id: createRequestId() }) });
+      const message = window.prompt("Введите ответ");
+      if (!message?.trim()) return;
+      const body = message.trim();
+      if (state.supportReplyRequests[key]?.message !== body) state.supportReplyRequests[key] = { message: body, client_request_id: createRequestId() };
+      const path = adminMode ? `/admin/support/tickets/${ticketId}/messages` : `/support/tickets/${ticketId}/messages`;
+      await api.request(path, { method: "POST", body: JSON.stringify(state.supportReplyRequests[key]) });
+      delete state.supportReplyRequests[key];
       if (adminMode) await loadAdminSupport();
       else { state.supportTickets = await api.request("/support/tickets"); renderSupportTickets(); }
     } catch (error) { notify(error.message); }
+    finally { state.supportReplyBusy.delete(key); }
   }
 
   async function setSupportTicketStatus(ticketId, status) {
@@ -4469,6 +4477,7 @@ async function hideCurrentConversation() {
       const technical = document.createElement("details"); const summary = document.createElement("summary"); summary.textContent = "Подробности и аудит";
       const ids = document.createElement("small"); ids.textContent = `Заявка: ${item.id} · Telegram ID: ${item.user_telegram_id} · Резерв: ${formatNumber(item.amount)} AF · Ссылка выплаты: ${item.payout_reference || "не указана"}`;
       technical.append(summary, details, ids);
+      if (item.status === "approved") { const label = document.createElement("label"); label.textContent = "Ссылка/номер отправки (необязательно)"; const reference = document.createElement("input"); reference.name = "payout_reference"; reference.maxLength = 200; label.append(reference); technical.append(label); }
 
       const actions = document.createElement("div");
       actions.className = "admin-withdrawal__actions";
@@ -4509,7 +4518,7 @@ async function hideCurrentConversation() {
     try {
       if (button.dataset.withdrawalAction === "reject") { reason = window.prompt("Причина отклонения. Если часть подарков уже отправлена — не отклоняйте заявку: сначала завершите ручную сверку."); if (!reason) return; }
       if (button.dataset.withdrawalAction === "paid" && !(await confirmCriticalAction("Подтверждаете, что ВСЕ подарки по этой заявке уже отправлены нужному пользователю? Зарезервированные AF Coins будут списаны окончательно.", "Да, все подарки отправлены"))) return;
-      const payoutReference = button.dataset.withdrawalAction === "paid" ? window.prompt("Ссылка/номер отправки (необязательно)") : null;
+      const payoutReference = button.closest(".admin-withdrawal")?.querySelector('[name="payout_reference"]')?.value?.trim();
       await api.request(`/admin/withdrawals/${button.dataset.withdrawalId}/${button.dataset.withdrawalAction}`, { method: "POST", body: JSON.stringify({ reason, payout_reference: payoutReference || null }) });
       await loadAdminWithdrawals(); notify("Статус заявки обновлён");
     } catch (error) { notify(error.message); } finally { button.disabled = false; }
@@ -4777,6 +4786,6 @@ async function hideCurrentConversation() {
   function uniqueValues(values) { return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru")); }
   function statusLabel(status) { return ({ active: "Доступно", reserved: "Деньги под защитой", sold: "Уже продано", paused: "Снято с публикации", deleted: "Удалено" })[status] || status; }
   function dealStatusLabel(status) { return ({ pending_payment: "Ожидается оплата", paid: "Ожидается передача автомобиля", seller_contacted: "Продавец готов передать автомобиль", transfer_in_progress: "Продавец сообщил о передаче", buyer_confirmed: "Получение подтверждено", completed: "Покупка завершена", disputed: "На рассмотрении поддержки", cancelled: "Отменена" })[status] || status; }
-  function withdrawalStatusLabel(status) { return ({ pending: "Ожидает проверки", approved: "Одобрена", paid: "Выплачена", rejected: "Отклонена", cancelled: "Отменена" })[status] || status; }
+  function withdrawalStatusLabel(status) { return ({ pending: "Ожидает проверки", approved: "В обработке", paid: "Выплачена", rejected: "Отклонена", cancelled: "Отменена" })[status] || status; }
   function supportStatusLabel(status) { return ({ new: "Новое", open: "Открыто", in_progress: "В работе", resolved: "Решено", closed: "Закрыто" })[status] || status; }
 })();

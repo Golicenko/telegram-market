@@ -75,6 +75,7 @@ async def test_http_search_support_access_replay_and_blocked_delivery(monkeypatc
             for _ in range(2):
                 response = await client.post(path, json=payload)
                 assert response.status_code == 201, response.text
+            assert (await client.post(path, json={**payload, "message":"Different command"})).status_code == 409
             actor = user
             assert (await client.get(f'/api/support/tickets/{ticket["id"]}')).json()["messages"][0]["body"] == payload["message"]
             response = await client.post(f'/api/support/tickets/{ticket["id"]}/messages', json={"message":"Получил, спасибо", "client_request_id":str(uuid.uuid4())})
@@ -99,6 +100,11 @@ async def test_http_search_support_access_replay_and_blocked_delivery(monkeypatc
             monkeypatch.setattr(outbox.httpx, "AsyncClient", FakeClient)
             assert await send_delivery(job) == ("blocked", "telegram_bot_blocked_by_user")
             assert "support_case=" in sent_payloads[0]["reply_markup"]["inline_keyboard"][0][0]["web_app"]["url"]
+            await send_delivery({**job, "contact_url":"tg://user?id=9701", "params":{"admin_withdrawal_id":str(withdrawal.id)}})
+            buttons = sent_payloads[1]["reply_markup"]["inline_keyboard"]
+            assert buttons[0][0] == {"text":"Открыть пользователя", "url":"tg://user?id=9701"}
+            assert buttons[0][1]["text"] == "Открыть заявку"
+            assert "contact=1" in buttons[1][0]["web_app"]["url"]
             async with sessions() as session, session.begin():
                 notice = await session.get(Notification, job["ids"][0])
                 notice.delivery_status = "blocked"

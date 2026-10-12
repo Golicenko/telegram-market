@@ -3444,9 +3444,11 @@ async def admin_reply_to_support_ticket(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    ticket = await session.scalar(select(SupportTicket).where(SupportTicket.id == ticket_id).with_for_update())
+    ticket = await session.get(SupportTicket, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Обращение не найдено")
+    if ticket.withdrawal_id:
+        ticket = await session.scalar(select(SupportTicket).where(SupportTicket.id == ticket_id).with_for_update().execution_options(populate_existing=True))
     if ticket.withdrawal_id and not payload.client_request_id:
         raise HTTPException(422, "Требуется идентификатор сообщения")
     if ticket.withdrawal_id and len(payload.message.strip()) > 3500:
@@ -3461,6 +3463,8 @@ async def admin_reply_to_support_ticket(
             SupportMessage.client_request_id == payload.client_request_id,
         ))
         if existing:
+            if ticket.withdrawal_id and existing.body != payload.message.strip():
+                raise HTTPException(409, "Идентификатор сообщения уже использован")
             return existing
     message = SupportMessage(
         ticket_id=ticket.id,
