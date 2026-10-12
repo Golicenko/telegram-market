@@ -734,3 +734,8 @@ main{padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));p
 .admin-metric span { font-size: 13px; line-height: 1.4; }
 #adminAudit pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .admin-load-error { padding: 12px; border: 1px solid #805c39; border-radius: 12px; }
+.analytics-table-scroll { max-width: 100%; overflow-x: auto; margin: 12px 0; border: 1px solid var(--line); border-radius: 10px; }
+.analytics-table-scroll table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 12px; }
+.analytics-table-scroll th,.analytics-table-scroll td { padding: 9px; border-bottom: 1px solid var(--line); text-align: left; min-width: 90px; word-break: normal; overflow-wrap: normal; }
+.analytics-table-scroll th { color: #ffbb55; }
+#adminAnalytics { min-width: 0; overflow-wrap: anywhere; }

@@ -19,6 +19,7 @@ from .frontend import FRONTEND_BUILD, WEBAPP_DIR, versioned_webapp_url
 from .routes import UPLOAD_DIR, recover_deal_purchase_notifications, recover_training_background_jobs, run_deal_transfer_reminder_worker, run_seller_response_timeout_worker, router
 from .referral_routes import router as referral_router
 from .admin_operations import router as admin_operations_router
+from .analytics import router as analytics_router, run_analytics_retention
 from .referrals import backfill_referral_codes
 
 
@@ -64,6 +65,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(run_startup_job("message_notification_worker", run_message_notification_worker)),
         asyncio.create_task(run_startup_job("broadcast_recovery", recover_admin_broadcasts)),
         asyncio.create_task(run_startup_job("referral_code_backfill", backfill_referral_codes)),
+        asyncio.create_task(run_startup_job("analytics_retention", run_analytics_retention)),
     ]
     try:
         yield
@@ -126,6 +128,7 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.include_router(router)
 app.include_router(referral_router)
 app.include_router(admin_operations_router)
+app.include_router(analytics_router)
 
 
 @app.get("/", include_in_schema=False)

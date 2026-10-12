@@ -16,6 +16,34 @@ class TimestampMixin:
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class AnalyticsState(Base):
+    __tablename__ = "analytics_state"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    retained_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class AnalyticsEvent(Base):
+    """Authenticated, non-financial UI observations, without free-text payloads."""
+    __tablename__ = "analytics_events"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    event_name: Mapped[str] = mapped_column(String(40), nullable=False)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    dedup_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    source: Mapped[str] = mapped_column(String(24), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(24))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("user_id", "dedup_key", name="uq_analytics_event_dedup"),
+        Index("ix_analytics_user_time", "user_id", "created_at"),
+        Index("ix_analytics_name_time", "event_name", "created_at"),
+        Index("ix_analytics_time", "created_at"),
+    )
+
+
 class User(Base, TimestampMixin):
     __tablename__ = "users"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

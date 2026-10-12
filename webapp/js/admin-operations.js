@@ -34,7 +34,7 @@
   function mount() {
     const tabs = document.querySelector(".admin-tabs");
     if (!tabs || document.getElementById("adminOverview")) return;
-    for (const [key, title, id] of [["overview", "Обзор", "adminOverview"], ["audit", "Журнал действий", "adminAudit"]]) {
+    for (const [key, title, id] of [["overview", "Обзор", "adminOverview"], ["analytics", "Аналитика", "adminAnalytics"], ["audit", "Журнал действий", "adminAudit"]]) {
       const tab = node("button", title); tab.type = "button"; tab.dataset.adminTab = key;
       key === "overview" ? tabs.prepend(tab) : tabs.append(tab);
       const panel = node("section"); panel.dataset.adminPanel = key; panel.hidden = true;
@@ -68,7 +68,7 @@
           }
           const details = node("details"); details.append(node("summary", "Определения и ограничения данных"));
           Object.values(data.definitions).forEach(value => details.append(node("p", value)));
-          content.append(node("p", "DAU, открытия Mini App и просмотры обучения: не собирались. Это не нулевые значения."), details);
+          content.append(node("p", "DAU, открытия Mini App и просмотры обучения — во вкладке «Аналитика». История до начала сбора недоступна."), details);
         } catch (error) { if (versions.get("overview") === generation) errorState(content, error, load); }
         finally { if (versions.get("overview") === generation) submit.disabled = false; }
       };
@@ -111,6 +111,70 @@
     }
     await host.reload();
   }
+  async function analytics(api) {
+    const host = document.getElementById("adminAnalytics");
+    if (!host.dataset.ready) {
+      host.dataset.ready = "true";
+      const form = node("form", null, "admin-report-filters"), start = node("input"), end = node("input");
+      start.type = end.type = "date"; start.required = end.required = true; start.value = end.value = currentDate();
+      for (const [text, input] of [["С", start], ["По", end]]) { const label = node("label", text); label.append(input); form.append(label); }
+      const submit = node("button", "Показать"); submit.type = "submit"; form.append(submit);
+      const content = node("div"), products = node("div"); let offset = 0;
+      const query = () => new URLSearchParams({ start: start.value, end: end.value, timezone: "Europe/Bratislava" });
+      const table = (headers, rows) => {
+        const box = node("div", null, "analytics-table-scroll"), element = node("table"), head = node("tr");
+        headers.forEach(h => head.append(node("th", h))); const thead = node("thead"); thead.append(head); element.append(thead);
+        const body = node("tbody"); rows.forEach(values => { const row = node("tr"); values.forEach(value => row.append(node("td", value == null ? "Не собиралось" : String(value)))); body.append(row); });
+        element.append(body); box.append(element); return box;
+      };
+      const loadProducts = async () => {
+        const key = (versions.get("analytics-products") || 0) + 1; versions.set("analytics-products", key);
+        products.textContent = "Загрузка товаров…";
+        try {
+          const params = query(); params.set("offset", offset);
+          const data = await api.request(`/admin/analytics/training?${params}`); if (versions.get("analytics-products") !== key) return;
+          products.replaceChildren(node("h3", "Обучение: товары"), node("p", data.definition));
+          if (data.views_partial) products.append(node("p", "История просмотров неполная: сбор начат позже выбранного периода или отключён."));
+          products.append(table(["Продукт", "Просмотры", "Пользователи", "Оплаты", "Выдано", "Ошибки выдачи"], data.items.map(p => [p.title, p.views, p.viewers, p.paid, p.fulfilled, p.delivery_failed])));
+          const prev = button("Назад", () => { offset = Math.max(0, offset - 50); void loadProducts(); }); prev.disabled = !offset;
+          const next = button("Далее", () => { offset += 50; void loadProducts(); }); next.disabled = !data.has_more;
+          const controls = node("div", null, "admin-report-filters"); controls.append(prev, next); products.append(controls);
+        } catch (error) { if (versions.get("analytics-products") === key) errorState(products, error, loadProducts); }
+      };
+      const eventLabels = { account_created: "Новые аккаунты", listing_created: "Создано объявлений", order_paid: "Оплачено заказов (удержано)", order_completed: "Завершено (выплата продавцу)", order_refunded: "Возвращено покупателям", listing_pinned: "Платные закрепления", seller_order_accepted: "Принято продавцом", seller_timeout: "Неответ обработан", topup_checkout_started: "Создано Stars-инвойсов", topup_success: "Зачислено Stars-платежей", withdrawal_requested: "Заявки на вывод", withdrawal_paid: "Вывод выполнен", training_paid: "Оплачено обучение", referral_registered: "Новые рефералы", referral_milestone_paid: "Награды 3/10/20", referral_topup_commission_paid: "Комиссии рефералов" };
+      const load = async () => {
+        const key = (versions.get("analytics") || 0) + 1; versions.set("analytics", key);
+        versions.set("analytics-products", (versions.get("analytics-products") || 0) + 1);
+        products.replaceChildren();
+        content.textContent = "Загрузка…"; submit.disabled = true; offset = 0;
+        try {
+          const data = await api.request(`/admin/analytics?${query()}`); if (versions.get("analytics") !== key) return;
+          content.replaceChildren(node("p", `${start.value} — ${end.value} · ${data.timezone}`));
+          content.append(node("h3", "Подтверждённые серверные события"), table(["Событие", "Количество", "Предыдущий равный период", "Сумма"], Object.entries(data.server_events).map(([name, value]) => [eventLabels[name] || name, value.count, data.previous_server_events[name]?.count, value.unit === "count" ? "—" : value.amount == null ? "Не сохранена в старых записях" : `${value.amount} ${value.unit}`])));
+          content.append(node("h3", "Воронки и активность"));
+          if (!data.client_data_available) content.append(node("p", "За этот период наблюдения не собирались или сбор отключён. Это не нулевые показатели."));
+          else {
+            if (data.client_period_partial) content.append(node("p", "Неполный период сбора. Конверсию нельзя сравнивать с полным историческим периодом."));
+            const t = data.funnels.topup, training = data.funnels.training;
+            content.append(node("p", `Пополнение, пользователи одной когорты: открыли ${t.opened_users} → создали инвойс ${t.invoice_users} → оплатили ${t.paid_users}.`));
+            content.append(node("p", `Обучение, пары пользователь/товар: посмотрели ${training.viewed_user_products} → купили ${training.paid_user_products}.`));
+            content.append(table(["День", "DAU (наблюдавшиеся)", "Запуски"], data.daily_activity.map(day => [day.day, day.dau, day.opens])));
+            content.append(node("h3", "Наблюдения клиента (не платежные подтверждения)"), table(["Событие", "Платформа", "Причина", "События", "Пользователи"], data.client_observations.map(e => [e.event_name, e.platform, e.reason || "—", e.events, e.users])));
+          }
+          const timing = data.seller_accept_seconds;
+          content.append(node("p", timing.sample ? `Принятие продавцом: ${timing.sample} заказов; медиана ${(Number(timing.median) / 60).toFixed(1)} мин, p90 ${(Number(timing.p90) / 60).toFixed(1)} мин.` : "Недостаточно записей явного принятия для расчёта времени ответа."));
+          const details = node("details"); details.append(node("summary", "Как считаются данные")); data.definitions.forEach(text => details.append(node("p", text))); content.append(details);
+          await loadProducts();
+        } catch (error) { if (versions.get("analytics") === key) errorState(content, error, load); }
+        finally { if (versions.get("analytics") === key) submit.disabled = false; }
+      };
+      form.addEventListener("submit", event => { event.preventDefault(); void load(); });
+      const quick = node("div", null, "admin-report-filters");
+      for (const [days, label] of [[1, "Сегодня"], [7, "7 дней"], [30, "30 дней"]]) quick.append(button(label, () => { end.value = currentDate(); const begin = new Date(`${end.value}T12:00:00Z`); begin.setUTCDate(begin.getUTCDate() - days + 1); start.value = begin.toISOString().slice(0, 10); void load(); }));
+      host.append(node("h2", "Аналитика"), quick, form, content, products); host.reload = load;
+    }
+    await host.reload();
+  }
   async function page(api, key, query = {}) {
     const generation = (versions.get(key) || 0) + 1; versions.set(key, generation);
     const values = await api.request(`/admin/${key}?${new URLSearchParams({ ...query, limit: 50, offset: pages.get(key) || 0 })}`);
@@ -138,5 +202,5 @@
     const next = button("Далее", () => void move(50)); next.disabled = count < 50;
     controls.append(prev, node("span", `Страница ${offset / 50 + 1}`), next); host.append(controls);
   }
-  root.AutoFlowAdmin = { mount, overview, audit, page, pager, filters, errorState, reset: key => pages.set(key, 0) };
+  root.AutoFlowAdmin = { mount, overview, audit, analytics, page, pager, filters, errorState, reset: key => pages.set(key, 0) };
 })(window);

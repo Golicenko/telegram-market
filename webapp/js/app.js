@@ -3,6 +3,10 @@
   const primaryViews = new Set(["market", "unique", "training", "accounts", "profile", "more"]);
 
   const api = window.AutoFlowApi;
+  const track = window.AutoFlowAnalytics.create(api, () => ({
+    ready: Boolean(state.me && state.serverAvailable), staff: Boolean(adminTabs().length),
+    platform: telegram?.platform, source: state.currentView.startsWith("training") ? "training" : ["listing-detail", "deal-chat"].includes(state.currentView) ? "listing" : "navigation",
+  }));
   let telegram = window.Telegram?.WebApp || null;
   const launchParams = new URLSearchParams(window.location.search);
   const state = {
@@ -309,6 +313,10 @@
       if (event.target.name === "game_version") renderListingGameSelection();
     }, "listingGameChoice");
     document.addEventListener("visibilitychange", refreshPinnedCardAppearance);
+    document.addEventListener("visibilitychange", () => {
+      const event = { market: "market_viewed", training: "training_list_view", topup: "topup_screen_opened", support: "support_opened" }[state.currentView];
+      if (event) track(event);
+    });
     window.addEventListener("pageshow", refreshPinnedCardAppearance);
     bind(document.getElementById("topupForm"), "submit", requestStarInvoice, "topupForm");
     bind(elements.chatForm, "submit", sendChatMessage, "chatForm");
@@ -411,6 +419,8 @@
     startMessagePolling();
     hideStartup();
     reportStartupStage("shell_rendered");
+    track("miniapp_opened");
+    if (state.currentView === "market") track("market_viewed");
     reportStartupStage("market_loading");
     void loadOptionalData();
     void openTrainingProductDeepLink();
@@ -834,6 +844,8 @@ function handleClick(event) {
       });
     }
     state.currentView = viewName;
+    const viewEvent = { market: "market_viewed", training: "training_list_view", topup: "topup_screen_opened", support: "support_opened" }[viewName];
+    if (viewEvent) track(viewEvent);
     syncReferralsPage(viewName);
     syncBackNavigation();
     document.body.classList.toggle("chat-open", viewName === "deal-chat");
@@ -1104,6 +1116,7 @@ function handleClick(event) {
   }
 
   async function openSupport() {
+    if (state.currentView.startsWith("training") && state.selectedTraining?.id) track("training_support_opened", state.selectedTraining.id);
     elements.supportForm.elements.deal_id.value = "";
     elements.supportForm.elements.topic.closest("label").hidden = false;
     elements.supportForm.elements.screenshot.required = false;
@@ -1127,7 +1140,7 @@ function handleClick(event) {
   }
 
   function adminTabs() {
-    return state.me?.admin_access?.tabs || (state.me?.user.role === "admin" ? ["overview", "users", "training", "listings", "deals", "withdrawals", "support", "audit", "advertisement", "broadcasts"] : []);
+    return state.me?.admin_access?.tabs || (state.me?.user.role === "admin" ? ["overview", "analytics", "users", "training", "listings", "deals", "withdrawals", "support", "audit", "advertisement", "broadcasts"] : []);
   }
 
   async function loadAdminPlatformSummary() {
@@ -1465,6 +1478,7 @@ function handleClick(event) {
     if (state.me?.user.id === listing.seller_id) return notify("Нельзя купить собственное объявление");
     const price = Number(listing.effective_price_af_coins ?? listing.price_af_coins);
     state.purchaseFlow = { listing, stage: "confirm", busy: false, intentId: null };
+    track("order_checkout_started", listing.id);
     elements.purchaseModalTitle.textContent = "Покупка автомобиля";
     elements.purchaseModalText.textContent = `Цена: ${formatNumber(price)} AF Coins`;
     elements.purchaseModalAmount.replaceChildren(document.createTextNode(`${formatNumber(price)} `), coin("af-coin--small"));
@@ -1537,6 +1551,7 @@ function handleClick(event) {
         catch (error) { reject(error); }
       });
       if (invoiceStatus === "cancelled" || invoiceStatus === "failed") {
+        track("topup_failure", null, invoiceStatus === "cancelled" ? "cancelled" : "telegram_failed");
         flow.busy = false; elements.purchaseModalAction.disabled = false;
         elements.purchaseModalAction.textContent = `Пополнить ${intent.amount} ⭐ и купить`;
         elements.purchaseModalNote.textContent = invoiceStatus === "cancelled" ? "Оплата отменена. Баланс не изменён." : "Telegram не завершил оплату. Баланс не изменён.";
@@ -1580,6 +1595,7 @@ function handleClick(event) {
           catch (error) { reject(error); }
         });
         if (["cancelled", "failed"].includes(invoiceStatus)) {
+          track("topup_failure", null, invoiceStatus === "cancelled" ? "cancelled" : "telegram_failed");
           flow.busy = false;
           flow.intentId = null;
           elements.purchaseModalAction.disabled = false;
@@ -1779,6 +1795,7 @@ function handleClick(event) {
     try {
       const listing = await api.request(`/listings/${id}`);
       state.selectedListing = listing;
+      track("listing_viewed", listing.id);
       state.previousView = state.currentView === "listing-detail" ? state.previousView : state.currentView;
       renderListingPage();
       await navigate("listing-detail");
@@ -2829,16 +2846,19 @@ async function hideCurrentConversation() {
         catch (error) { reject(error); }
       });
       if (invoiceStatus === "cancelled") {
+        track("topup_failure", null, "cancelled");
         renderPaymentStatus("cancelled");
         return;
       }
       if (invoiceStatus === "failed") {
+        track("topup_failure", null, "telegram_failed");
         renderPaymentStatus("failed");
         return;
       }
       await checkStarPaymentStatus(intent.id, { automatic: true, purpose });
     } catch (error) {
       renderPaymentStatus(state.activeTopupIntentId ? "verification_error" : "request_error", state.activeTopupIntentId);
+      track("topup_failure", null, error.status ? "api_rejected" : "network");
     } finally { button.disabled = false; }
   }
 
@@ -3062,6 +3082,7 @@ async function hideCurrentConversation() {
       const cached = state.training.find((item) => String(item.id) === String(id));
       const product = cached?.published === false ? cached : await api.request(`/training/${id}`);
       state.selectedTraining = product;
+      track("training_product_view", product.id);
       document.getElementById("trainingDetailCover").src = absoluteMediaUrl(product.cover_url);
       document.getElementById("trainingDetailTitle").textContent = product.title;
       document.getElementById("trainingDetailDescription").textContent = product.full_description;
@@ -3113,6 +3134,7 @@ async function hideCurrentConversation() {
     if (state.trainingPurchases.some((item) => String(item.product_id) === String(product.id))) return notify("Вы уже приобрели это обучение");
     const balance = Number(state.me?.wallet?.available_balance || 0);
     state.purchaseFlow = { kind: "training", product, stage: "confirm", busy: false, intentId: null };
+    track("training_buy_click", product.id);
     elements.purchaseModalTitle.textContent = `Купить «${product.title}»?`;
     elements.purchaseModalText.textContent = `Стоимость: ${formatNumber(product.price_af_coins)} AF Coins. Ваш баланс: ${formatNumber(balance)} AF Coins.`;
     elements.purchaseModalAmount.replaceChildren(document.createTextNode(`${formatNumber(product.price_af_coins)} `), coin("af-coin--small"));
@@ -3125,6 +3147,7 @@ async function hideCurrentConversation() {
   }
 
   async function executeTrainingPurchase(flow) {
+    track("training_checkout_started", flow.product.id);
     flow.busy = true; elements.purchaseModalAction.disabled = true; elements.purchaseModalAction.textContent = "Проверяем баланс…";
     try {
       const purchase = await api.request(`/training/${flow.product.id}/purchase`, { method: "POST" });
@@ -3170,6 +3193,7 @@ async function hideCurrentConversation() {
           catch (error) { reject(error); }
         });
         if (["cancelled", "failed"].includes(invoiceStatus)) {
+          track("topup_failure", null, invoiceStatus === "cancelled" ? "cancelled" : "telegram_failed");
           flow.busy = false; flow.intentId = null; elements.purchaseModalAction.disabled = false;
           elements.purchaseModalAction.textContent = `Пополнить ${amount} AF Coins`;
           elements.purchaseModalNote.textContent = "Оплата не завершена. Баланс не изменён.";
@@ -4499,7 +4523,7 @@ async function hideCurrentConversation() {
     document.querySelectorAll("[data-admin-panel]").forEach((panel) => { panel.hidden = panel.dataset.adminPanel !== tab; });
     if (!load) return;
     const loaders = {
-      overview: () => window.AutoFlowAdmin.overview(api), audit: () => window.AutoFlowAdmin.audit(api),
+      overview: () => window.AutoFlowAdmin.overview(api), audit: () => window.AutoFlowAdmin.audit(api), analytics: () => window.AutoFlowAdmin.analytics(api),
       users: () => Promise.all([loadAdminUsers(), loadAdminPlatformSummary()]), listings: loadAdminListings,
       deals: loadAdminDeals, withdrawals: loadAdminWithdrawals, support: loadAdminSupport,
       advertisement: loadAdvertisementAdmin, training: () => loadAdminTraining(state.adminTrainingFilter), broadcasts: loadAdminBroadcasts,

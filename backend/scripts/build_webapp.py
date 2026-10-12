@@ -11,7 +11,7 @@ import re
 ROOT = Path(__file__).resolve().parents[2]
 WEBAPP = ROOT / "webapp"
 INDEX = WEBAPP / "index.html"
-ASSET_URLS = ("css/style.css", "js/api.js", "js/referrals.js", "js/deal-confirmation.js", "js/admin-operations.js", "js/app.js")
+ASSET_URLS = ("css/style.css", "js/api.js", "js/referrals.js", "js/deal-confirmation.js", "js/admin-operations.js", "js/analytics.js", "js/app.js")
 ASSETS = tuple(WEBAPP / url for url in ASSET_URLS)
 
 

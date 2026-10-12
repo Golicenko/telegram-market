@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     admin_telegram_ids: set[int] = Field(default_factory=set)
     # Support never receives the legacy financial administrator role.
     support_telegram_ids: set[int] = Field(default_factory=set)
+    analytics_enabled: bool = True
+    analytics_retention_days: int = Field(default=180, ge=7, le=365)
     railway_public_domain: str | None = None
     public_base_url: str | None = None
     upload_dir: str | None = None
