@@ -105,7 +105,7 @@ async def test_parallel_acceptance_once_no_money_no_timer_extension_and_refund_a
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["buyer", "stranger", "unpaid", "cancelled", "completed", "expired"])
+@pytest.mark.parametrize("case", ["buyer", "stranger", "unpaid", "no_hold", "cancelled", "completed", "expired"])
 async def test_acceptance_rejects_wrong_actor_or_invalid_order(case):
     async with isolated_pg() as (_, sessions):
         buyer, seller, _, deal = await paid_order(sessions)
@@ -116,6 +116,9 @@ async def test_acceptance_rejects_wrong_actor_or_invalid_order(case):
             stored = await session.get(Deal, deal.id)
             if case == "unpaid":
                 stored.status = "pending_payment"
+            elif case == "no_hold":
+                wallet = await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))
+                wallet.purchased_frozen_balance = 0
             elif case in {"cancelled", "completed"}:
                 stored.status = case
             elif case == "expired":

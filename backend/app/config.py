@@ -85,6 +85,7 @@ class Settings(BaseSettings):
         if len(value) > 3 or value != sorted(set(value)) or any(v < 1 or v >= 86400 for v in value):
             raise ValueError("Use up to 3 increasing unique reminder offsets within 24 hours")
         return value
+
     debug: bool = False
     dev_telegram_id: int | None = None
     dev_telegram_name: str = "Local User"

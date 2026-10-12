@@ -9,6 +9,7 @@ import httpx
 from sqlalchemy import select, update, or_
 
 from .chat_access import active_thread_clause
+from .deal_lifecycle import delivery_deadline_expired
 from .config import get_settings
 from .database import SessionLocal
 from .frontend import versioned_webapp_url
@@ -60,7 +61,7 @@ async def claim_delivery(session, user_id, now):
         for notice in pending:
             if notice.notification_type in {"seller_order_reminder", "deal_created", "seller_order_accepted"}:
                 deal = await session.get(Deal, uuid.UUID(notice.payload["deal_id"]))
-                stale = not deal or deal.status not in {"paid", "seller_contacted"}
+                stale = not deal or deal.status not in {"paid", "seller_contacted"} or delivery_deadline_expired(deal, now)
                 if not stale and notice.notification_type == "seller_order_reminder":
                     from .seller_orders import utc
                     replied = await session.scalar(select(DealEvent.id).where(DealEvent.deal_id == deal.id,
