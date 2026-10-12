@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from .auth import get_current_user, require_admin
+from .admin_access import require_support, staff_access
 from .broadcasts import create_admin_broadcast, parse_broadcast_command, run_admin_broadcast
 from .bot import (
     answer_bot_callback,
@@ -1183,7 +1184,7 @@ async def client_diagnostic(
 @router.get("/me", response_model=MeOut)
 async def me(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
-    return MeOut(user=user, wallet=wallet)
+    return MeOut(user=user, wallet=wallet, admin_access=staff_access(user))
 
 
 @router.post("/uploads", status_code=201)
@@ -2947,26 +2948,36 @@ async def cancel_own_withdrawal(withdrawal_id: uuid.UUID, user: User = Depends(g
 
 @router.get("/admin/users")
 async def admin_users(
-    q: str | None = None,
+    q: str | None = Query(default=None, max_length=128),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    query = select(User).order_by(User.created_at.desc()).limit(100)
+    listing_count = select(func.count(Listing.id)).where(Listing.seller_id == User.id).correlate(User).scalar_subquery()
+    deal_count = select(func.count(Deal.id)).where(or_(Deal.buyer_id == User.id, Deal.seller_id == User.id)).correlate(User).scalar_subquery()
+    query = select(User, Wallet, listing_count, deal_count).join(Wallet, Wallet.user_id == User.id).order_by(User.created_at.desc(), User.id.desc()).limit(limit).offset(offset)
     if q:
-        pattern = f"%{q.strip()}%"
-        conditions = [User.first_name.ilike(pattern), User.username.ilike(pattern)]
-        if q.strip().isdigit():
+        term = q.strip().lstrip("@")
+        pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        conditions = [User.first_name.ilike(pattern, escape="\\"), User.last_name.ilike(pattern, escape="\\"), User.username.ilike(pattern, escape="\\")]
+        try:
+            conditions.append(User.id == uuid.UUID(term))
+        except ValueError:
+            pass
+        if q.strip().isdigit() and len(q.strip()) <= 19 and int(q.strip()) <= 9223372036854775807:
             conditions.append(User.telegram_id == int(q.strip()))
         query = query.where(or_(*conditions))
-    users = list((await session.scalars(query)).all())
+    users = (await session.execute(query)).all()
     result = []
-    for item in users:
-        wallet_value = await session.scalar(select(Wallet).where(Wallet.user_id == item.id))
+    for item, wallet_value, listings_count, deals_count in users:
         result.append({
             "user": UserOut.model_validate(item),
             "wallet": WalletOut.model_validate(wallet_value),
-            "listings_count": await session.scalar(select(func.count(Listing.id)).where(Listing.seller_id == item.id)),
-            "deals_count": await session.scalar(select(func.count(Deal.id)).where(or_(Deal.buyer_id == item.id, Deal.seller_id == item.id))),
+            "listings_count": listings_count,
+            "deals_count": deals_count,
+            "created_at": item.created_at,
+            "last_active_at": item.mini_app_last_active_at,
         })
     return result
 
@@ -3022,9 +3033,16 @@ async def admin_user_block_action(user_id: uuid.UUID, action: str, admin: User =
 
 
 @router.get("/admin/listings", response_model=list[ListingOut])
-async def admin_listings(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    await expire_promotions(session)
-    values = list((await session.scalars(select(Listing).where(Listing.status != "deleted").order_by(Listing.created_at.desc()))).all())
+async def admin_listings(
+    limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    status_filter: str | None = Query(default=None, alias="status", pattern="^(active|paused|reserved|sold|deleted)$"),
+    game: str | None = Query(default=None, pattern="^car_parking_[12]$"),
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+):
+    values = list((await session.scalars(select(Listing).where(
+        Listing.status == status_filter if status_filter else Listing.status != "deleted",
+        Listing.game_version == game if game else True,
+    ).order_by(Listing.created_at.desc(), Listing.id.desc()).limit(limit).offset(offset))).all())
     return [await listing_out(session, item) for item in values]
 
 
@@ -3043,8 +3061,16 @@ async def admin_listing_publication(listing_id: uuid.UUID, action: str, admin: U
 
 
 @router.get("/admin/deals", response_model=list[DealOut])
-async def admin_deals(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    return list((await session.scalars(select(Deal).order_by(Deal.updated_at.desc()).limit(200))).all())
+async def admin_deals(
+    limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0),
+    status_filter: str | None = Query(default=None, alias="status", pattern="^(pending_payment|paid|seller_contacted|transfer_in_progress|buyer_confirmed|completed|disputed|cancelled)$"),
+    deal_id: uuid.UUID | None = None,
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session),
+):
+    return list((await session.scalars(select(Deal).where(
+        Deal.status == status_filter if status_filter else True,
+        Deal.id == deal_id if deal_id else True,
+    ).order_by(Deal.updated_at.desc(), Deal.id.desc()).limit(limit).offset(offset))).all())
 
 
 @router.get("/admin/platform-financial-summary")
@@ -3382,7 +3408,7 @@ async def admin_support_tickets(
     status_filter: str | None = Query(default=None, alias="status", pattern="^(new|open|in_progress|resolved|closed)$"),
     limit: int = Query(default=100, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_support),
     session: AsyncSession = Depends(get_session),
 ):
     tickets = list(
@@ -3409,7 +3435,7 @@ async def admin_support_tickets(
 @router.get("/admin/support/tickets/{ticket_id}", response_model=SupportTicketOut)
 async def admin_support_ticket(
     ticket_id: uuid.UUID,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_support),
     session: AsyncSession = Depends(get_session),
 ):
     ticket = await session.scalar(select(SupportTicket).where(SupportTicket.id == ticket_id).with_for_update())
@@ -3443,7 +3469,7 @@ async def admin_reply_to_support_ticket(
     ticket_id: uuid.UUID,
     payload: SupportReplyCreate,
     background_tasks: BackgroundTasks,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_support),
     session: AsyncSession = Depends(get_session),
 ):
     ticket = await session.get(SupportTicket, ticket_id)
@@ -3505,6 +3531,9 @@ async def admin_reply_to_support_ticket(
     if ticket.withdrawal_id:
         session.add(AdminAction(admin_id=admin.id, action="withdrawal_support_message", target_type="withdrawal",
             target_id=ticket.withdrawal_id, reason="Сообщение поддержки", metadata_json={"ticket_id": str(ticket.id)}))
+    else:
+        session.add(AdminAction(admin_id=admin.id, action="support_message", target_type="support_ticket",
+            target_id=ticket.id, reason="Ответ поддержки", metadata_json={"message_id": str(message.id)}))
     await session.commit()
     await session.refresh(message)
     recipients = list((await session.scalars(select(User).where(User.id.in_(recipient_ids), User.bot_started.is_(True)))).all()) if recipient_ids else []
@@ -3517,7 +3546,7 @@ async def admin_reply_to_support_ticket(
 async def update_support_ticket_status(
     ticket_id: uuid.UUID,
     payload: SupportStatusUpdate,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_support),
     session: AsyncSession = Depends(get_session),
 ):
     ticket = await session.get(SupportTicket, ticket_id)

@@ -719,3 +719,14 @@ main{padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));p
 .chat-view .deal-controls button{min-height:44px;font-size:12px}
 .deal-secondary-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .chat-listing.is-without-image{grid-template-columns:minmax(0,1fr) auto}
+:is(#adminOverview, #adminAudit) { overflow-wrap: anywhere; }
+.admin-report-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 12px 0; }
+.admin-report-filters label { display: grid; gap: 5px; flex: 1; min-width: 100px; }
+.admin-report-filters input { width: 100%; min-width: 0; font-size: 16px; }
+.admin-report-filters button { min-height: 44px; padding: 8px 12px; }
+.admin-metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.admin-metric { display: grid; gap: 6px; padding: 12px; border: 1px solid #263449; border-radius: 14px; background: #0c1524; }
+.admin-metric strong { color: #ffad42; font-size: 22px; }
+.admin-metric span { font-size: 13px; line-height: 1.4; }
+#adminAudit pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.admin-load-error { padding: 12px; border: 1px solid #805c39; border-radius: 12px; }

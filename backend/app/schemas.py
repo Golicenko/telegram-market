@@ -36,6 +36,7 @@ class WalletOut(ORMModel):
 class MeOut(BaseModel):
     user: UserOut
     wallet: WalletOut
+    admin_access: dict = Field(default_factory=lambda: {"role": "user", "tabs": []})
 
 
 class ClientDiagnosticCreate(BaseModel):

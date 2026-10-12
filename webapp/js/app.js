@@ -751,7 +751,7 @@ function handleClick(event) {
     if (redeliverTraining) return void redeliverTrainingMaterials(redeliverTraining);
     if (target.closest("[data-close-training-detail]")) return void closeAdminTrainingDetail();
     const adminTab = target.closest("[data-admin-tab]");
-    if (adminTab) return void switchAdminTab(adminTab.dataset.adminTab);
+    if (adminTab) return void switchAdminTab(adminTab.dataset.adminTab, true);
     const userAction = target.closest("[data-admin-user-action]");
     if (userAction) return void adminUserAction(userAction);
     const paymentRetry = target.closest("[data-payment-retry]");
@@ -1118,12 +1118,16 @@ function handleClick(event) {
   }
 
   async function openAdminPanel() {
-    if (state.me?.user.role !== "admin") return notify("Требуется роль администратора");
+    const access = adminTabs();
+    if (!access.length) return notify("Требуется роль сотрудника");
+    window.AutoFlowAdmin.mount();
+    document.querySelectorAll("[data-admin-tab]").forEach(button => { button.hidden = !access.includes(button.dataset.adminTab); });
     openSecondary("admin");
-    const results = await Promise.allSettled([loadAdminUsers(), loadAdminPlatformSummary(), loadAdminListings(), loadAdminDeals(), loadAdminWithdrawals(), loadAdminSupport(), loadAdvertisementAdmin(), loadAdminTraining(state.adminTrainingFilter), loadAdminBroadcasts()]);
-    const rejected = results.filter((result) => result.status === "rejected");
-    rejected.forEach((result) => reportClientError("admin_optional", result.reason));
-    if (rejected.length) notify("Часть данных админ-панели временно недоступна");
+    await switchAdminTab(access.includes("overview") ? "overview" : "support", true);
+  }
+
+  function adminTabs() {
+    return state.me?.admin_access?.tabs || (state.me?.user.role === "admin" ? ["overview", "users", "training", "listings", "deals", "withdrawals", "support", "audit", "advertisement", "broadcasts"] : []);
   }
 
   async function loadAdminPlatformSummary() {
@@ -1150,6 +1154,7 @@ function handleClick(event) {
   function applyRole() {
     const isAdmin = state.me?.user.role === "admin";
     document.querySelectorAll("[data-admin-only]").forEach((element) => { element.hidden = !isAdmin; });
+    document.querySelectorAll("[data-open-admin]").forEach(element => { element.hidden = !adminTabs().length; });
   }
 
   function renderAll() {
@@ -3666,7 +3671,7 @@ async function hideCurrentConversation() {
       const reply = document.createElement("button"); reply.type = "button"; reply.dataset.supportReply = ticket.id; reply.dataset.adminReply = String(adminMode); reply.textContent = "Ответить"; actions.append(reply);
     }
     if (adminMode) {
-      if (ticket.case_type === "deal" && !["resolved", "closed"].includes(ticket.status)) {
+      if (ticket.case_type === "deal" && !["resolved", "closed"].includes(ticket.status) && state.me?.user.role === "admin") {
         [["complete", "Передать средства продавцу"], ["refund", "Вернуть средства покупателю"]].forEach(([outcome, label]) => { const button = document.createElement("button"); button.type = "button"; button.dataset.supportResolution = outcome; button.dataset.ticketId = ticket.id; button.textContent = label; actions.append(button); });
       } else {
         ["resolved", "closed"].forEach((nextStatus) => { const button = document.createElement("button"); button.type = "button"; button.dataset.supportStatus = nextStatus; button.dataset.ticketId = ticket.id; button.textContent = nextStatus === "resolved" ? "Решено" : "Закрыть"; actions.append(button); });
@@ -3940,8 +3945,11 @@ async function hideCurrentConversation() {
     } catch (error) { notify(error.message); }
   }
 
-  async function loadAdminUsers(q = "") {
-    const users = await api.request(`/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+  async function loadAdminUsers(q = state.adminUserQuery || "") {
+    if (q !== (state.adminUserQuery || "")) window.AutoFlowAdmin.reset("users");
+    state.adminUserQuery = q;
+    const users = await window.AutoFlowAdmin.page(api, "users", { q });
+    if (!users) return;
     elements.adminUsers.replaceChildren(...users.map((item) => {
       const card = document.createElement("div"); card.className = "admin-record";
       const title = document.createElement("strong"); title.textContent = `${item.user.first_name}${item.user.username ? ` · @${item.user.username}` : ""}`;
@@ -3952,6 +3960,12 @@ async function hideCurrentConversation() {
       const block = document.createElement("button"); block.dataset.adminUserAction = item.user.is_blocked ? "unblock" : "block"; block.dataset.userId = item.user.id; block.textContent = item.user.is_blocked ? "Разблокировать" : "Заблокировать"; actions.append(history, block);
       card.append(title, meta, balance, actions); return card;
     }));
+    window.AutoFlowAdmin.pager(elements.adminUsers, "users", users.length, () => loadAdminUsers(q));
+    const input = document.querySelector("#adminUserSearch input");
+    if (!input.dataset.debounced) {
+      input.dataset.debounced = "true"; let timer;
+      input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => loadAdminUsers(input.value.trim()).catch(error => notify(error.message)), 350); });
+    }
   }
 
   async function searchAdminUsers(event) { event.preventDefault(); try { await loadAdminUsers(new FormData(event.currentTarget).get("q").trim()); } catch (error) { notify(error.message); } }
@@ -4020,7 +4034,8 @@ async function hideCurrentConversation() {
   }
 
   async function loadAdminListings() {
-    const listings = await api.request("/admin/listings");
+    const listings = await window.AutoFlowAdmin.page(api, "listings");
+    if (!listings) return;
     elements.adminListings.replaceChildren(...listings.map((listing) => {
       const card = document.createElement("div"); card.className = "admin-record";
       const title = document.createElement("strong"); title.textContent = `${listingTitle(listing)} · ${listing.listing_type}`;
@@ -4030,6 +4045,7 @@ async function hideCurrentConversation() {
       const publication = document.createElement("button"); publication.dataset.adminListingAction = listing.status === "paused" ? "publish" : "unpublish"; publication.dataset.listingId = listing.id; publication.textContent = listing.status === "paused" ? "Опубликовать" : "Снять";
       const remove = document.createElement("button"); remove.dataset.adminListingAction = "delete"; remove.dataset.listingId = listing.id; remove.textContent = "Удалить"; actions.append(promotion, publication, remove); card.append(title, meta, actions); return card;
     }));
+    window.AutoFlowAdmin.pager(elements.adminListings, "listings", listings.length, loadAdminListings);
   }
 
   async function adminListingAction(button) {
@@ -4039,7 +4055,8 @@ async function hideCurrentConversation() {
   }
 
   async function loadAdminDeals() {
-    const deals = await api.request("/admin/deals");
+    const deals = await window.AutoFlowAdmin.page(api, "deals");
+    if (!deals) return;
     elements.adminDeals.replaceChildren(...deals.map((deal) => {
       const card = document.createElement("div"); card.className = "admin-record";
       const title = document.createElement("strong"); title.textContent = `Сделка ${deal.id.slice(0, 8)} · ${dealStatusLabel(deal.status)}`;
@@ -4048,6 +4065,7 @@ async function hideCurrentConversation() {
       if (deal.status === "disputed") { const note = document.createElement("small"); note.textContent = "Финансовое решение доступно в связанном обращении поддержки"; card.append(note); }
       return card;
     }));
+    window.AutoFlowAdmin.pager(elements.adminDeals, "deals", deals.length, loadAdminDeals);
   }
 
   async function openAdminSupportCase(id) {
@@ -4468,9 +4486,24 @@ async function hideCurrentConversation() {
     }
   }
 
-  function switchAdminTab(tab) {
+  async function switchAdminTab(tab, load = false) {
+    if (!adminTabs().includes(tab)) return;
     document.querySelectorAll("[data-admin-tab]").forEach((button) => button.classList.toggle("is-active", button.dataset.adminTab === tab));
     document.querySelectorAll("[data-admin-panel]").forEach((panel) => { panel.hidden = panel.dataset.adminPanel !== tab; });
+    if (!load) return;
+    const loaders = {
+      overview: () => window.AutoFlowAdmin.overview(api), audit: () => window.AutoFlowAdmin.audit(api),
+      users: () => Promise.all([loadAdminUsers(), loadAdminPlatformSummary()]), listings: loadAdminListings,
+      deals: loadAdminDeals, withdrawals: loadAdminWithdrawals, support: loadAdminSupport,
+      advertisement: loadAdvertisementAdmin, training: () => loadAdminTraining(state.adminTrainingFilter), broadcasts: loadAdminBroadcasts,
+    };
+    const panel = document.querySelector(`[data-admin-panel="${tab}"]`);
+    panel?.querySelector(".admin-load-error")?.remove(); panel?.setAttribute("aria-busy", "true");
+    try { await loaders[tab]?.(); }
+    catch (error) {
+      const box = document.createElement("div"); box.className = "admin-load-error"; panel?.prepend(box);
+      window.AutoFlowAdmin.errorState(box, error, () => switchAdminTab(tab, true));
+    } finally { panel?.setAttribute("aria-busy", "false"); }
   }
 
  function renderAdminWithdrawals(withdrawals) {
