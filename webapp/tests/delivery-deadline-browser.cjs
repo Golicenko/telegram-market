@@ -87,7 +87,8 @@ const server = http.createServer((req, res) => {
       const box = await submit.boundingBox(); assert(box.x>=0 && box.x+box.width<=width && box.y+box.height<=480, JSON.stringify(box));
       await form.evaluate(el=>{el.requestSubmit();el.requestSubmit();});
       await form.waitFor({state:"hidden"}); assert.equal(deliveryPosts, 1);
-      await page.reload(); await page.getByText("Продавец получил ваш ID:",{exact:false}).waitFor();
+      await page.reload(); await page.getByText("Ваш ID для передачи:",{exact:false}).waitFor();
+      await page.getByText("⏳ Оплачено, ждём ответа продавца",{exact:true}).waitFor();
       userId = "seller"; await page.setViewportSize({width,height:740}); await page.reload();
       const timer = page.locator(".seller-delivery-deadline"); await timer.waitFor();
       assert.match(await timer.textContent(), /Осталось: \d+ ч \d+ мин/);
@@ -96,7 +97,8 @@ const server = http.createServer((req, res) => {
       if (width===390) await page.screenshot({path:path.join(os.tmpdir(),"autoflow-delivery-seller-390.png")});
       deal.seller_delivery_deadline = new Date(Date.now()-1000).toISOString(); await page.reload();
       await page.locator(".seller-delivery-deadline.is-expired").waitFor();
-      assert(await page.locator('[data-deal-action="transfer"]').isDisabled());
+      assert(await page.locator('[data-deal-action="seller-contacted"]').isDisabled());
+      assert.equal(await page.locator('[data-deal-action="transfer"]').count(),0);
       userId="admin"; await page.goto(base+"/?admin_deal_id=deal");
       const adminInput=page.locator("#adminDealMessage");
       try {await adminInput.waitFor({timeout:5000});}
@@ -108,7 +110,7 @@ const server = http.createServer((req, res) => {
       await adminSend.click();
       await page.waitForFunction(()=>document.querySelector("#adminDealMessage")?.value==="");
       assert.equal(adminPosts.length,2);assert.equal(adminPosts[0].client_message_id,adminPosts[1].client_message_id);
-      assert.match(await page.locator(".deal-timeline").textContent(), /Администратор: 🛡 Администратор/);
+      await page.locator(".deal-timeline").getByText("Администратор: 🛡 Администратор",{exact:false}).waitFor();
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
       assert.deepEqual(errors,[]);
       console.log(width+"px: CP1/CP2 top-left badges, ID-only/reload/copy, seller countdown/expiry, admin retry OK");

@@ -978,7 +978,8 @@ function handleClick(event) {
   const dealChanged = refreshedDeal && (
     previousDeal?.status !== refreshedDeal.status ||
     previousDeal?.buyer_game_id !== refreshedDeal.buyer_game_id ||
-    previousDeal?.seller_delivery_deadline !== refreshedDeal.seller_delivery_deadline
+    previousDeal?.seller_delivery_deadline !== refreshedDeal.seller_delivery_deadline ||
+    previousDeal?.seller_accepted_at !== refreshedDeal.seller_accepted_at
   );
   if (refreshedDeal) state.currentConversation.deal = refreshedDeal;
   if (dealDetails) state.currentConversation = dealDetails;
@@ -2392,9 +2393,14 @@ async function hideCurrentConversation() {
       panel.append(title, copy);
       return;
     }
+    if (deal.status === "disputed") {
+      title.textContent = "🛡 Сделка на проверке поддержки";
+      copy.textContent = "Средства удерживаются до решения. Автоматической выплаты по таймеру нет.";
+      panel.append(title, copy); return;
+    }
     if (isBuyer && hasDetails) {
-      title.textContent = "⏳ Ожидается передача автомобиля";
-      copy.textContent = `Продавец получил ваш ID: ${deal.buyer_game_id}\nЕсли необходимо что-то уточнить, используйте чат ниже.`;
+      title.textContent = deal.seller_accepted_at ? "✅ Продавец принял заказ" : "⏳ Оплачено, ждём ответа продавца";
+      copy.textContent = `Ваш ID для передачи: ${deal.buyer_game_id}\nСредства удерживаются до подтверждения получения. Если необходимо что-то уточнить, используйте чат ниже.`;
       panel.append(title, copy);
       return;
     }
@@ -2500,11 +2506,20 @@ async function hideCurrentConversation() {
     const isBuyer = deal.buyer_id === state.me.user.id;
     const isSeller = deal.seller_id === state.me.user.id;
     const hasDeliveryDetails = Boolean(deal.buyer_game_id);
-    if (isSeller && ["paid", "seller_contacted"].includes(deal.status) && deal.seller_delivery_deadline) {
-      const deadline = new Date(deal.seller_delivery_deadline).getTime();
+    elements.dealDeliveryPanel.querySelectorAll(".seller-delivery-deadline,.deal-progress").forEach(item => item.remove());
+    if (isSeller && ["paid", "seller_contacted", "transfer_in_progress"].includes(deal.status)) {
+      const steps = document.createElement("ol"); steps.className = "deal-progress"; steps.setAttribute("aria-label", "Этапы передачи");
+      const active = deal.status === "transfer_in_progress" ? 2 : deal.seller_accepted_at || deal.status === "seller_contacted" ? 1 : 0;
+      ["Принять заказ", "Передать машину", "Дождаться покупателя"].forEach((label, index) => { const item = document.createElement("li"); item.textContent = `${index < active ? "✓" : index + 1}. ${label}`; if (index === active) item.setAttribute("aria-current", "step"); steps.append(item); });
+      elements.dealDeliveryPanel.prepend(steps);
+    }
+    if ((isSeller || isBuyer) && ["paid", "seller_contacted"].includes(deal.status) && deal.seller_delivery_deadline) {
+      const deliveryDeadline = new Date(deal.seller_delivery_deadline).getTime();
+      const responseDeadline = !deal.seller_responded_at && deal.seller_response_deadline ? new Date(deal.seller_response_deadline).getTime() : deliveryDeadline;
+      const deadline = Math.min(deliveryDeadline, responseDeadline);
       if (Number.isFinite(deadline)) {
         const block = document.createElement("div"); block.className = "seller-delivery-deadline";
-        const label = document.createElement("strong"); label.textContent = "У вас есть 24 часа, чтобы передать машину покупателю";
+        const label = document.createElement("strong"); label.textContent = isSeller ? "У вас есть 24 часа, чтобы передать машину покупателю" : "Средства под защитой · срок ожидания передачи";
         const countdown = document.createElement("span"); countdown.className = "seller-delivery-deadline__time"; countdown.setAttribute("role", "timer");
         block.append(label, countdown); elements.dealDeliveryPanel.prepend(block);
         const updateDeliveryTimer = () => {
@@ -2512,13 +2527,20 @@ async function hideCurrentConversation() {
           countdown.textContent = minutes > 0 ? `Осталось: ${Math.floor(minutes / 60)} ч ${String(minutes % 60).padStart(2, "0")} мин` : "Срок истёк · ожидается проверка сервера";
           block.classList.toggle("is-expired", minutes === 0);
           const transfer = elements.dealControls.querySelector('[data-deal-action="transfer"]');
-          if (transfer) transfer.disabled = minutes === 0;
+          if (transfer) transfer.disabled = minutes === 0 || state.dealActionPending;
+          const accept = elements.dealControls.querySelector('[data-deal-action="seller-contacted"]');
+          if (accept) accept.disabled = minutes === 0 || state.dealActionPending;
         };
         updateDeliveryTimer();
         state.dealTimerId = window.setInterval(updateDeliveryTimer, 1000);
       }
     }
-    if (isSeller && hasDeliveryDetails && ["paid", "seller_contacted"].includes(deal.status)) {
+    if (isSeller && !deal.seller_accepted_at && ["paid", "seller_contacted"].includes(deal.status)) {
+      const accept = document.createElement("button"); accept.className = "deal-confirm"; accept.dataset.dealAction = "seller-contacted"; accept.textContent = "Принять заказ";
+      accept.disabled = Boolean(deal.seller_delivery_deadline && new Date(deal.seller_delivery_deadline).getTime() <= Date.now());
+      elements.dealControls.append(accept);
+    }
+    if (isSeller && hasDeliveryDetails && ["paid", "seller_contacted"].includes(deal.status) && (deal.seller_accepted_at || deal.status === "seller_contacted")) {
       const transfer = document.createElement("button");
       transfer.className = "deal-confirm deal-transfer-critical";
       transfer.dataset.dealAction = "transfer";
@@ -2558,6 +2580,7 @@ async function hideCurrentConversation() {
       elements.dealControls.append(warning, timer, confirm, support);
     }
     if (["paid", "seller_contacted"].includes(deal.status)) {
+      const support = document.createElement("button"); support.className = "deal-support"; support.dataset.dealAction = "support"; support.textContent = "Нужна помощь"; elements.dealControls.append(support);
       const cancel = document.createElement("button"); cancel.className = "deal-secondary"; cancel.dataset.dealAction = "cancel"; cancel.textContent = "Отменить сделку"; elements.dealControls.append(cancel);
     }
   }
@@ -2568,6 +2591,7 @@ async function hideCurrentConversation() {
     if (action === "support") return openDealSupport(id);
     if (!["seller-contacted", "transfer", "confirm", "cancel"].includes(action)) return;
     state.dealActionPending = true;
+    elements.dealControls.querySelectorAll("button").forEach(button => { button.disabled = true; });
     const endpoint = action === "seller-contacted" ? "seller-contacted" : action === "transfer" ? "transfer" : action === "confirm" ? "confirm" : action === "cancel" ? "cancel" : "dispute";
     try {
       const submit = () => {
@@ -2595,7 +2619,7 @@ async function hideCurrentConversation() {
       await openDealConversation(id); await refreshMarketplace();
     }
     catch (error) { notify(error.message); }
-    finally { state.dealActionPending = false; }
+    finally { state.dealActionPending = false; renderDealDeliveryPanel(); renderDealControls(); }
   }
 
   function confirmDealTransfer(action, deal, submit) {

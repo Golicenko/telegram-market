@@ -385,6 +385,8 @@ class Deal(Base, TimestampMixin):
     seller_delivery_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     cancellation_reason: Mapped[str | None] = mapped_column(String(48))
     seller_responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    seller_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    seller_reminder_stage: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     seller_timeout_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     seller_timeout_notification_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="not_required", server_default="not_required", index=True
@@ -420,7 +422,7 @@ class Deal(Base, TimestampMixin):
         CheckConstraint("status IN ('pending_payment','paid','seller_contacted','transfer_in_progress','buyer_confirmed','completed','disputed','cancelled')", name="ck_deals_status"),
         CheckConstraint("bonus_frozen_amount >= 0", name="ck_deals_bonus_nonnegative"),
         CheckConstraint(
-            "seller_purchase_notification_status IN ('pending','sending','sent','failed')",
+            "seller_purchase_notification_status IN ('pending','sending','sent','failed','outbox')",
             name="ck_deals_seller_purchase_notification_status",
         ),
         CheckConstraint(

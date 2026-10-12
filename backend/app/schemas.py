@@ -172,6 +172,7 @@ class DealOut(ORMModel):
     seller_delivery_deadline: datetime | None = None
     cancellation_reason: str | None = None
     seller_responded_at: datetime | None
+    seller_accepted_at: datetime | None = None
     transfer_started_at: datetime | None
     completed_at: datetime | None
     created_at: datetime
