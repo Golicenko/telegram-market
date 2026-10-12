@@ -51,7 +51,7 @@ Do not reorder a running schedule casually: stages are ordinal and persisted per
 The existing periodic seller-timeout worker calls `recover_seller_order_reminders`.
 It scans up to 100 due deals per pass. A locked deal advances its stage and queues a
 notice atomically. Restart needs no in-process 24-hour sleep. Missed slots coalesce;
-older unsent reminders are suppressed. Acceptance, a real seller chat message, transfer,
+older unsent reminders are suppressed at outbox claim time. Acceptance, a real seller chat message, transfer,
 dispute or expiry suppress reminders. Viewing the chat is not an acceptance or reply.
 Reminder scheduling does not move either existing deadline.
 

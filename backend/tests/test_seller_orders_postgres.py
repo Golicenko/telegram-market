@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
-from sqlalchemy import func, select, text
+from sqlalchemy import event, func, select, text
 
 from app.config import Settings
 from app.models import Deal, DealEvent, Listing, Notification, User, Wallet, WalletTransaction
@@ -136,7 +136,7 @@ async def test_acceptance_rejects_wrong_actor_or_invalid_order(case):
 async def test_reminders_restart_concurrency_and_missed_slots_coalesce(monkeypatch):
     monkeypatch.setattr("app.seller_orders.get_settings", lambda: Settings(seller_order_reminder_seconds=[2, 12, 23]))
     async with isolated_pg() as (_, sessions):
-        _, _, _, deal = await paid_order(sessions)
+        _, seller, _, deal = await paid_order(sessions)
         async def queue(seconds):
             async with sessions() as session:
                 return await queue_seller_order_reminder(session, deal.id, deal.created_at + timedelta(seconds=seconds))
@@ -145,6 +145,8 @@ async def test_reminders_restart_concurrency_and_missed_slots_coalesce(monkeypat
         # New connections after downtime are the restart analogue; skip missed 12s slot.
         assert await queue(23)
         assert not await queue(23)
+        async with sessions() as session:
+            await claim_delivery(session, seller.id, datetime.now(UTC))
         async with sessions() as session:
             stored = await session.get(Deal, deal.id)
             assert stored.seller_reminder_stage == 3
@@ -288,3 +290,32 @@ async def test_blocked_bot_does_not_block_order_or_timeout_refund(monkeypatch):
         async with sessions() as session:
             assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).available_balance == 100
             assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).frozen_balance == 0
+
+
+@pytest.mark.asyncio
+async def test_reminder_insert_does_not_reverse_outbox_user_notification_locks(monkeypatch):
+    monkeypatch.setattr("app.seller_orders.get_settings", lambda: Settings(seller_order_reminder_seconds=[2, 12, 23]))
+    async with isolated_pg() as (_, sessions):
+        _, seller, _, deal = await paid_order(sessions)
+        async with sessions() as session:
+            assert await queue_seller_order_reminder(session, deal.id, deal.created_at + timedelta(seconds=2))
+        flushing = asyncio.Event()
+        async def next_reminder():
+            async with sessions() as session:
+                event.listen(session.sync_session, "before_flush", lambda *_: flushing.set())
+                return await queue_seller_order_reminder(session, deal.id, deal.created_at + timedelta(seconds=23))
+        task = None
+        try:
+            async with sessions() as sender, sender.begin():
+                await sender.scalar(select(User).where(User.id == seller.id).with_for_update())
+                task = asyncio.create_task(next_reminder())
+                await asyncio.wait_for(flushing.wait(), 5)
+                # Mirror the outbox's next lock while the new insert waits on User FK.
+                previous = await sender.scalar(select(Notification).where(
+                    Notification.notification_type == "seller_order_reminder").with_for_update(nowait=True))
+                assert previous is not None
+            assert await asyncio.wait_for(task, 10)
+        finally:
+            if task and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)

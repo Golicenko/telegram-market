@@ -1,7 +1,7 @@
 """Seller progress/notification policy. Financial settlement stays in services."""
 from datetime import UTC, datetime, timedelta
 import logging
-from sqlalchemy import select, update, or_
+from sqlalchemy import select, or_
 from .config import get_settings
 from .models import Deal, DealEvent, Notification
 from .deal_lifecycle import audit_deal
@@ -44,12 +44,9 @@ async def queue_seller_order_reminder(session, deal_id, now=None):
         if stage <= deal.seller_reminder_stage:
             return False
         # After downtime coalesce missed slots into one notice, not a burst.
-        await session.execute(update(Notification).where(
-            Notification.user_id == deal.seller_id,
-            Notification.notification_type == "seller_order_reminder",
-            Notification.payload["deal_id"].astext == str(deal.id),
-            Notification.delivery_status == "pending",
-        ).values(delivery_status="suppressed", delivery_error="superseded_reminder"))
+        # Suppress older pending slots at claim time, not here: the outbox locks
+        # User -> Notification, while inserting here obtains a User FK lock.
+        # Taking an existing Notification lock here first would reverse that order.
         deal.seller_reminder_stage = stage
         body = (f"🚗 Заказ #{str(deal.id)[:8]} ожидает вашего ответа.\n"
             "Откройте сделку и нажмите «Принять заказ», если готовы передать машину.\n"

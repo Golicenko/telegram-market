@@ -67,6 +67,7 @@ async def claim_delivery(session, user_id, now):
                     replied = await session.scalar(select(DealEvent.id).where(DealEvent.deal_id == deal.id,
                         DealEvent.actor_id == deal.seller_id, DealEvent.event_type == "message_sent").limit(1))
                     stale = bool(deal.seller_accepted_at or deal.seller_responded_at or replied
+                        or notice.payload.get("stage", 0) < deal.seller_reminder_stage
                         or (deal.seller_delivery_deadline and utc(deal.seller_delivery_deadline) <= now)
                         or (deal.seller_response_deadline and utc(deal.seller_response_deadline) <= now))
                 if stale:
