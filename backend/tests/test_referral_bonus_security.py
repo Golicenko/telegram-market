@@ -163,10 +163,12 @@ async def test_admin_credit_and_marked_test_payment_do_not_grant_commission(db):
     with db.session.bind.begin() as conn:
         for model in (AdminAction, AdminBalanceAdjustment):
             conn.execute(CreateTable(model.__table__))
+    owner.role = "admin"
+    await db.commit()
     await adjust_balance(
         db,
         owner,
-        SimpleNamespace(user_id=buyer.id, amount=Decimal(100), reason="Bonus"),
+        SimpleNamespace(user_id=buyer.id, request_id=uuid.uuid4(), amount=Decimal(100), reason="Bonus"),
     )
     assert count(db, ReferralReward) == 0
     await db.commit()

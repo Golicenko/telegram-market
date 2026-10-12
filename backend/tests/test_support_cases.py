@@ -220,7 +220,7 @@ def test_frontend_training_success_and_support_workflows_are_explicit():
 
 class ResolutionSession:
     def __init__(self, deal, listing, buyer_wallet, seller_wallet, ticket):
-        self.values = [deal, listing, buyer_wallet, seller_wallet, ticket]
+        self.values = [deal.listing_id, listing, deal, buyer_wallet, seller_wallet, ticket]
         self.added = []
 
     def begin(self):

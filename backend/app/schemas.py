@@ -513,8 +513,9 @@ class AdminWithdrawalOut(WithdrawalOut):
 
 
 class BalanceAdjustmentCreate(BaseModel):
+    request_id: uuid.UUID
     user_id: uuid.UUID
-    amount: Decimal
+    amount: Decimal = Field(max_digits=18, decimal_places=2, allow_inf_nan=False)
     reason: str = Field(min_length=5, max_length=2000)
 
 
