@@ -429,10 +429,11 @@
     if (adminWithdrawal) {
       launchParams.delete("admin_withdrawal_id");
       if (state.me?.user.role !== "admin") return notify("Доступен только администратору");
-      await openAdminPanel(); switchAdminTab("withdrawals"); await loadAdminWithdrawals();
+      await openAdminPanel(); switchAdminTab("withdrawals"); await loadAdminWithdrawals({ withdrawalId: adminWithdrawal });
       const card = [...elements.adminWithdrawals.children].find(item => item.dataset.withdrawalId === adminWithdrawal);
       if (card) { card.scrollIntoView({ block: "center" }); card.focus(); }
       else notify("Заявка не найдена");
+      if (card && launchParams.get("contact") === "1") { launchParams.delete("contact"); await openWithdrawalSupport(adminWithdrawal, true); }
       return;
     }
     const adminDeal = launchParams.get("admin_deal_id");
@@ -2109,10 +2110,12 @@ function handleClick(event) {
     elements.withdrawalHistory.replaceChildren(...withdrawals.map((item) => {
       const row = document.createElement("div"); row.className = "history-item withdrawal-history-item";
       const copy = document.createElement("div");
-      const title = document.createElement("strong"); title.textContent = `${formatNumber(item.amount)} AF Coins · ${withdrawalStatusLabel(item.status)}`;
+      const title = document.createElement("strong"); title.textContent = `${item.public_id} · ${formatNumber(item.amount)} AF Coins · ${withdrawalStatusLabel(item.status)}`;
       const date = document.createElement("span"); date.textContent = formatDate(item.created_at); copy.append(title, date);
       if (item.gift_plan) { const gifts = document.createElement("small"); gifts.textContent = `Подарки: ${item.gift_plan.map(gift => `${gift.quantity} × ${gift.star_count} Stars`).join(" + ")}. Комиссия: ${formatNumber(item.fee_af)} AF. ${item.rejection_reason || ""}`; copy.append(gifts); }
       row.append(copy);
+      const support = document.createElement("button"); support.textContent = "Помощь по заявке";
+      support.addEventListener("click", () => openWithdrawalSupport(item.id, false)); row.append(support);
       if (item.status === "pending") { const cancel = document.createElement("button"); cancel.dataset.cancelWithdrawal = item.id; cancel.textContent = "Отменить"; row.append(cancel); }
       return row;
     }));
@@ -2923,7 +2926,7 @@ async function hideCurrentConversation() {
       ? `Зарезервировано ${formatNumber(request.amount)} AF Coins. Ожидает ручной отправки подарков; выплата ещё не завершена.`
       : request.status === "paid" ? "Администратор подтвердил выполнение выплаты."
       : ["rejected", "cancelled"].includes(request.status) ? "Резерв возвращён на баланс." : "Обновите данные заявки в кошельке.";
-    return `Заявка ${request.id}: ${status}. ${detail}`;
+    return `Заявка ${request.public_id}: ${status}. ${detail} Вывод в течение 24 часов.`;
   }
 
   function renderTopupSelection() {
@@ -3870,7 +3873,37 @@ async function hideCurrentConversation() {
     } catch (error) { notify(error.message); }
   }
 
-  async function loadAdminWithdrawals() { renderAdminWithdrawals(await api.request("/admin/withdrawals")); }
+  async function loadAdminWithdrawals({ withdrawalId = null, offset = 0 } = {}) {
+    let filters = document.getElementById("withdrawalFilters");
+    if (!filters) {
+      filters = document.createElement("form"); filters.id = "withdrawalFilters"; filters.className = "admin-search";
+      const search = document.createElement("input"); search.name = "q"; search.placeholder = "Номер заявки: #000057"; search.setAttribute("aria-label", "Номер заявки");
+      const status = document.createElement("select"); status.name = "status"; status.setAttribute("aria-label", "Статус заявки");
+      [["", "Все статусы"], ["pending", "Новые"], ["approved", "В обработке"], ["paid", "Выплачены"], ["rejected", "Отклонены"], ["cancelled", "Отменены"]].forEach(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; status.append(option); });
+      const submit = document.createElement("button"); submit.textContent = "Найти / обновить"; submit.type = "submit";
+      filters.append(search, status, submit); elements.adminWithdrawals.before(filters);
+      filters.addEventListener("submit", event => { event.preventDefault(); void loadAdminWithdrawals(); });
+    }
+    const params = new URLSearchParams({ limit: "50", offset: String(offset) });
+    if (withdrawalId) params.set("withdrawal_id", withdrawalId);
+    else { const data = new FormData(filters); if (data.get("q")) params.set("q", data.get("q")); if (data.get("status")) params.set("status", data.get("status")); }
+    elements.adminWithdrawals.textContent = "Загрузка заявок…";
+    try {
+      const items = await api.request(`/admin/withdrawals?${params}`); renderAdminWithdrawals(items);
+      const pages = document.createElement("div"); pages.className = "admin-withdrawal__actions";
+      if (offset > 0) { const previous = document.createElement("button"); previous.textContent = "Назад"; previous.onclick = () => loadAdminWithdrawals({ offset: Math.max(0, offset - 50) }); pages.append(previous); }
+      if (items.length === 50 && !withdrawalId) { const next = document.createElement("button"); next.textContent = "Далее"; next.onclick = () => loadAdminWithdrawals({ offset: offset + 50 }); pages.append(next); }
+      elements.adminWithdrawals.append(pages);
+    } catch (error) { elements.adminWithdrawals.textContent = `Не удалось загрузить: ${error.message}. Нажмите «Найти / обновить».`; }
+  }
+
+  async function openWithdrawalSupport(id, adminMode) {
+    try {
+      const ticket = await api.request(`/withdrawals/${id}/support`, { method: "POST" });
+      if (adminMode) { await openAdminPanel(); switchAdminTab("support"); elements.adminSupportTickets.replaceChildren(createSupportTicketCard(ticket, true)); }
+      else { await openSupport(); state.supportTickets = [ticket]; renderSupportTickets(); }
+    } catch (error) { notify(error.message); }
+  }
 
   async function loadAdminUsers(q = "") {
     const users = await api.request(`/admin/users${q ? `?q=${encodeURIComponent(q)}` : ""}`);
@@ -4299,11 +4332,16 @@ async function hideCurrentConversation() {
 
   async function openSupportCaseDeepLink() {
     const ticketId = new URLSearchParams(window.location.search).get("support_case");
-    if (!ticketId || state.me?.user.role !== "admin") return;
-    await openAdminPanel(); switchAdminTab("support");
+    if (!ticketId || !state.me) return;
     try {
-      const ticket = await api.request(`/admin/support/tickets/${ticketId}`);
-      elements.adminSupportTickets.replaceChildren(createSupportTicketCard(ticket, true));
+      if (state.me.user.role === "admin") {
+        await openAdminPanel(); switchAdminTab("support");
+        const ticket = await api.request(`/admin/support/tickets/${ticketId}`);
+        elements.adminSupportTickets.replaceChildren(createSupportTicketCard(ticket, true));
+      } else {
+        const ticket = await api.request(`/support/tickets/${ticketId}`);
+        await openSupport(); state.supportTickets = [ticket]; renderSupportTickets();
+      }
     } catch (error) { notify(error.message); }
   }
 
@@ -4413,20 +4451,24 @@ async function hideCurrentConversation() {
       card.dataset.withdrawalId = item.id; card.tabIndex = -1;
 
       const title = document.createElement("strong");
-      title.textContent = `${formatNumber(item.amount)} AF Coins · ${withdrawalStatusLabel(item.status)}`;
+      title.textContent = `Вывод ${item.public_id} · ${withdrawalStatusLabel(item.status)}`;
 
       const user = document.createElement("span");
       const username = item.user_username
         ? `@${item.user_username}`
         : "username не указан";
 
-      user.textContent =
-        `${item.user_name || "Пользователь"} · ${username} · Telegram ID ${item.user_telegram_id}`;
+      user.textContent = `${item.user_name || "Пользователь"} · ${username}`;
+      const payout = document.createElement("strong"); payout.textContent = item.payout_stars == null ? "Историческая заявка: сумма Stars не сохранена" : `К отправке: ${item.payout_stars} ⭐`;
+      const timing = document.createElement("small"); timing.textContent = `Создана: ${new Date(item.created_at).toISOString().replace("T", " ").slice(0, 19)} UTC · В течение 24 часов`;
 
       const details = document.createElement("small");
       details.textContent =
         `${item.payout_method} · ${item.details}`;
       if (item.gift_plan) details.textContent = `Отправить: ${item.gift_plan.map(gift => `${gift.quantity} × ${gift.star_count} Stars (ID ${gift.gift_id})`).join(" + ")}. Всего: ${item.payout_stars} Stars. Комиссия: ${formatNumber(item.fee_af)} AF. ${item.details}`;
+      const technical = document.createElement("details"); const summary = document.createElement("summary"); summary.textContent = "Подробности и аудит";
+      const ids = document.createElement("small"); ids.textContent = `Заявка: ${item.id} · Telegram ID: ${item.user_telegram_id} · Резерв: ${formatNumber(item.amount)} AF · Ссылка выплаты: ${item.payout_reference || "не указана"}`;
+      technical.append(summary, details, ids);
 
       const actions = document.createElement("div");
       actions.className = "admin-withdrawal__actions";
@@ -4449,8 +4491,10 @@ async function hideCurrentConversation() {
       history.dataset.financialHistory = item.user_id;
       history.textContent = "Финансовая история";
       actions.append(history);
-
-      card.append(title, user, details, actions);
+      const profile = document.createElement("a"); profile.textContent = "Открыть пользователя"; profile.href = item.profile_url; profile.target = "_blank"; profile.rel = "noopener noreferrer"; actions.append(profile);
+      const contact = document.createElement("button"); contact.textContent = "Связаться через бота"; contact.onclick = () => openWithdrawalSupport(item.id, true); actions.append(contact);
+      const delivery = document.createElement("small"); delivery.textContent = item.contact_delivery_status ? `Доставка сообщения поддержки: ${({ sent: "Отправлено", pending: "В очереди", sending: "Отправляется", blocked: "Пользователь заблокировал бота", failed: "Ошибка доставки", unknown: "Доставка не подтверждена — проверьте перед повтором", suppressed: "Бот недоступен пользователю" })[item.contact_delivery_status] || item.contact_delivery_status}` : "Без username открытие профиля зависит от приватности. Ответить поддержке можно в связанном обращении.";
+      card.append(title, payout, user, timing, technical, delivery, actions);
       return card;
     })
   );
@@ -4465,8 +4509,9 @@ async function hideCurrentConversation() {
     try {
       if (button.dataset.withdrawalAction === "reject") { reason = window.prompt("Причина отклонения. Если часть подарков уже отправлена — не отклоняйте заявку: сначала завершите ручную сверку."); if (!reason) return; }
       if (button.dataset.withdrawalAction === "paid" && !(await confirmCriticalAction("Подтверждаете, что ВСЕ подарки по этой заявке уже отправлены нужному пользователю? Зарезервированные AF Coins будут списаны окончательно.", "Да, все подарки отправлены"))) return;
-      await api.request(`/admin/withdrawals/${button.dataset.withdrawalId}/${button.dataset.withdrawalAction}`, { method: "POST", body: JSON.stringify({ reason }) });
-      renderAdminWithdrawals(await api.request("/admin/withdrawals")); notify("Статус заявки обновлён");
+      const payoutReference = button.dataset.withdrawalAction === "paid" ? window.prompt("Ссылка/номер отправки (необязательно)") : null;
+      await api.request(`/admin/withdrawals/${button.dataset.withdrawalId}/${button.dataset.withdrawalAction}`, { method: "POST", body: JSON.stringify({ reason, payout_reference: payoutReference || null }) });
+      await loadAdminWithdrawals(); notify("Статус заявки обновлён");
     } catch (error) { notify(error.message); } finally { button.disabled = false; }
   }
 

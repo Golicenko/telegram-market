@@ -81,6 +81,7 @@ async def preview_withdrawal(session, user, budget):
 
 async def reserve_gift_withdrawal(session, user, quote_id, details):
     from .services import create_notification, money, wallet_snapshot, wallet_transaction
+    from .withdrawal_support import validated_username
     # An identical quote is the idempotency key, including after admin completion.
     async with session.begin():
         existing = await session.scalar(select(WithdrawalRequest).where(WithdrawalRequest.gift_quote_id == quote_id, WithdrawalRequest.user_id == user.id))
@@ -114,12 +115,11 @@ async def reserve_gift_withdrawal(session, user, quote_id, details):
         session.add(wallet_transaction(wallet, "withdrawal_reserved", -request.amount, before_available, before_frozen,
             f"Резерв ручной выдачи подарков: {quote.payout_stars} Stars стоимости, комиссия {quote.fee_af} AF", withdrawal_id=request.id))
         admins = list((await session.scalars(select(User).where(User.role == "admin"))).all())
-        plan = ", ".join(f'{item["quantity"]} × {item["star_count"]} Stars (ID {item["gift_id"]})' for item in quote.gift_plan)
+        username = validated_username(user.username)
         for admin in admins:
-            await create_notification(session, admin.id, "withdrawal_created", "Новая заявка на подарки",
-                f"Заявка {request.id}\nПользователь: {user.first_name}\n"
-                f"Username: {'@' + user.username if user.username else 'не указан'}\nTelegram ID: {user.telegram_id}\n"
-                f"Доступно до: {before_available} AF\nРезерв: {request.amount} AF\nКомиссия: {quote.fee_af} AF\n"
-                f"Отправить: {plan}\nЗавершите заявку вручную только после отправки всех подарков.",
-                {"withdrawal_id": str(request.id), "admin_withdrawal_id": str(request.id)})
+            await create_notification(session, admin.id, "withdrawal_created", f"Заявка на вывод {request.public_id}",
+                f"💸 Заявка на вывод {request.public_id}\nК отправке: {request.payout_stars} ⭐\n"
+                + (f"Username: @{username}" if username else "Username отсутствует"),
+                {"withdrawal_id": str(request.id), "admin_withdrawal_id": str(request.id),
+                 "withdrawal_user_id": str(user.id)})
     return request

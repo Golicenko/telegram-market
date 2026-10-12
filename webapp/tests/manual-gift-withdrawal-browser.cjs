@@ -18,7 +18,7 @@ const server=http.createServer((req,res)=>{
       const errors=[],quoteIds=[];
       const user={id:'user-1',telegram_id:1,first_name:'Admin',role:'admin',username:null,photo_url:null};
       const wallet={available_balance:100,earned_balance:100,frozen_balance:0};
-      const request={id:'request-1',user_id:user.id,amount:'21.43',fee_af:'6.43',payout_stars:15,gift_plan:[{gift_id:'gift-15',star_count:15,quantity:1}],payout_method:'manual_gift',details:'',status:'approved',user_name:'Buyer',user_telegram_id:2};
+      const request={id:'request-1',public_number:57,public_id:'#000057',created_at:'2026-10-12T12:00:00Z',profile_url:'tg://user?id=2',user_id:user.id,amount:'21.43',fee_af:'6.43',payout_stars:15,gift_plan:[{gift_id:'gift-15',star_count:15,quantity:1}],payout_method:'manual_gift',details:'',status:'approved',user_name:'Buyer',user_telegram_id:2};
       page.on('pageerror',error=>errors.push(error.message));
       await page.addInitScript(()=>{window.Telegram={WebApp:{initData:'fixture',ready(){},expand(){},onEvent(){},BackButton:{show(){},hide(){},onClick(){}}}};});
       await page.route(/^https:/,route=>route.abort());
@@ -58,6 +58,9 @@ const server=http.createServer((req,res)=>{
       await page.locator('.bottom-nav [data-nav-target=profile]').click();
       await page.locator('[data-open-admin]').click();
       await page.locator('[data-admin-tab=withdrawals]').click();
+      await page.getByText('Вывод #000057', {exact:false}).first().waitFor();
+      assert.equal(await page.locator('.admin-withdrawal a').getAttribute('href'),'tg://user?id=2');
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
       await page.locator('[data-withdrawal-action=paid]').click();
       assert.equal(paid,0);
       const dialog=page.locator('dialog[open]');await dialog.waitFor({state:'visible'});

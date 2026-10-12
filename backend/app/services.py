@@ -172,7 +172,7 @@ def credit_sale_proceeds(wallet: Wallet, payout: Decimal, price: Decimal, bonus_
 
 async def create_notification(session: AsyncSession, user_id: uuid.UUID, kind: str, title: str, body: str, payload: dict | None = None) -> Notification:
     notification = Notification(user_id=user_id, notification_type=kind, title=title, body=body, payload=payload or {})
-    if kind in {"conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden", "deal_completed", "deal_cancelled", "dispute_resolved", "deal_support_case", "withdrawal_created", "withdrawal_paid", "withdrawal_rejected", "withdrawal_approved", "deal_admin_message", "deal_delivery_timeout"}:
+    if kind in {"withdrawal_support_reply", "conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden", "deal_completed", "deal_cancelled", "dispute_resolved", "deal_support_case", "withdrawal_created", "withdrawal_paid", "withdrawal_rejected", "withdrawal_approved", "deal_admin_message", "deal_delivery_timeout"}:
         notification.delivery_status = "pending"
     session.add(notification)
     return notification
@@ -2528,7 +2528,7 @@ async def create_withdrawal(session: AsyncSession, user: User, payload) -> Withd
     return await reserve_gift_withdrawal(session, user, payload.quote_id, payload.details)
 
 
-async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: uuid.UUID, action: str, reason: str | None) -> WithdrawalRequest:
+async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: uuid.UUID, action: str, reason: str | None, payout_reference: str | None = None) -> WithdrawalRequest:
     if admin.role != "admin":
         raise HTTPException(403, "Доступен только администратору")
     targets = {"approve": "approved", "paid": "paid", "reject": "rejected"}
@@ -2558,6 +2558,7 @@ async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: u
                 raise HTTPException(status_code=409, detail="Frozen balance is insufficient")
             wallet.earned_frozen_balance = money(wallet.earned_frozen_balance - request.amount)
             request.paid_at = now
+            request.payout_reference = payout_reference
             description = (f"Подарки стоимостью {request.payout_stars} Stars отправлены вручную; комиссия {request.fee_af} AF Coins"
                            if request.payout_method == "manual_gift" else "Ручная выплата отмечена администратором")
             transaction = wallet_transaction(wallet, "withdrawal_paid", -request.amount, before_available, before_frozen, description, withdrawal_id=request.id)
@@ -2571,12 +2572,12 @@ async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: u
         wallet.version += 1
         if transaction:
             session.add(transaction)
-        session.add(AdminAction(admin_id=admin.id, action=f"withdrawal_{target}", target_type="withdrawal", target_id=request.id, reason=reason))
-        text = {"approved": "Заявка одобрена. Подарки отправит администратор вручную; выдача ещё не завершена.",
-                "paid": "✅ Администратор подтвердил отправку подарков. Заявка завершена.",
-                "rejected": f"Заявка отклонена: {reason}. Зарезервированные AF Coins возвращены."}[target]
-        if request.payout_method != "manual_gift":
-            text = f"Статус заявки: {target}"
+        session.add(AdminAction(admin_id=admin.id, action=f"withdrawal_{target}", target_type="withdrawal", target_id=request.id, reason=reason,
+            metadata_json={"public_number": request.public_number, "to_status": target, "payout_reference": request.payout_reference}))
+        text = {"approved": f"Вывод {request.public_id} в обработке. Вывод в течение 24 часов. Подарки отправит администратор вручную.",
+                "paid": (f"Вывод {request.public_id} выполнен: {request.payout_stars} ⭐. Подарки отправлены."
+                         if request.payout_stars is not None else f"Вывод {request.public_id} выполнен."),
+                "rejected": f"Вывод {request.public_id} отклонён: {reason}. Зарезервированные AF Coins возвращены. Обратитесь в поддержку по номеру заявки."}[target]
         await create_notification(session, request.user_id, f"withdrawal_{target}", "Статус заявки на вывод изменён", text, {"withdrawal_id": str(request.id)})
     return request
 
@@ -2598,6 +2599,7 @@ async def cancel_withdrawal(session: AsyncSession, user: User, withdrawal_id: uu
         wallet.earned_frozen_balance = money(wallet.earned_frozen_balance - request.amount)
         wallet.version += 1
         request.status = "cancelled"
+        request.cancelled_at = datetime.now(UTC)
         session.add(
             wallet_transaction(
                 wallet,

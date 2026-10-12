@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, LargeBinary, Numeric, String, Text, UniqueConstraint, func, text as sql_text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Identity, Index, Integer, LargeBinary, Numeric, String, Text, UniqueConstraint, func, text as sql_text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -739,6 +739,7 @@ class GiftWithdrawalQuote(Base):
 class WithdrawalRequest(Base, TimestampMixin):
     __tablename__ = "withdrawal_requests"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    public_number: Mapped[int] = mapped_column(BigInteger, Identity(always=True), unique=True, nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     gift_quote_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("gift_withdrawal_quotes.id", ondelete="RESTRICT"), unique=True)
@@ -752,7 +753,13 @@ class WithdrawalRequest(Base, TimestampMixin):
     reviewed_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payout_reference: Mapped[str | None] = mapped_column(String(200))
     __table_args__ = (CheckConstraint("status IN ('pending','approved','paid','rejected','cancelled')", name="ck_withdrawal_status"),)
+
+    @property
+    def public_id(self) -> str:
+        return f"#{self.public_number:06d}"
 
 
 class AdminBalanceAdjustment(Base):
@@ -838,6 +845,7 @@ class SupportTicket(Base, TimestampMixin):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     author_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     case_type: Mapped[str] = mapped_column(String(16), nullable=False, default="general", index=True)
+    withdrawal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("withdrawal_requests.id", ondelete="RESTRICT"), unique=True)
     deal_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("deals.id", ondelete="RESTRICT"), index=True)
     listing_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"), index=True)
     buyer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
