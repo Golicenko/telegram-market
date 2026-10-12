@@ -718,3 +718,4 @@ main{padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));p
 .chat-view .deal-controls button.deal-support,.chat-view .deal-controls button.deal-secondary{display:block}
 .chat-view .deal-controls button{min-height:44px;font-size:12px}
 .deal-secondary-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.chat-listing.is-without-image{grid-template-columns:minmax(0,1fr) auto}

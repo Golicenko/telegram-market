@@ -63,8 +63,14 @@ const server = http.createServer((req,res)=>{
       assert.equal(await page.locator('.deal-progress li').count(),3);
       assert(await page.getByRole('button',{name:'Нужна помощь',exact:true}).isVisible());
       for (const button of await page.locator('.deal-controls button:visible').all()) {
-        const box=await button.boundingBox();assert(box.height>=44 && box.x>=0 && box.x+box.width<=width);
+        const box=await button.boundingBox();assert(box.height>=44 && box.x>=0 && box.x+box.width<=width && box.y+box.height<=page.viewportSize().height, JSON.stringify({label:await button.textContent(),box,viewport:page.viewportSize()}));
       }
+      await page.getByRole('button',{name:'Нужна помощь',exact:true}).click();
+      await page.locator('[data-view="support"]').waitFor({state:'visible'});
+      assert.equal(await page.locator('#supportForm [name="deal_id"]').inputValue(),'deal');
+      assert.equal(deal.status,'paid');assert.equal(accepts,0);assert.equal(transfers,0);
+      await page.evaluate(()=>window.testBack());
+      await accept.waitFor({state:'visible'});
       await accept.evaluate(el=>{el.click();el.click();});
       assert(await accept.isDisabled());
       await accept.waitFor({state:"hidden"});assert.equal(accepts,1);

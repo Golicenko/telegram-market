@@ -2305,6 +2305,7 @@ async function hideCurrentConversation() {
     document.getElementById("chatHideButton").hidden = !details.id || isDealThread;
     elements.chatListing.replaceChildren();
     elements.chatListing.hidden = !isDealThread;
+    elements.chatListing.classList.toggle("is-without-image", isDealThread && !details.listing.images?.[0]);
     if (isDealThread && details.listing.images?.[0]) { const image = document.createElement("img"); image.src = absoluteMediaUrl(details.listing.images[0]); image.alt = listingTitle(details.listing); elements.chatListing.append(image); }
     const listingCopy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = listingTitle(details.listing);
     const priceValue = details.deal?.price_af_coins ?? details.accepted_price_af_coins ?? details.listing.price_af_coins;

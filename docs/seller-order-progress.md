@@ -66,6 +66,11 @@ Reuses the existing deal chat, delivery panel, countdown, support action and acc
 seller/buyer confirmation dialogs. Adds a compact three-step indicator and acceptance CTA.
 Buyers see waiting/accepted/transferred/disputed copy, held-funds explanation and the
 actual backend deadline. Acceptance never represents successful delivery.
+Corrects a pre-existing CSS specificity conflict hiding support buttons; both help and
+non-receipt actions are now visible, with at least 44px-high tap targets. Opening the
+support form alone does not mutate the order; submitting uses the existing dispute flow.
+Fixes the chat listing grid when no photo exists: text no longer occupies the narrow
+thumbnail column and pushes the action buttons below the small-screen viewport.
 
 ## Verification
 
@@ -77,7 +82,8 @@ actual backend deadline. Acceptance never represents successful delivery.
 - Existing transfer/receipt PostgreSQL regressions still cover one settlement across
   simultaneous devices; all existing financial tests must remain green.
 - `webapp/tests/deal-lifecycle-browser.cjs`: acceptance/reload, seller and buyer modals,
-  cancel/Back/Escape/backdrop, ID copy, failed request/retry, double taps and success.
+  cancel/Back/Escape/backdrop, ID copy, failed request/retry, double taps and success;
+  visible support actions, opening the correct deal's form and Back without mutation.
 - `webapp/tests/delivery-deadline-browser.cjs`: CP badges, ID-only submission/reload,
   buyer waiting state, deadline/expiry and admin message retry.
 - Browser tests run at 320/360/390/430 CSS px with local API/Telegram SDK fixtures.
