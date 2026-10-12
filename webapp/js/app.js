@@ -2580,8 +2580,10 @@ async function hideCurrentConversation() {
       elements.dealControls.append(warning, timer, confirm, support);
     }
     if (["paid", "seller_contacted"].includes(deal.status)) {
-      const support = document.createElement("button"); support.className = "deal-support"; support.dataset.dealAction = "support"; support.textContent = "Нужна помощь"; elements.dealControls.append(support);
-      const cancel = document.createElement("button"); cancel.className = "deal-secondary"; cancel.dataset.dealAction = "cancel"; cancel.textContent = "Отменить сделку"; elements.dealControls.append(cancel);
+      const secondary = document.createElement("div"); secondary.className = "deal-secondary-actions";
+      const support = document.createElement("button"); support.className = "deal-support"; support.dataset.dealAction = "support"; support.textContent = "Нужна помощь";
+      const cancel = document.createElement("button"); cancel.className = "deal-secondary"; cancel.dataset.dealAction = "cancel"; cancel.textContent = "Отменить сделку";
+      secondary.append(cancel, support); elements.dealControls.append(secondary);
     }
   }
 

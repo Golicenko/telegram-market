@@ -61,6 +61,10 @@ const server = http.createServer((req,res)=>{
       const accept=page.locator('[data-deal-action="seller-contacted"]');await accept.waitFor();
       assert.equal(await page.locator('[data-deal-action="transfer"]').count(),0);
       assert.equal(await page.locator('.deal-progress li').count(),3);
+      assert(await page.getByRole('button',{name:'Нужна помощь',exact:true}).isVisible());
+      for (const button of await page.locator('.deal-controls button:visible').all()) {
+        const box=await button.boundingBox();assert(box.height>=44 && box.x>=0 && box.x+box.width<=width);
+      }
       await accept.evaluate(el=>{el.click();el.click();});
       assert(await accept.isDisabled());
       await accept.waitFor({state:"hidden"});assert.equal(accepts,1);
@@ -117,6 +121,7 @@ const server = http.createServer((req,res)=>{
       deal.transfer_started_at=new Date(Date.now()-61000).toISOString();
       await page.reload();
       const receipt=page.locator('[data-deal-action="confirm"]');await receipt.waitFor({state:"visible"});
+      assert(await page.getByRole('button',{name:'Автомобиль не получен',exact:true}).isVisible());
       await receipt.click();await modal.waitFor();
       await modal.getByRole("heading",{name:"Автомобиль получен?"}).waitFor();
       assert.equal(receipts,0);
