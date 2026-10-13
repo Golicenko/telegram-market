@@ -122,15 +122,26 @@ class FakeTransaction:
 
 
 class FakeSession:
-    def __init__(self, scalars=()):
+    def __init__(self, scalars=(), quota_user=None):
         self.scalars = list(scalars)
         self.added = []
+        self.quota_user = quota_user
+        if quota_user is not None and quota_user.publication_count is None:
+            quota_user.publication_count = 0
 
     def begin(self):
         return FakeTransaction()
 
     async def scalar(self, _query):
+        from app.models import PublicationDraft
+        if self.quota_user is not None and _query.column_descriptions[0].get("entity") is PublicationDraft:
+            return None
+        if self.quota_user is not None and _query.column_descriptions[0].get("entity") is User:
+            return self.quota_user
         return self.scalars.pop(0) if self.scalars else None
+
+    async def get(self, _model, _key):
+        return None
 
     def add(self, value):
         self.added.append(value)
@@ -160,7 +171,7 @@ async def test_creating_multiple_regular_listings_is_free():
         price_af_coins=100,
         image_urls=["/api/media/one", "/api/media/two"],
     )
-    session = FakeSession()
+    session = FakeSession(quota_user=seller)
     first = await create_listing(session, seller, payload, listing_type="regular")
     second = await create_listing(session, seller, payload, listing_type="regular")
     assert first.status == second.status == "active"
@@ -182,9 +193,9 @@ async def test_listing_creation_retry_returns_the_original_listing():
         price_af_coins=1,
         image_urls=["/api/media/one"],
     )
-    first_session = FakeSession([None])
+    first_session = FakeSession([None], quota_user=seller)
     first = await create_listing(first_session, seller, payload, listing_type="regular")
-    retry_session = FakeSession([first])
+    retry_session = FakeSession([first], quota_user=seller)
     retry = await create_listing(retry_session, seller, payload, listing_type="regular")
     assert retry is first
     assert retry.client_request_id == request_id
@@ -232,7 +243,7 @@ async def test_regular_listing_creation_and_five_af_pin_are_atomic_and_idempoten
         description="Описание", price_af_coins=10, image_urls=["/api/media/car"],
         promote_for_24h=True,
     )
-    first_session = FakeSession([None, wallet])
+    first_session = FakeSession([None, wallet], quota_user=seller)
     listing = await create_listing(first_session, seller, payload, listing_type="regular", pinned=True)
 
     assert listing.status == "active"
@@ -246,7 +257,7 @@ async def test_regular_listing_creation_and_five_af_pin_are_atomic_and_idempoten
     assert charges[0].amount == Decimal("-5.00")
     assert charges[0].external_reference == f"listing-promotion:{listing.id}:initial"
 
-    retry_session = FakeSession([listing])
+    retry_session = FakeSession([listing], quota_user=seller)
     assert await create_listing(retry_session, seller, payload, listing_type="regular", pinned=True) is listing
     assert wallet.available_balance == Decimal("0.00")
     assert not [item for item in retry_session.added if isinstance(item, WalletTransaction)]
@@ -265,7 +276,7 @@ async def test_regular_listing_pin_shortfall_does_not_publish_or_debit():
         description="Описание", price_af_coins=10, image_urls=["/api/media/car"],
         promote_for_24h=True,
     )
-    session = FakeSession([None, wallet])
+    session = FakeSession([None, wallet], quota_user=seller)
 
     with pytest.raises(HTTPException) as captured:
         await create_listing(session, seller, payload, listing_type="regular", pinned=True)

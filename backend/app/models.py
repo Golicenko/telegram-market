@@ -62,6 +62,7 @@ class User(Base, TimestampMixin):
     referral_candidate_at_registration: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     referral_registration_processed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     is_blocked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    publication_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     __table_args__ = (CheckConstraint("role IN ('user','admin')", name="ck_users_role"),)
 
 
@@ -584,6 +585,7 @@ class ConversationMessage(Base):
             name="ck_conversation_message_type",
         ),
         UniqueConstraint("conversation_id", "sender_id", "client_message_id", name="uq_conversation_message_client_id"),
+        Index("ix_messages_chat_cursor", "conversation_id", "created_at", "id"),
     )
 
 class PriceOffer(Base, TimestampMixin):
@@ -694,6 +696,38 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     __table_args__ = (Index("ix_notification_withdrawal_delivery", payload["withdrawal_id"].astext,
         created_at.desc(), id.desc(), postgresql_where=sql_text("notification_type = 'withdrawal_support_reply'")),)
+
+
+class PublicationRules(Base):
+    __tablename__ = "publication_rules"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    free_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    price_stars: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    __table_args__ = (CheckConstraint("id = 1 AND free_limit >= 0 AND price_stars BETWEEN 1 AND 10000", name="ck_publication_rules"),)
+
+
+class PublicationDraft(Base, TimestampMixin):
+    __tablename__ = "publication_drafts"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    price_stars: Mapped[int] = mapped_column(Integer, nullable=False)
+    invoice_url: Mapped[str | None] = mapped_column(Text)
+    checkout_query_id: Mapped[str | None] = mapped_column(String(255))
+    checkout_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("star_payments.id", ondelete="RESTRICT"), unique=True)
+    listing_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"), unique=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="draft", index=True)
+    last_error: Mapped[str | None] = mapped_column(String(300))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("user_id", "request_id", name="uq_publication_request"),
+        CheckConstraint("price_stars > 0", name="ck_publication_price"),
+        CheckConstraint("status IN ('draft','paid','published','review','refund_pending','refunded')", name="ck_publication_status"),
+    )
 
 
 class StarPayment(Base):

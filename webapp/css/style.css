@@ -739,3 +739,22 @@ main{padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));p
 .analytics-table-scroll th,.analytics-table-scroll td { padding: 9px; border-bottom: 1px solid var(--line); text-align: left; min-width: 90px; word-break: normal; overflow-wrap: normal; }
 .analytics-table-scroll th { color: #ffbb55; }
 #adminAnalytics { min-width: 0; overflow-wrap: anywhere; }
+
+/* Publication checkout reuses the existing navy/orange shell. */
+.publication-modal{width:min(92vw,380px);max-height:85dvh;overflow:auto;padding:22px;border:1px solid #916020;border-radius:18px;color:#edf3fa;background:#0b1522;animation:publication-in .2s ease-out}
+.publication-modal::backdrop{background:#02060ab3;backdrop-filter:blur(5px)}
+.publication-modal h2{margin:0 0 14px;font-size:21px}.publication-modal strong{font-size:28px;color:#ffb531}.publication-modal p{font-size:15px;line-height:1.5}.publication-modal small{display:block;color:#a9b9ca;line-height:1.5}
+.publication-actions{display:flex;gap:10px;margin-top:20px}.publication-actions button{flex:1;min-height:46px}
+#publicationDrafts:empty{display:none}#publicationDrafts{display:grid;gap:8px;margin-bottom:12px}#publicationDrafts button{white-space:normal;min-height:44px}
+#publicationAdmin{padding:12px 0;margin-bottom:16px;border-bottom:1px solid var(--line)}#publicationAdmin form{display:grid;gap:10px}#publicationAdmin input:not([type=checkbox]){width:100%;min-height:44px;font-size:16px}#publicationAdmin button{min-height:44px;margin:4px}
+/* Focus does not trigger iOS small-input zoom; user zoom remains available. */
+#chatInput{font-size:16px!important;line-height:1.4;min-height:44px;max-height:112px;overflow-y:auto;caret-color:#ffb531;color:#f4f7fb;resize:none}
+.chat-form{flex-shrink:0;align-items:flex-end}.chat-form button{min-width:44px;min-height:44px;flex-shrink:0}
+.messages{overscroll-behavior:contain;overflow-anchor:none;touch-action:pan-y}.message{white-space:pre-wrap;overflow-wrap:anywhere;max-width:86%;user-select:text;-webkit-user-select:text}.message-meta{user-select:none}.message-meta button{min-height:44px;color:#ffbe54;background:transparent;border:0}
+#chatConnection{display:block;padding:4px 0;color:#e0bc76;font-size:12px}#chatConnection[hidden],#chatJumpLatest[hidden]{display:none}
+#chatJumpLatest,.chat-history-button{min-height:44px;border:1px solid #31506e;border-radius:16px;color:#ddecff;background:#14283d;padding:8px 14px;align-self:center}
+#chatCopyMenu{position:fixed;z-index:10000;min-width:130px;min-height:44px;border:1px solid #4a607b;border-radius:12px;background:#142337;color:#fff;box-shadow:0 6px 22px #0008;animation:publication-in .16s ease-out}
+body.chat-keyboard-open .chat-listing,body.chat-keyboard-open .offer-panel,body.chat-keyboard-open .deal-delivery,body.chat-keyboard-open .deal-controls{display:none!important}
+body.chat-keyboard-open .chat-compose{padding-bottom:0}
+@keyframes publication-in{from{opacity:0;transform:translateY(5px) scale(.98)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.publication-modal,#chatCopyMenu{animation:none}.messages{scroll-behavior:auto}}

@@ -155,7 +155,7 @@ def test_frontend_exposes_deal_chat_and_removes_model_filter():
     assert "--chat-viewport-height" in styles
     assert "visualViewport" in script
     assert "deal_id: dealId" in script
-    assert "openDealConversation(message.deal_id)" in script
+    assert "mergeChatMessages(state.messages, [message])" in script  # Send merges in place, preserving scroll/input.
     assert ".promotion-choice-modal .publish-button,.promotion-choice-modal .ghost-button" in styles
 
 

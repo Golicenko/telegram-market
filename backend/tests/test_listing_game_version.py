@@ -99,8 +99,9 @@ async def test_http_create_edit_get_and_database_reopen(tmp_path):
             assert bridge.session.scalar(sa.select(sa.func.count()).select_from(Listing)) == 0
             bridge.session.rollback()
             created = []
+            assert (await client.post("/api/listings", json=payload())).status_code == 422
             for game in ("car_parking_1", "car_parking_2"):
-                response = await client.post("/api/listings", json={**payload(), "game_version": game})
+                response = await client.post("/api/listings", json={**payload(), "game_version": game, "client_request_id": str(uuid.uuid4())})
                 assert response.status_code == 201, response.text
                 assert response.json()["game_version"] == game
                 assert response.json()["images"] == payload()["image_urls"]
