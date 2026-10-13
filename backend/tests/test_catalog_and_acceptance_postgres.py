@@ -74,10 +74,18 @@ async def test_two_signed_accounts_baseline_snapshot_hide_republish_and_restart(
             published = await publish(sessions, admin, section, new)
             revision = published.content_revision
             assert await unread(a) == await unread(b) == 1
+            if section == "unique":
+                async with sessions() as session, session.begin():
+                    expired_pin = await session.get(Listing, old.id)
+                    expired_pin.pinned = True
+                    expired_pin.pinned_until = datetime.now(UTC) - timedelta(seconds=1)
             snapshot = await client.get(f"/api/content/{section}/snapshot", headers=headers(a))
             assert snapshot.status_code == 200, snapshot.text
             snapshot = snapshot.json()
             assert {row["id"] for row in snapshot["items"]} == {str(old.id), str(new.id)}
+            if section == "unique":
+                assert all(not row["pinned"] for row in snapshot["items"])
+                assert snapshot["items"][0]["id"] == str(new.id)
             # Publication during loading must survive acknowledgement of the old snapshot.
             later = await draft(sessions, admin, section)
             await publish(sessions, admin, section, later)

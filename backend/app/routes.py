@@ -1742,6 +1742,8 @@ async def content_snapshot(section: str, user: User = Depends(get_current_user),
         raise HTTPException(404, "Раздел не найден")
     await initialize_content_seen(session, user.id)
     model, visible = catalogue(section)
+    if section == "unique":
+        await expire_promotions(session)
     if section == "training" and user.role == "admin":
         visible = (TrainingProduct.deleted_at.is_(None), or_(TrainingProduct.published.is_(True), TrainingProduct.admin_id == user.id))
     # The marker is derived from exactly the rows returned by this SELECT,
