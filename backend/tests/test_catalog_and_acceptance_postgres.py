@@ -94,12 +94,19 @@ async def test_two_signed_accounts_baseline_snapshot_hide_republish_and_restart(
                 async with sessions() as session:
                     edited = await update_training_product(session, admin, new.id, TrainingProductUpdate(title="Edited", price_af_coins=20))
                     assert edited.content_revision == revision
+            assert await unread(b) == 1
+            captured = (await client.get(f"/api/content/{section}/snapshot", headers=headers(b))).json()
+            await publish(sessions, admin, section, new, False)
+            result = await client.post(f"/api/content/{section}/mark-seen", headers=headers(b), json={"marker": captured["marker"]})
+            assert result.status_code == 200
+            await publish(sessions, admin, section, new)
+            assert await unread(b) == 0  # Hidden between SELECT and acknowledgement, then restored.
             # A new HTTP client/device and DB session retain A's seen state.
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client_app(sessions)), base_url="http://test") as client:
             result = await client.get("/api/content/unseen", headers=headers(a))
             assert result.json()[section]["unseen_count"] == 0
             result = await client.get("/api/content/unseen", headers=headers(b))
-            assert result.json()[section]["unseen_count"] == 1
+            assert result.json()[section]["unseen_count"] == 0
             assert (await client.get("/api/content/unseen")).status_code == 401
 
 

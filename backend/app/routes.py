@@ -1758,8 +1758,13 @@ async def content_snapshot(section: str, user: User = Depends(get_current_user),
 async def mark_content_seen(section: str, payload: ContentMarkSeenCreate, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     if section not in {"training", "unique"}:
         raise HTTPException(status_code=404, detail="Раздел не найден")
-    current = await content_unseen_section(session, user.id, section)
-    marker = min(int(payload.marker), int(current["marker"]))
+    # Hidden/deleted content may have been present in the loaded snapshot.
+    # Capping at the currently VISIBLE max would lose that acknowledgement and
+    # show it as unread again after restore. Never acknowledge future revisions.
+    model = TrainingProduct if section == "training" else Listing
+    conditions = () if section == "training" else (Listing.listing_type == "unique",)
+    published_max = int(await session.scalar(select(func.coalesce(func.max(model.content_revision), 0)).where(*conditions)) or 0)
+    marker = min(int(payload.marker), published_max)
     await session.execute(
         pg_insert(ContentSeenState)
         .values(user_id=user.id, section=section, last_seen_revision=marker)

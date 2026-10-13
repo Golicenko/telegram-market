@@ -18,6 +18,8 @@ At the unchanged 24h delivery deadline, an accepted-but-undelivered order become
 
 ## Verification / limitations
 
+Changed implementation files: `backend/app/content_catalog.py`, `routes.py`, `services.py`, `deal_lifecycle.py`, `seller_orders.py`; migration `0048_catalog_baseline.py`; `webapp/js/app.js` and generated `webapp/index.html`. Tests: `test_catalog_and_acceptance_postgres.py`, `test_content_notifications.py`, `test_seller_orders_postgres.py`, SQLite/unit fixtures `test_listing_game_version.py` and `test_training_products.py`; browser/JS tests `content-badges.test.cjs`, `deal-lifecycle-browser.cjs`, `navigation-five-items-browser.cjs`. No other product modules are replaced.
+
 New PostgreSQL tests use two distinct validated HMAC test accounts and real API/service/database calls. They cover per-account baseline, draft/publication, captured snapshot versus concurrent publication, hide/republish, restart/new client, direct cancel API, concurrent accept/cancel, accepted timeout review, legacy acceptance and support escrow preservation. Existing full transfer/receipt, duplicate payment, refund and settlement suites remain required. Frontend tests execute snapshot loading, errors, abandoned/hidden screens and superseded responses.
 
 No production accounts, payments, refunds, deployment or migration are executed. Mobile browser regression uses explicit test fixtures, not native Telegram/iPhone/Android E2E. Actual game delivery cannot be verified by automated tests. Existing support requires evidence; admins must monitor their review queue when notifications cannot be delivered.
