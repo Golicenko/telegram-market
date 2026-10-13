@@ -1660,7 +1660,7 @@ function handleClick(event) {
       let listing;
       if (flow.submission) {
         if (elements.purchaseModal?.open) elements.purchaseModal.close();
-        listing = flow.submission.path === "/listings" ? await publishWithQuota(flow.submission.payload) : await api.request(flow.submission.path, {
+        listing = flow.submission.path === "/listings" ? await publishWithQuota(flow.submission.payload, flow.submission) : await api.request(flow.submission.path, {
           method: flow.submission.method,
           body: JSON.stringify(flow.submission.payload),
         });
@@ -1733,13 +1733,14 @@ function handleClick(event) {
     } catch (error) { document.getElementById("publicationNote").textContent = "Не удалось загрузить условия. Сервер проверит их перед публикацией."; }
   }
 
-  async function publishWithQuota(payload) {
+  async function publishWithQuota(payload, submission = null) {
     try { return await api.request("/listings", { method: "POST", body: JSON.stringify(payload) }); }
     catch (error) {
       if (Number(error.status) !== 402 || error.detail?.code !== "publication_payment_required") throw error;
       const draft = await api.request("/publication-drafts", { method: "POST", body: JSON.stringify(payload) });
       const listing = await payPublication(draft);
       if (!listing) throw new Error("Черновик сохранён. Продолжить можно в форме публикации без повторного заполнения.");
+      if (submission) submission.publishedPaidListingId = listing.id;
       return listing;
     }
   }
@@ -1883,7 +1884,7 @@ function handleClick(event) {
       };
       button.textContent = state.editingListingId ? "Сохраняем…" : "Публикуем…";
       const savedListing = path === "/listings" && listingSubmission.method === "POST"
-        ? await publishWithQuota(payload)
+        ? await publishWithQuota(payload, listingSubmission)
         : await api.request(path, { method: listingSubmission.method, body: JSON.stringify(payload) });
       let promotionError = null;
       if (shouldPromote && !savedListing.pinned && (state.editingListingId || state.listingMode === "unique")) {
@@ -1918,6 +1919,7 @@ function handleClick(event) {
     await navigate(submission.targetView);
     if (promotionError) notify(`Объявление сохранено, но не закреплено: ${promotionError.message}`);
     else notify(submission.wasEditing ? "Объявление обновлено бесплатно" : "Объявление опубликовано");
+    if (submission.publishedPaidListingId) await openListingDetails(submission.publishedPaidListingId);
   }
 
   function openListingPromotionTopup(submission, error, listingId = null) {

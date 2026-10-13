@@ -43,3 +43,13 @@ test('closing invoice leaves draft unpublished and never emits success',async()=
   vm.createContext(c);vm.runInContext(fn('async function payPublication','async function loadPublicationAdmin'),c);
   assert.equal(await c.payPublication({id:'draft',status:'draft'}),null);assert.equal(c.state.publicationPayBusy,false);
 });
+
+test('paid submission retains server listing identity for opening its detail after form reset',async()=>{
+  const c={api:{async request(path){if(path==='/listings')throw {status:402,detail:{code:'publication_payment_required'}};return{id:'draft'};}},payPublication:async()=>({id:'published'})};
+  vm.createContext(c);vm.runInContext(fn('async function publishWithQuota','function confirmPublication'),c);
+  const submission={};await c.publishWithQuota({client_request_id:'request'},submission);
+  assert.equal(submission.publishedPaidListingId,'published');
+  const opened=[];Object.assign(c,{elements:{carForm:{reset(){}},photoPreview:{replaceChildren(){}}},state:{},refreshMarketplace:async()=>{},navigate:async()=>{},notify(){},openListingDetails:async id=>opened.push(id)});
+  vm.runInContext(fn('async function finishListingSubmission','function openListingPromotionTopup'),c);
+  await c.finishListingSubmission(submission);assert.deepEqual(opened,['published']);
+});
