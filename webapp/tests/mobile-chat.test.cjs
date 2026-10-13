@@ -26,7 +26,8 @@ test("mobile conversation is edge anchored without the half-screen transform", (
 test("composer preserves text on errors and prevents double submit", () => {
   assert.match(app, /client_message_id: clientMessageId/);
   assert.match(app, /button\.disabled = true/);
-  assert.match(app, /input\.value = body/);
+  assert.match(app, /pending\.local_status = "failed"/);
+  assert.match(app, /state\.chatOutbox\.set\(clientMessageId, pending\)/);
   assert.match(html, /<textarea id="chatInput"/);
 });
 

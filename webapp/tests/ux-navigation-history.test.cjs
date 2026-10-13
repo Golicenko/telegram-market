@@ -37,7 +37,7 @@ test("wallet history hides ledger internals and presents understandable events",
 });
 
 test("deal chat requests are scoped by exact deal id", () => {
-  assert.match(script, /messages\$\{dealId \? `\?deal_id=/);
+  assert.match(script, /messageQuery\.set\("deal_id", dealId\)/);
   assert.match(script, /openConversation\(conversation\.id, conversation, null, dealId\)/);
   assert.match(script, /await markConversationRead\(id, requestedDealId\)/);
 });

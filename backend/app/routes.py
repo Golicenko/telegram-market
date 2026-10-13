@@ -2457,6 +2457,9 @@ async def get_conversation(
 async def get_conversation_messages(
     conversation_id: uuid.UUID,
     deal_id: uuid.UUID | None = Query(default=None),
+    before: uuid.UUID | None = Query(default=None),
+    after: uuid.UUID | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=100),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -2477,7 +2480,18 @@ async def get_conversation_messages(
         query = query.where(ConversationMessage.deal_id.is_(None), ConversationMessage.message_type == "text")
     else:
         query = query.where(ConversationMessage.deal_id.is_(None))
-    return list((await session.scalars(query.order_by(ConversationMessage.created_at))).all())
+    if before and after:
+        raise HTTPException(422, "Укажите только один курсор")
+    if before or after:
+        cursor = await session.scalar(query.where(ConversationMessage.id == (before or after)))
+        if not cursor:
+            raise HTTPException(404, "Message not found")
+        from sqlalchemy import tuple_
+        position = tuple_(ConversationMessage.created_at, ConversationMessage.id)
+        query = query.where(position < (cursor.created_at, cursor.id) if before else position > (cursor.created_at, cursor.id))
+    order = (ConversationMessage.created_at, ConversationMessage.id) if after else (ConversationMessage.created_at.desc(), ConversationMessage.id.desc())
+    rows = list((await session.scalars(query.order_by(*order).limit(limit))).all())
+    return rows if after else rows[::-1]
 
 @router.post("/conversations/{conversation_id}/read", status_code=204)
 async def mark_conversation_as_read(
@@ -2509,7 +2523,8 @@ async def mark_conversation_as_read(
         through = await session.get(ConversationMessage, through_message_id)
         if not through or through.conversation_id != conversation.id:
             raise HTTPException(status_code=404, detail="Message not found")
-        read_filters.append(ConversationMessage.created_at <= through.created_at)
+        from sqlalchemy import tuple_
+        read_filters.append(tuple_(ConversationMessage.created_at, ConversationMessage.id) <= (through.created_at, through.id))
     if deal_id:
         deal = await ensure_deal_participant(session, deal_id, user)
         if deal.conversation_id != conversation.id:
@@ -3723,6 +3738,15 @@ async def telegram_webhook(
     pre_checkout = update.get("pre_checkout_query") or {}
     if pre_checkout.get("id"):
         sender = pre_checkout.get("from") or {}
+        from .publications import PREFIX, validate_checkout
+        if str(pre_checkout.get("invoice_payload") or "").startswith(PREFIX):
+            if not expected_secret:
+                raise HTTPException(503, "Платёжный webhook не настроен")
+            accepted, error_message = await validate_checkout(session, int(sender.get("id") or 0),
+                str(pre_checkout.get("invoice_payload")), str(pre_checkout.get("currency")),
+                int(pre_checkout.get("total_amount") or 0), str(pre_checkout["id"]))
+            await answer_pre_checkout_query(pre_checkout["id"], accepted, error_message)
+            return {"ok": True}
         accepted, error_message = await validate_star_pre_checkout(
             session,
             int(sender.get("id") or 0),
@@ -3882,6 +3906,13 @@ async def telegram_webhook(
         background_tasks.add_task(send_bot_menu, int(sender["id"]), start_payload=start_payload)
     payment = message.get("successful_payment")
     if payment and sender.get("id"):
+        from .publications import PREFIX, receive_payment, fulfill
+        if str(payment.get("invoice_payload") or "").startswith(PREFIX):
+            if not expected_secret:
+                raise HTTPException(503, "Платёжный webhook не настроен")
+            draft_id = await receive_payment(session, int(sender["id"]), payment)
+            await fulfill(session, draft_id)
+            return {"ok": True}
         credited = await process_successful_payment(session, int(sender["id"]), payment)
         payment_intent = await session.scalar(
             select(StarPaymentIntent).where(

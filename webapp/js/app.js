@@ -833,6 +833,8 @@ function handleClick(event) {
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
     if (state.currentView === "deal-chat" && viewName !== "deal-chat") {
+      saveChatDraft();
+      state.chatOpening = (state.chatOpening || 0) + 1;
       releaseChatPresence();
       window.clearInterval(state.dealTimerId);
       state.dealTimerId = null;
@@ -868,6 +870,8 @@ function handleClick(event) {
     });
     elements.shell.classList.toggle("is-focused", ["add", "wallet", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin", "training-purchase", "help", "activity"].includes(viewName));
     if (viewName === "profile") switchProfileTab("listings");
+    if (viewName === "add") void loadPublicationOptions();
+    if (viewName === "admin") void loadPublicationAdmin();
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (state.serverAvailable && ["market", "unique", "training", "profile", "activity", "wallet"].includes(viewName)) {
       try {
@@ -985,17 +989,29 @@ function handleClick(event) {
   if (!conversationId) return;
 
   const dealId = state.currentConversation?.deal?.id;
-  const messagePath = `/conversations/${conversationId}/messages${dealId ? `?deal_id=${encodeURIComponent(dealId)}` : ""}`;
+  const messageQuery = new URLSearchParams();
+  if (dealId) messageQuery.set("deal_id", dealId);
+  const last = state.messages.filter(item => !item.local_status).at(-1);
+  if (last) messageQuery.set("after", last.id);
+  const messagePath = `/conversations/${conversationId}/messages?${messageQuery}`;
   const [messagesResult, dealResult] = await Promise.allSettled([
     api.request(messagePath),
     api.request(`/conversations/${conversationId}`),
   ]);
   if (state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId) return;
   if (messagesResult.status === "rejected") {
+    setChatConnection("Нет соединения. Переписка восстановится автоматически.");
     if (Number(messagesResult.reason?.status) === 409) return closeDealChat();
     throw messagesResult.reason;
   }
-  const messages = messagesResult.status === "fulfilled" ? safeArray(messagesResult.value) : safeArray(state.messages);
+  setChatConnection("");
+  let incoming = safeArray(messagesResult.value);
+  if (!incoming.length && last) {
+    messageQuery.delete("after");
+    incoming = safeArray(await api.request(`/conversations/${conversationId}/messages?${messageQuery}`));
+    if (state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId) return;
+  }
+  const messages = mergeChatMessages(state.messages, incoming);
   const dealDetails = dealResult.status === "fulfilled" ? dealResult.value : null;
   if (dealResult.status === "rejected" && Number(dealResult.reason?.status) === 409) return closeDealChat();
   const offersChanged = dealDetails && JSON.stringify(dealDetails.offers) !== JSON.stringify(state.currentConversation.offers);
@@ -1014,7 +1030,7 @@ function handleClick(event) {
   if (refreshedDeal) state.currentConversation.deal = refreshedDeal;
   if (dealDetails) state.currentConversation = dealDetails;
 
-  if (oldLastMessageId !== newLastMessageId || dealChanged || offersChanged) {
+  if (oldLastMessageId !== newLastMessageId || dealChanged || offersChanged || JSON.stringify(messages) !== JSON.stringify(state.messages)) {
     state.messages = messages;
     renderConversation();
   }
@@ -1025,7 +1041,8 @@ function handleClick(event) {
   async function markConversationRead(conversationId, dealId = null) {
   if (document.hidden || state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId) return;
   await api.request(`/conversations/${conversationId}/presence`, { method: "POST" });
-  const through = state.messages[state.messages.length - 1]?.id;
+  if (!chatAtBottom()) return;
+  const through = state.messages.filter(item => !item.local_status).at(-1)?.id;
   if (!through) return;
   const query = new URLSearchParams({ through_message_id: through });
   if (dealId) query.set("deal_id", dealId);
@@ -1097,7 +1114,7 @@ function handleClick(event) {
     elements.photoPreview.replaceChildren();
     document.getElementById("listingType").value = mode;
     document.getElementById("addTitle").textContent = mode === "unique" ? "Добавить уникальную машину" : "Добавить автомобиль";
-    document.getElementById("publicationNote").textContent = mode === "unique" ? "Уникальная машина публикуется администратором бесплатно." : "Публикация, редактирование и удаление объявлений всегда бесплатны.";
+    document.getElementById("publicationNote").textContent = mode === "unique" ? "Уникальная машина публикуется администратором бесплатно." : "Загружаем условия публикации…";
     configurePromotionOption(mode === "unique");
     elements.carForm.elements.promote_for_24h.checked = true;
     openSecondary("add");
@@ -1687,6 +1704,110 @@ function handleClick(event) {
     window.setTimeout(() => { elements.successOverlay.hidden = true; }, 2200);
   }
 
+  async function loadPublicationOptions() {
+    if (state.listingMode === "unique" || state.editingListingId) {
+      document.getElementById("publicationNote").textContent = "Редактирование и административная публикация — бесплатно.";
+      document.getElementById("publicationDrafts")?.remove(); return;
+    }
+    try {
+      const rules = await api.request("/publication-rules");
+      if (state.listingMode === "unique" || state.editingListingId) return;
+      state.publicationRules = rules;
+      document.getElementById("publicationNote").textContent = rules.payment_required ? `Публикация: ${rules.price_stars} ⭐. Закрепление оплачивается отдельно в AF.` : `Бесплатная публикация${rules.enabled ? ` · Осталось бесплатно: ${rules.remaining}` : ""}`;
+      const drafts = await api.request("/publication-drafts");
+      let box = document.getElementById("publicationDrafts");
+      if (!box) { box = document.createElement("div"); box.id = "publicationDrafts"; elements.carForm.prepend(box); }
+      box.replaceChildren();
+      for (const draft of drafts) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "ghost-button";
+        button.textContent = `${draft.payload.brand} — ${{draft: "Продолжить оплату", paid: "Оплата получена · проверить публикацию", review: "На проверке администратора", refund_pending: "Возврат обрабатывается", refunded: "Stars возвращены"}[draft.status] || draft.status}`;
+        button.disabled = ["review", "refund_pending", "refunded"].includes(draft.status);
+        button.onclick = async () => { button.disabled = true; try { const listing = await payPublication(draft); if (listing) { state.pendingListingRequestId = null; await openListingDetails(listing.id); } } catch (error) { notify(error.message); } finally { button.disabled = false; } };
+        box.append(button);
+      }
+    } catch (error) { document.getElementById("publicationNote").textContent = "Не удалось загрузить условия. Сервер проверит их перед публикацией."; }
+  }
+
+  async function publishWithQuota(payload) {
+    try { return await api.request("/listings", { method: "POST", body: JSON.stringify(payload) }); }
+    catch (error) {
+      if (Number(error.status) !== 402 || error.detail?.code !== "publication_payment_required") throw error;
+      const draft = await api.request("/publication-drafts", { method: "POST", body: JSON.stringify(payload) });
+      const listing = await payPublication(draft);
+      if (!listing) throw new Error("Черновик сохранён. Продолжить можно в форме публикации без повторного заполнения.");
+      return listing;
+    }
+  }
+
+  function confirmPublication(draft) {
+    return new Promise(resolve => {
+      const modal = document.createElement("dialog"); modal.className = "publication-modal";
+      const title = document.createElement("h2"); title.textContent = "Размещение объявления";
+      const price = document.createElement("strong"); price.textContent = `${draft.price_stars} ⭐`;
+      const text = document.createElement("p"); text.textContent = "После подтверждённой оплаты объявление будет опубликовано в AutoFlow Market.";
+      const extra = document.createElement("small"); extra.textContent = draft.payload.promote_for_24h ? "Вы также выбрали закрепление: оно оплачивается отдельно с баланса AF по действующим правилам." : "Это не пополнение AF. Реферальная комиссия не начисляется.";
+      const controls = document.createElement("div"); controls.className = "publication-actions";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "ghost-button"; cancel.textContent = "Отмена";
+      const pay = document.createElement("button"); pay.type = "button"; pay.className = "publish-button"; pay.textContent = `Оплатить ${draft.price_stars} ⭐`;
+      let done = false;
+      const finish = choice => { if (done) return; done = true; modal.close(); modal.remove(); resolve(choice); };
+      cancel.onclick = () => finish(false); pay.onclick = () => finish(true); modal.addEventListener("cancel", event => { event.preventDefault(); finish(false); });
+      controls.append(cancel, pay); modal.append(title, price, text, extra, controls); document.body.append(modal); openDialog(modal); cancel.focus();
+    });
+  }
+
+  async function payPublication(draft) {
+    if (state.publicationPayBusy) return null;
+    state.publicationPayBusy = true;
+    try {
+      if (draft.status === "draft") {
+        if (!await confirmPublication(draft)) return null;
+        if (!telegram?.openInvoice) throw new Error("Откройте Mini App в Telegram для оплаты Stars.");
+        draft = await api.request(`/publication-drafts/${draft.id}/invoice`, { method: "POST" });
+        if (draft.status === "draft") {
+          const status = await new Promise((resolve, reject) => { try { telegram.openInvoice(draft.invoice_url, resolve); } catch (error) { reject(error); } });
+          if (["cancelled", "failed"].includes(status)) { notify(status === "cancelled" ? "Оплата отменена. Черновик сохранён." : "Telegram не завершил оплату. Черновик сохранён."); return null; }
+        }
+      }
+      for (let attempt = 0; attempt < 15; attempt += 1) {
+        draft = await api.request(`/publication-drafts/${draft.id}${attempt === 0 ? "/retry" : ""}`, attempt === 0 ? { method: "POST" } : {});
+        if (draft.status === "published" && draft.listing_id) { showPurchaseSuccess("Объявление опубликовано", "Публикация подтверждена сервером"); return await api.request(`/listings/${draft.listing_id}`); }
+        if (["review", "refunded", "refund_pending"].includes(draft.status)) break;
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      notify(draft.last_error || "Ожидаем подтверждение сервера. Черновик сохранён, повторно платить не нужно."); return null;
+    } finally { state.publicationPayBusy = false; void loadPublicationOptions(); }
+  }
+
+  async function loadPublicationAdmin() {
+    if (state.me?.user?.role !== "admin") return;
+    let panel = document.getElementById("publicationAdmin");
+    if (!panel) { panel = document.createElement("section"); panel.id = "publicationAdmin"; document.querySelector('[data-admin-panel="listings"]').prepend(panel); }
+    panel.textContent = "Загрузка условий публикации…";
+    try {
+      const [rules, drafts] = await Promise.all([api.request("/publication-rules"), api.request("/admin/publication-drafts")]);
+      panel.replaceChildren(); const title = document.createElement("h2"); title.textContent = "Публикации за Stars"; panel.append(title);
+      const form = document.createElement("form");
+      for (const [key, labelText] of [["free_limit", "Бесплатных публикаций за всё время"], ["price_stars", "Стоимость последующих, Stars"]]) {
+        const label = document.createElement("label"); label.textContent = labelText; const input = document.createElement("input"); input.type = "number"; input.name = key; input.min = key === "price_stars" ? "1" : "0"; input.max = "10000"; input.required = true; input.value = rules[key]; label.append(input); form.append(label);
+      }
+      const label = document.createElement("label"); const toggle = document.createElement("input"); toggle.type = "checkbox"; toggle.name = "enabled"; toggle.checked = rules.enabled; label.append(toggle, document.createTextNode("Платные публикации включены")); form.append(label);
+      const reason = document.createElement("input"); reason.name = "reason"; reason.required = true; reason.minLength = 3; reason.placeholder = "Причина изменения"; form.append(reason);
+      const save = document.createElement("button"); save.type = "submit"; save.className = "publish-button"; save.textContent = "Сохранить условия"; form.append(save);
+      form.onsubmit = async event => { event.preventDefault(); if (save.disabled) return; save.disabled = true; try { await api.request("/admin/publication-rules", { method: "PUT", body: JSON.stringify({ free_limit: Number(form.elements.free_limit.value), price_stars: Number(form.elements.price_stars.value), enabled: toggle.checked, reason: reason.value }) }); notify("Условия сохранены. Уже созданные счета сохраняют прежнюю цену."); } catch (error) { notify(error.message); } finally { save.disabled = false; } };
+      panel.append(form);
+      for (const draft of drafts) {
+        const row = document.createElement("div"); const text = document.createElement("p"); text.textContent = `${draft.payload.brand} · ${draft.price_stars} ⭐ · ${draft.status} · ${draft.last_error || ""}`; row.append(text);
+        for (const [action, caption] of [["retry", "Повторить публикацию"], ["refund", "Вернуть Stars"]]) {
+          const button = document.createElement("button"); button.type = "button"; button.textContent = caption;
+          button.onclick = async () => { const reason = window.prompt(`${caption}: укажите причину`); if (!reason || reason.trim().length < 3) return; if (!await confirmAction(`${caption}?`)) return; button.disabled = true; try { await api.request(`/admin/publication-drafts/${draft.id}/${action}`, { method: "POST", body: JSON.stringify({ reason }) }); await loadPublicationAdmin(); } catch (error) { notify(error.message); button.disabled = false; } };
+          row.append(button);
+        }
+        panel.append(row);
+      }
+    } catch (error) { panel.textContent = `Не удалось загрузить публикации: ${error.message}`; const retry = document.createElement("button"); retry.textContent = "Повторить"; retry.onclick = loadPublicationAdmin; panel.append(retry); }
+  }
+
   async function submitListing(event) {
     event.preventDefault();
     if (!state.serverAvailable) return notify("Сервер недоступен");
@@ -1750,7 +1871,9 @@ function handleClick(event) {
         targetView: state.listingMode === "unique" ? "unique" : "market",
       };
       button.textContent = state.editingListingId ? "Сохраняем…" : "Публикуем…";
-      const savedListing = await api.request(path, { method: listingSubmission.method, body: JSON.stringify(payload) });
+      const savedListing = path === "/listings" && listingSubmission.method === "POST"
+        ? await publishWithQuota(payload)
+        : await api.request(path, { method: listingSubmission.method, body: JSON.stringify(payload) });
       let promotionError = null;
       if (shouldPromote && !savedListing.pinned && (state.editingListingId || state.listingMode === "unique")) {
         try {
@@ -2297,6 +2420,8 @@ async function hideCurrentConversation() {
   }
 
   async function openConversation(id, prefetched = null, returnView = null, dealId = null) {
+    const opening = state.chatOpening = (state.chatOpening || 0) + 1;
+    saveChatDraft();
     try {
       const requestedDealId = dealId || prefetched?.deal?.id || null;
       const scopeQuery = requestedDealId ? `?deal_id=${encodeURIComponent(requestedDealId)}` : "";
@@ -2305,18 +2430,21 @@ async function hideCurrentConversation() {
         api.request(`/conversations/${id}/messages${scopeQuery}`),
       ]);
       if (conversationResult.status === "rejected") throw conversationResult.reason;
+      if (opening !== state.chatOpening) return false;
       const conversation = conversationResult.value;
       const messages = messagesResult.status === "fulfilled" ? safeArray(messagesResult.value) : [];
       if (messagesResult.status === "rejected") reportClientError("conversation_messages_initial", messagesResult.reason);
       state.currentConversation = conversation;
-      state.messages = messages;
+      state.messages = mergeChatMessages(messages, [...(state.chatOutbox?.values() || [])].filter(item => item.conversation_id === id));
+      state.chatHasOlder = messages.length === 100;
+      document.getElementById("chatInput").value = state.chatDrafts?.[id] || "";
+      state.chatForceBottom = true;
       state.previousView = returnView || (["profile", "activity"].includes(state.currentView) ? state.currentView : "market");
       renderConversation();
       await navigate("deal-chat");
       try {
         await markConversationRead(id, requestedDealId);
-        state.messages = safeArray(await api.request(`/conversations/${id}/messages${scopeQuery}`));
-        renderConversation();
+        if (state.currentConversation?.id === id && state.currentView === "deal-chat") await refreshOpenConversation();
       } catch (error) {
         reportClientError("conversation_read_refresh", error);
       }
@@ -2333,6 +2461,9 @@ async function hideCurrentConversation() {
 
   function renderConversation() {
     const details = state.currentConversation; if (!details) return;
+    const atBottom = state.chatForceBottom || chatAtBottom();
+    const previousTop = elements.dealMessages.scrollTop;
+    state.chatForceBottom = false;
     const other = details.counterparty;
     document.getElementById("chatName").textContent = other.name || "Пользователь";
     document.getElementById("chatActivity").textContent = [other.username ? `@${other.username}` : null, other.mini_app_last_active_at ? `в Mini App ${formatMessageTime(other.mini_app_last_active_at)}` : null].filter(Boolean).join(" · ") || "Активность неизвестна";
@@ -2356,6 +2487,11 @@ async function hideCurrentConversation() {
       const listingAction = document.createElement("span"); listingAction.textContent = "Открыть ›"; elements.chatListing.append(listingCopy, listingAction);
     }
     const renderedMessages = []; let previousDay = "";
+    if (state.chatHasOlder) {
+      const older = document.createElement("button"); older.type = "button"; older.className = "chat-history-button";
+      older.textContent = state.chatLoadingOlder ? "Загрузка…" : "Предыдущие сообщения";
+      older.disabled = Boolean(state.chatLoadingOlder); older.onclick = loadOlderChatMessages; renderedMessages.push(older);
+    }
     state.messages.forEach((message) => {
       const day = new Date(message.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
       if (day !== previousDay) { const divider = document.createElement("div"); divider.className = "message-day"; divider.textContent = day; renderedMessages.push(divider); previousDay = day; }
@@ -2363,15 +2499,24 @@ async function hideCurrentConversation() {
       const bubble = document.createElement("div"); bubble.className = `message${message.sender_id === state.me.user.id ? " is-own" : ""}${message.message_type === "system" ? " is-system" : ""}${isOffer ? " is-offer" : ""}`;
       if (isOffer) renderOfferMessage(bubble, message);
       else bubble.append(document.createTextNode(message.body));
+      bubble.dataset.messageId = message.id;
+      if (!isOffer && message.message_type !== "system") installMessageCopy(bubble, message.body);
       const meta = document.createElement("small"); meta.className = "message-meta"; const time = document.createElement("span"); time.textContent = formatMessageTime(message.created_at); meta.append(time);
       if (message.sender_id === state.me.user.id && message.message_type !== "system") { const receipt = document.createElement("span"); receipt.className = "message-receipt"; receipt.textContent = message.is_read ? "✓✓" : "✓"; receipt.title = message.is_read ? "Прочитано" : "Получено сервером"; meta.append(receipt); }
+      if (message.local_status) {
+        meta.replaceChildren(document.createTextNode(message.local_status === "sending" ? "Отправляется…" : "Не отправлено"));
+        if (message.local_status === "failed") { const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Повторить"; retry.onclick = () => transmitChatMessage(message); meta.append(retry); }
+      }
       bubble.append(meta); renderedMessages.push(bubble);
     });
     elements.dealMessages.replaceChildren(...renderedMessages);
     renderDealDeliveryPanel();
     renderOffers();
     renderDealControls();
-    requestAnimationFrame(() => { elements.dealMessages.scrollTop = elements.dealMessages.scrollHeight; });
+    requestAnimationFrame(() => {
+      elements.dealMessages.scrollTop = atBottom ? elements.dealMessages.scrollHeight : previousTop;
+      document.getElementById("chatJumpLatest").hidden = Boolean(atBottom);
+    });
   }
 
   function renderOfferMessage(bubble, message) {
@@ -2734,30 +2879,128 @@ async function hideCurrentConversation() {
     const body = input.value.trim();
     const clientMessageId = createRequestId();
     button.disabled = true;
+    const conversation = state.currentConversation;
+    const pending = { id: clientMessageId, client_message_id: clientMessageId, body,
+      sender_id: state.me.user.id, created_at: new Date().toISOString(), message_type: "text", local_status: "sending",
+      conversation_id: conversation.id, listing_id: conversation.listing.id, deal_id: conversation.deal?.id || null };
+    state.messages.push(pending);
+    state.chatOutbox ||= new Map(); state.chatOutbox.set(clientMessageId, pending);
+    input.value = ""; saveChatDraft(); resizeChatInput(); state.chatForceBottom = true; renderConversation();
+    try { await transmitChatMessage(pending); } finally { button.disabled = false; }
+  }
+
+  async function transmitChatMessage(pending) {
+    if (pending.inFlight) return;
+    pending.inFlight = true; pending.local_status = "sending";
+    const isCurrent = () => pending.conversation_id ? state.currentConversation?.id === pending.conversation_id : state.currentConversation?.listing.id === pending.listing_id;
+    if (isCurrent()) renderConversation();
     try {
-      const endpoint = state.currentConversation.id
-        ? `/conversations/${state.currentConversation.id}/messages`
-        : `/conversations/listing/${state.currentConversation.listing.id}/messages`;
-      const dealId = state.currentConversation?.deal?.id || null;
+      const endpoint = pending.conversation_id ? `/conversations/${pending.conversation_id}/messages` : `/conversations/listing/${pending.listing_id}/messages`;
+      const { body, client_message_id: clientMessageId, deal_id: dealId } = pending;
       const message = await api.request(endpoint, {
         method: "POST",
         body: JSON.stringify({ body, client_message_id: clientMessageId, deal_id: dealId }),
       });
-      input.value = "";
-      resizeChatInput();
-      if (message.deal_id) await openDealConversation(message.deal_id);
-      else await openConversation(message.conversation_id);
-    } catch (error) { input.value = body; resizeChatInput(); notify(`Сообщение не отправлено: ${error.message}`); }
-    finally { button.disabled = false; }
+      state.chatOutbox.delete(pending.client_message_id);
+      if (isCurrent()) {
+        if (!state.currentConversation.id) await openConversation(message.conversation_id);
+        else { state.messages = mergeChatMessages(state.messages, [message]); renderConversation(); }
+      }
+    } catch (error) {
+      pending.local_status = "failed";
+      if (isCurrent()) { renderConversation(); setChatConnection("Сообщение не отправлено. Нажмите «Повторить»."); }
+    } finally { pending.inFlight = false; }
+  }
+
+  function mergeChatMessages(existing, incoming) {
+    const keys = new Set(incoming.map(item => item.client_message_id).filter(Boolean));
+    const byId = new Map(existing.filter(item => !item.local_status || !keys.has(item.client_message_id)).map(item => [item.id, item]));
+    incoming.forEach(item => { byId.set(item.id, item); if (item.client_message_id) state.chatOutbox?.delete(item.client_message_id); });
+    return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+  }
+
+  function chatAtBottom() {
+    const box = elements.dealMessages;
+    return box.scrollHeight - box.scrollTop - box.clientHeight < 64;
+  }
+
+  function saveChatDraft() {
+    const id = state.currentConversation?.id;
+    if (!id) return;
+    state.chatDrafts ||= {}; state.chatDrafts[id] = document.getElementById("chatInput").value;
+  }
+
+  function setChatConnection(text) {
+    const node = document.getElementById("chatConnection"); if (!node) return;
+    node.textContent = text; node.hidden = !text;
+  }
+
+  async function loadOlderChatMessages() {
+    if (state.chatLoadingOlder || !state.currentConversation?.id) return;
+    const id = state.currentConversation.id;
+    const first = state.messages.find(item => !item.local_status);
+    if (!first) return;
+    state.chatLoadingOlder = true;
+    const query = new URLSearchParams({ before: first.id });
+    if (state.currentConversation.deal?.id) query.set("deal_id", state.currentConversation.deal.id);
+    try {
+      const older = await api.request(`/conversations/${id}/messages?${query}`);
+      if (state.currentConversation?.id !== id || state.currentView !== "deal-chat") return;
+      const box = elements.dealMessages; const height = box.scrollHeight; const top = box.scrollTop;
+      state.chatHasOlder = older.length === 100; state.messages = mergeChatMessages(older, state.messages);
+      renderConversation(); requestAnimationFrame(() => { box.scrollTop = top + box.scrollHeight - height; });
+    } catch (error) { setChatConnection("Не удалось загрузить историю. Попробуйте ещё раз."); }
+    finally { state.chatLoadingOlder = false; }
+  }
+
+  function installMessageCopy(bubble, text) {
+    // Keep native selection/Ctrl+C; expose a small additional action on long press.
+    let timer; let start;
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    bubble.addEventListener("pointerdown", event => {
+      if (event.pointerType === "mouse") return;
+      start = { x: event.clientX, y: event.clientY };
+      timer = setTimeout(() => showMessageCopy(bubble, text), 550);
+    });
+    bubble.addEventListener("pointermove", event => { if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 8) cancel(); });
+    for (const name of ["pointerup", "pointercancel", "pointerleave"]) bubble.addEventListener(name, cancel);
+    bubble.addEventListener("contextmenu", () => showMessageCopy(bubble, text));
+  }
+
+  function showMessageCopy(bubble, text) {
+    document.getElementById("chatCopyMenu")?.remove();
+    const menu = document.createElement("button"); menu.id = "chatCopyMenu"; menu.type = "button"; menu.textContent = "Копировать";
+    const rect = bubble.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 142))}px`;
+    menu.style.top = `${Math.max(8, Math.min(rect.top - 48, (window.visualViewport?.height || window.innerHeight) - 52))}px`;
+    menu.onclick = async () => {
+      try {
+        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+        else { const field = document.createElement("textarea"); field.value = text; field.style.cssText = "position:fixed;opacity:0;font-size:16px"; document.body.append(field); field.select(); const ok = document.execCommand("copy"); field.remove(); if (!ok) throw new Error("copy"); }
+        elements.toast.textContent = "Скопировано"; elements.toast.classList.add("is-visible"); setTimeout(() => elements.toast.classList.remove("is-visible"), 2000);
+      } catch (_) { setChatConnection("Выделите текст и выберите системное «Копировать»."); }
+      menu.remove();
+    };
+    document.body.append(menu);
+    const close = event => { if (!menu.contains(event.target)) { menu.remove(); document.removeEventListener("pointerdown", close); } };
+    setTimeout(() => document.addEventListener("pointerdown", close), 0);
   }
 
   function resizeChatInput() {
     const input = document.getElementById("chatInput");
     input.style.height = "auto";
     input.style.height = `${Math.min(input.scrollHeight, 112)}px`;
+    saveChatDraft();
   }
 
   function installChatViewport() {
+    const compose = document.querySelector(".chat-compose");
+    const connection = document.createElement("small"); connection.id = "chatConnection"; connection.hidden = true; connection.setAttribute("role", "status"); compose.prepend(connection);
+    const jump = document.createElement("button"); jump.id = "chatJumpLatest"; jump.type = "button"; jump.textContent = "Новые сообщения ↓"; jump.hidden = true; compose.prepend(jump);
+    jump.onclick = () => { elements.dealMessages.scrollTop = elements.dealMessages.scrollHeight; jump.hidden = true; void markConversationRead(state.currentConversation.id, state.currentConversation.deal?.id).catch(() => {}); };
+    elements.dealMessages.addEventListener("scroll", () => { if (chatAtBottom()) jump.hidden = true; }, { passive: true });
+    window.addEventListener("offline", () => setChatConnection("Нет соединения. Отправку можно повторить."));
+    window.addEventListener("online", () => { if (state.currentView === "deal-chat") void refreshOpenConversation().catch(() => {}); });
     updateChatViewport();
     window.visualViewport?.addEventListener("resize", updateChatViewport);
     window.visualViewport?.addEventListener("scroll", updateChatViewport);
@@ -2765,23 +3008,28 @@ async function hideCurrentConversation() {
   }
 
   function updateChatViewport() {
+    const wasAtBottom = chatAtBottom();
     const viewport = window.visualViewport;
     const visualHeight = Number(viewport?.height);
     const telegramHeight = Number(telegram?.viewportHeight);
-    const fullHeight = Math.max(window.innerHeight, telegramHeight || 0, visualHeight || 0);
+    const available = [window.innerHeight, telegramHeight, visualHeight].filter(value => value > 0);
+    const fullHeight = Math.min(...available);
     const activeField = document.activeElement;
     const chatFieldFocused = Boolean(
       activeField?.closest?.(".chat-view")
       && ["INPUT", "TEXTAREA", "SELECT"].includes(activeField.tagName)
     );
-    const keyboardOpen = chatFieldFocused && visualHeight > 0 && fullHeight - visualHeight > 80;
-    const height = keyboardOpen ? visualHeight : fullHeight;
-    const width = Number(viewport?.width) > 0 ? Number(viewport.width) : window.innerWidth;
+    const keyboardOpen = chatFieldFocused && visualHeight > 0 && window.screen.height - visualHeight > 150;
+    const zoomed = Number(viewport?.scale || 1) > 1.05;
+    if (zoomed) return; // Preserve user-controlled accessibility zoom.
+    const height = fullHeight;
+    const width = window.innerWidth;
+    document.body.classList.toggle("chat-keyboard-open", keyboardOpen);
     document.documentElement.style.setProperty("--chat-viewport-height", `${Math.round(height)}px`);
     document.documentElement.style.setProperty("--chat-viewport-top", `${Math.round(keyboardOpen ? viewport?.offsetTop || 0 : 0)}px`);
     document.documentElement.style.setProperty("--chat-viewport-width", `${Math.round(width)}px`);
     document.documentElement.style.setProperty("--chat-viewport-left", `${Math.round(viewport?.offsetLeft || 0)}px`);
-    if (document.body.classList.contains("chat-open")) requestAnimationFrame(() => {
+    if (wasAtBottom && document.body.classList.contains("chat-open")) requestAnimationFrame(() => {
       elements.dealMessages.scrollTop = elements.dealMessages.scrollHeight;
     });
   }
@@ -3073,7 +3321,7 @@ async function hideCurrentConversation() {
     const articles = [
       { id: "buy", title: "Как купить машину", steps: ["Откройте Market и выберите автомобиль.", "Изучите описание и характеристики. Нажмите «Купить».", "Подтвердите цену. После покупки укажите игровой ID, сервер и время по МСК."], warning: "Подтверждайте получение только после фактической передачи машины.", action: "Market", view: "market" },
       { id: "sell", title: "Как продать машину", steps: ["Создайте объявление с фотографиями и честным описанием.", "Отвечайте на предложения и сообщения покупателя.", "После оплаты откройте сделку, передайте автомобиль и отметьте передачу."], warning: "После завершения продажи автомобиля продавец получает 100% цены в AF Coins. Комиссия 30% применяется только при выводе подарками.", action: "Выставить автомобиль", add: true },
-      { id: "publish", title: "Как выставить объявление", steps: ["Нажмите «+» в Market.", "Добавьте фотографии, название, характеристики, описание и цену.", "Выберите бесплатную публикацию или отдельно подтвердите закрепление."], warning: "Публикация бесплатная. Платное закрепление стоит 5 AF на 24 часа; списание требует подтверждения.", action: "Добавить автомобиль", add: true },
+      { id: "publish", title: "Как выставить объявление", steps: ["Нажмите «+» в Market.", "Добавьте фотографии, название, характеристики, описание и цену.", "Проверьте остаток бесплатных публикаций и цену Stars в форме. Подтвердите оплату, если бесплатный лимит исчерпан."], warning: "Закрепление оплачивается отдельно в AF на 24 часа и требует подтверждения. Оплата публикации не пополняет баланс AF.", action: "Добавить автомобиль", add: true },
       { id: "offer", title: "Как предложить свою цену", steps: ["Откройте автомобиль и нажмите «Предложить свою цену».", "Укажите сумму от 1 AF и отправьте предложение.", "Дождитесь принятия или отказа. Принятую цену можно использовать при покупке."], warning: "Доступного баланса должно хватать на предложение. Само предложение не списывает средства. Без решения продавца за 24 часа предложение отменяется.", action: "Выбрать автомобиль", view: "market" },
       { id: "deal", title: "Как проходит безопасная сделка", steps: ["Купите автомобиль: сервер резервирует средства и создаёт чат сделки.", "Отправьте продавцу игровой ID, сервер и время по МСК.", "Продавец передаёт автомобиль в игре и подтверждает это отдельной кнопкой в сделке.", "Проверьте полученный автомобиль. Если всё хорошо — подтвердите получение. Только тогда продавцу начисляются средства.", "Если есть проблема — создайте обращение через кнопку «Есть проблема» в этой сделке."], warning: "До подтверждения средства остаются под защитой. Напоминания приходят сразу, через 2 и 6 часов, затем раз в 12 часов. После 48 часов ожидания подключается администратор; автоматической выплаты нет.", action: "Мои сделки", profile: "deals" },
       { id: "topup", title: "Как пополнить AF Coins", steps: ["Выберите пакет или введите сумму.", "Оплатите счёт в окне Telegram Stars.", "Дождитесь подтверждения сервера. Новый баланс и операция появятся без перезапуска."], warning: "1 Telegram Star = 1 AF Coin. AF Coins — внутренний баланс сервиса, не личный Stars-баланс. Если проверка задержалась, нажмите «Проверить снова», а не платите повторно.", action: "Пополнить", topup: true },
