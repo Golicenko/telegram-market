@@ -8,6 +8,29 @@ from .models import Deal, DealEvent, Notification, User, Conversation
 ACTIVITY_EVENTS = ("funds_reserved", "message_sent", "status_changed", "admin_resume")
 
 
+def seller_has_accepted(deal):
+    # Legacy accepted orders may not have a timestamp. Fail closed for them.
+    return bool(deal.seller_accepted_at or deal.status == "seller_contacted" or deal.transfer_started_at)
+
+
+async def escalate_accepted_delivery(session, deal, now):
+    """Caller holds Deal lock. No balance/listing changes and no auto-settlement."""
+    previous = deal.status
+    deal.status = "disputed"
+    deal.needs_admin_review_at = now
+    stop_reminders(deal)
+    audit_deal(session, deal, "accepted_delivery_overdue", previous=previous)
+    admins = list((await session.scalars(select(User).where(User.role == "admin"))).all())
+    for admin in admins:
+        session.add(Notification(user_id=admin.id, notification_type="deal_admin_review",
+            title="Принятый заказ не передан в срок", body=f"Заказ #{str(deal.id)[:8]}: продавец принял заказ, но не отметил передачу за 24 часа. Проверьте сделку. Средства удерживаются.",
+            payload={"admin_deal_id": str(deal.id)}, delivery_status="pending"))
+    for user_id in (deal.buyer_id, deal.seller_id):
+        session.add(Notification(user_id=user_id, notification_type="deal_review_status",
+            title="Сделка направлена на проверку", body="Срок передачи принятого заказа истёк. Сделка направлена администратору. Средства остаются под защитой; автоматической выплаты или возврата нет.",
+            payload={"deal_id": str(deal.id)}, delivery_status="pending"))
+
+
 def delivery_deadline_expired(deal, now):
     deadline = deal.seller_delivery_deadline
     if deadline and deadline.tzinfo is None:

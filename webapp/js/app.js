@@ -20,6 +20,7 @@
     unique: [],
     training: [],
     contentUnseen: { training: { unseen_count: 0, marker: 0 }, unique: { unseen_count: 0, marker: 0 } },
+    contentLoads: { unique: 0, training: 0 }, contentSyncVersion: 0, contentLoading: 0, contentRefreshAt: 0,
     trainingPurchases: [],
     selectedTraining: null,
     adminTraining: [],
@@ -313,6 +314,7 @@
       if (event.target.name === "game_version") renderListingGameSelection();
     }, "listingGameChoice");
     document.addEventListener("visibilitychange", refreshPinnedCardAppearance);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) void refreshContentBadges(); });
     document.addEventListener("visibilitychange", () => {
       const event = { market: "market_viewed", training: "training_list_view", topup: "topup_screen_opened", support: "support_opened" }[state.currentView];
       if (event) track(event);
@@ -485,9 +487,9 @@
       state.catalog = { ...(catalog && typeof catalog === "object" ? catalog : {}), brands: safeArray(catalog?.brands) };
     },
     regular: async () => { state.regular = safeArray(await api.request("/listings?type=regular")); },
-    unique: async () => { state.unique = safeArray(await api.request("/listings?type=unique")); },
-    training: async () => { state.training = safeArray(await api.request(state.me?.user.role === "admin" ? "/admin/training" : "/training")); },
-    contentUnseen: async () => { state.contentUnseen = await api.request("/content/unseen"); },
+    unique: async () => { const version = state.contentLoads.unique; const rows = await api.request("/listings?type=unique"); if (version === state.contentLoads.unique) state.unique = safeArray(rows); },
+    training: async () => { const version = state.contentLoads.training; const rows = await api.request(state.me?.user.role === "admin" ? "/admin/training" : "/training"); if (version === state.contentLoads.training) state.training = safeArray(rows); },
+    contentUnseen: async () => { await refreshContentBadges(); },
     trainingPurchases: async () => { state.trainingPurchases = safeArray(await api.request("/training/mine")); },
     profile: async () => {
       state.profile = await api.request("/profile");
@@ -876,22 +878,38 @@ function handleClick(event) {
   }
 
   async function openContentSection(section) {
-    const snapshot = await api.request("/content/unseen");
-    state.contentUnseen = snapshot;
-    renderContentBadges();
-    await loadOptionalData(section === "training" ? ["training", "trainingPurchases"] : ["unique"], { allowRecovery: false });
-    if (state.failedOptional.has(section)) {
-      throw new Error(section === "training" ? "Не удалось загрузить обучение" : "Не удалось загрузить уникальные машины");
+    const version = ++state.contentLoads[section];
+    state.contentSyncVersion += 1; state.contentLoading += 1;
+    try {
+      const snapshot = await api.request(`/content/${section}/snapshot`);
+      if (state.currentView !== section || state.contentLoads[section] !== version || document.hidden) return;
+      if (!Array.isArray(snapshot.items) || !Number.isSafeInteger(snapshot.marker)) throw new Error("Не удалось загрузить каталог");
+      state[section] = snapshot.items; state.failedOptional.delete(section);
+      updateFilterOptions(); renderAll();
+      // Acknowledge only the exact server snapshot rendered in the still-open section.
+      const result = await api.request(`/content/${section}/mark-seen`, {
+        method: "POST", body: JSON.stringify({ marker: snapshot.marker }),
+      });
+      state.contentSyncVersion += 1;
+      if (state.contentLoads[section] === version) { state.contentUnseen[section] = result; renderContentBadges(); }
+      if (section === "training") void loadOptionalData(["trainingPurchases"], { allowRecovery: false });
+    } finally { state.contentLoading -= 1; }
+  }
+
+  async function refreshContentBadges() {
+    if (!state.serverAvailable || document.hidden || state.contentLoading) return;
+    const version = ++state.contentSyncVersion;
+    state.contentRefreshAt = Date.now();
+    try {
+      const result = await api.request("/content/unseen");
+      if (version === state.contentSyncVersion) { state.contentUnseen = result; renderContentBadges(); }
+    } catch (_) {
+      // A failed sync must not clear or fabricate unread state.
     }
-    const result = await api.request(`/content/${section}/mark-seen`, {
-      method: "POST",
-      body: JSON.stringify({ marker: Number(snapshot?.[section]?.marker || 0) }),
-    });
-    state.contentUnseen[section] = result;
-    renderContentBadges();
   }
   async function refreshUnreadMessages() {
   if (!state.serverAvailable || document.hidden) return;
+  if (Date.now() - state.contentRefreshAt >= 15000) void refreshContentBadges();
 
   try {
     const summary = await api.request("/conversations/unread-summary");
@@ -2606,7 +2624,9 @@ async function hideCurrentConversation() {
       const secondary = document.createElement("div"); secondary.className = "deal-secondary-actions";
       const support = document.createElement("button"); support.className = "deal-support"; support.dataset.dealAction = "support"; support.textContent = "Нужна помощь";
       const cancel = document.createElement("button"); cancel.className = "deal-secondary"; cancel.dataset.dealAction = "cancel"; cancel.textContent = "Отменить сделку";
-      secondary.append(cancel, support); elements.dealControls.append(secondary);
+      if (deal.status === "paid" && !deal.seller_accepted_at && !deal.transfer_started_at) secondary.append(cancel);
+      else { const notice = document.createElement("p"); notice.textContent = "Продавец принял заказ. Отмена — только через поддержку. Средства остаются под защитой."; elements.dealControls.append(notice); }
+      secondary.append(support); elements.dealControls.append(secondary);
     }
   }
 
@@ -2628,7 +2648,7 @@ async function hideCurrentConversation() {
         result = await confirmDealTransfer(action, state.currentConversation.deal, submit);
         if (!result) return;
       } else {
-        if (action === "cancel" && !(await confirmCriticalAction("Отменить сделку? Защищённые средства вернутся покупателю, чат сделки закроется. Отмена доступна только до передачи.", "Отменить сделку"))) return;
+        if (action === "cancel" && !(await confirmCriticalAction("Отменить сделку? Защищённые средства вернутся покупателю, чат сделки закроется. Отмена доступна только до принятия заказа продавцом.", "Отменить сделку"))) return;
         result = await submit();
       }
       // Only a successful server result may replace the displayed deal state.
@@ -3055,7 +3075,7 @@ async function hideCurrentConversation() {
       { id: "training", title: "Как купить обучение", steps: ["Откройте «Обучение» и прочитайте подробности продукта.", "Подтвердите оплату AF Coins.", "Откройте «Мои покупки» в разделе обучения. Материалы доступны через бота; персональное обучение проводится в личном Telegram-чате преподавателя."], warning: "Повторно покупать курс для получения материалов не нужно. Используйте отдельную кнопку повторной выдачи.", action: "Обучение", view: "training" },
       { id: "message", title: "Как написать продавцу", steps: ["Откройте страницу автомобиля.", "Нажмите «Написать продавцу» и отправьте сообщение.", "Продолжить переписку можно из «Диалогов» в профиле."], warning: "Обычный диалог не создаёт покупку или финансовую сделку.", action: "Диалоги", profile: "chats" },
       { id: "inactive", title: "Если продавец не отвечает", steps: ["Проверьте, что отправили данные передачи или сообщение в оплаченной сделке.", "Срок ответа хранится на сервере — закрывать приложение можно.", "Если продавец не отвечает 24 часа, подходящая активная сделка отменяется с полным возвратом, его активные объявления снимаются с продажи."], warning: "Спорные, уже переданные и завершённые сделки не отменяются этим таймером автоматически. Для них обратитесь в поддержку.", action: "Поддержка", support: true },
-      { id: "refund", title: "Отмена сделки и возврат", steps: ["До отметки продавца о передаче покупатель или продавец может отменить сделку с отдельным подтверждением.", "Сервер возвращает покупателю весь резерв, закрывает чат и уведомляет обе стороны.", "После отметки о передаче обычная отмена недоступна: подтвердите получение либо создайте обращение. Решение о возврате принимает администратор.", "Баланс и запись возврата доступны в истории операций."], warning: "Возврат AF Coins внутри сервиса не означает автоматический возврат Telegram Stars. Купленные AF Coins не доступны для вывода; вывод заработанных средств согласуется отдельно.", action: "История операций", profile: "history" },
+      { id: "refund", title: "Отмена сделки и возврат", steps: ["До принятия заказа продавцом покупатель или продавец может отменить сделку с отдельным подтверждением.", "Сервер возвращает покупателю весь резерв, закрывает чат и уведомляет обе стороны.", "После принятия заказа самостоятельная отмена недоступна: при проблеме создайте обращение. Если принятый заказ не передан за 24 часа, он направляется администратору, а средства остаются под защитой.", "После передачи подтвердите получение только если машина действительно получена."], warning: "Возврат AF Coins внутри сервиса не означает автоматический возврат Telegram Stars. Купленные AF Coins не доступны для вывода; вывод заработанных средств согласуется отдельно.", action: "История операций", profile: "history" },
       { id: "support", title: "Есть проблема — поддержка сделки", steps: ["В нужной сделке нажмите «Есть проблема»: номер сделки и участники прикрепляются автоматически.", "Опишите проблему, приложите скриншот и отправьте обращение.", "Только после сохранения обращения сделка переходит на проверку поддержки, напоминания о подтверждении прекращаются. Простое открытие формы ничего не меняет.", "Средства остаются зарезервированы до решения. Ответы доступны в разделе поддержки."], warning: "Не подтверждайте получение, если товар не получен или не соответствует договорённости. Не отправляйте пароли, коды входа или доступ к Telegram.", action: "Открыть поддержку", support: true },
     ];
     document.getElementById("helpArticles").replaceChildren(...articles.map((article) => {
