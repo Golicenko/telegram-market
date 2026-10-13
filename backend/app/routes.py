@@ -1432,6 +1432,8 @@ async def add_regular_listing(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    if not payload.client_request_id:
+        raise HTTPException(422, "Обновите приложение: требуется идентификатор публикации")
     listing = await create_listing(
         session,
         user,

@@ -1659,7 +1659,8 @@ function handleClick(event) {
       elements.purchaseModalText.textContent = flow.submission ? "Публикуем и закрепляем объявление…" : "Закрепляем объявление…";
       let listing;
       if (flow.submission) {
-        listing = await api.request(flow.submission.path, {
+        if (elements.purchaseModal?.open) elements.purchaseModal.close();
+        listing = flow.submission.path === "/listings" ? await publishWithQuota(flow.submission.payload) : await api.request(flow.submission.path, {
           method: flow.submission.method,
           body: JSON.stringify(flow.submission.payload),
         });
@@ -1676,6 +1677,7 @@ function handleClick(event) {
     } catch (error) {
       flow.busy = false;
       elements.purchaseModalAction.disabled = false;
+      if (!elements.purchaseModal.open) notify(error.message);
       if (Number(error.status) === 402 && error.detail?.purpose === "listing_promotion") {
         flow.missing = Number(error.detail.missing_af_coins || flow.missing || 0);
         flow.intentId = null;
@@ -2977,8 +2979,10 @@ async function hideCurrentConversation() {
   }
 
   function showMessageCopy(bubble, text) {
-    document.getElementById("chatCopyMenu")?.remove();
+    document.getElementById("chatCopyMenu")?.dismiss?.();
     const menu = document.createElement("button"); menu.id = "chatCopyMenu"; menu.type = "button"; menu.textContent = "Копировать";
+    const close = event => { if (!menu.contains(event.target)) menu.dismiss(); };
+    menu.dismiss = () => { menu.remove(); document.removeEventListener("pointerdown", close); };
     const rect = bubble.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 142))}px`;
     menu.style.top = `${Math.max(8, Math.min(rect.top - 48, (window.visualViewport?.height || window.innerHeight) - 52))}px`;
@@ -2988,11 +2992,10 @@ async function hideCurrentConversation() {
         else { const field = document.createElement("textarea"); field.value = text; field.style.cssText = "position:fixed;opacity:0;font-size:16px"; document.body.append(field); field.select(); const ok = document.execCommand("copy"); field.remove(); if (!ok) throw new Error("copy"); }
         elements.toast.textContent = "Скопировано"; elements.toast.classList.add("is-visible"); setTimeout(() => elements.toast.classList.remove("is-visible"), 2000);
       } catch (_) { setChatConnection("Выделите текст и выберите системное «Копировать»."); }
-      menu.remove();
+      menu.dismiss();
     };
     document.body.append(menu);
-    const close = event => { if (!menu.contains(event.target)) { menu.remove(); document.removeEventListener("pointerdown", close); } };
-    setTimeout(() => document.addEventListener("pointerdown", close), 0);
+    setTimeout(() => { if (menu.isConnected) document.addEventListener("pointerdown", close); }, 0);
   }
 
   function resizeChatInput() {
@@ -3005,7 +3008,7 @@ async function hideCurrentConversation() {
   function installChatViewport() {
     const compose = document.querySelector(".chat-compose");
     const connection = document.createElement("small"); connection.id = "chatConnection"; connection.hidden = true; connection.setAttribute("role", "status"); compose.prepend(connection);
-    const jump = document.createElement("button"); jump.id = "chatJumpLatest"; jump.type = "button"; jump.textContent = "Новые сообщения ↓"; jump.hidden = true; compose.prepend(jump);
+    const jump = document.createElement("button"); jump.id = "chatJumpLatest"; jump.type = "button"; jump.textContent = "К последним сообщениям ↓"; jump.hidden = true; compose.prepend(jump);
     jump.onclick = () => { elements.dealMessages.scrollTop = elements.dealMessages.scrollHeight; jump.hidden = true; void markConversationRead(state.currentConversation.id, state.currentConversation.deal?.id).catch(() => {}); };
     elements.dealMessages.addEventListener("scroll", () => { if (chatAtBottom()) jump.hidden = true; }, { passive: true });
     window.addEventListener("offline", () => setChatConnection("Нет соединения. Отправку можно повторить."));

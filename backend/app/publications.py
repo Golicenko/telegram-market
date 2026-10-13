@@ -74,7 +74,7 @@ async def create_draft(payload: ListingCreate, user: User = Depends(get_current_
     if not payload.client_request_id:
         raise HTTPException(422, "Требуется идентификатор публикации")
     async with session.begin():
-        locked_user = await session.scalar(select(User).where(User.id == user.id).with_for_update(key_share=True))
+        locked_user = await session.scalar(select(User).where(User.id == user.id).with_for_update(key_share=True).execution_options(populate_existing=True))
         draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.user_id == user.id, PublicationDraft.request_id == payload.client_request_id))
         if draft:
             if draft.payload != payload.model_dump(mode="json"):
@@ -86,6 +86,17 @@ async def create_draft(payload: ListingCreate, user: User = Depends(get_current_
         rules = await rules_out(session, locked_user)
         if not rules["payment_required"]:
             raise HTTPException(409, "Доступна бесплатная публикация. Повторите публикацию.")
+        if payload.promote_for_24h:
+            from .models import Wallet
+            from .config import get_settings
+            from .services import money
+            wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
+            available = money(wallet.available_balance if wallet else 0)
+            required = money(get_settings().listing_promotion_cost_af_coins)
+            if available < required:
+                raise HTTPException(402, {"code": "insufficient_af_coins", "purpose": "listing_promotion",
+                    "message": "Недостаточно AF Coins для выбранного закрепления", "available_af_coins": str(available),
+                    "required_af_coins": str(required), "missing_af_coins": str(required - available)})
         draft = PublicationDraft(user_id=user.id, request_id=payload.client_request_id, payload=payload.model_dump(mode="json"), price_stars=rules["price_stars"])
         session.add(draft)
         await session.flush()

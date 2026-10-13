@@ -585,6 +585,7 @@ class ConversationMessage(Base):
             name="ck_conversation_message_type",
         ),
         UniqueConstraint("conversation_id", "sender_id", "client_message_id", name="uq_conversation_message_client_id"),
+        Index("ix_messages_chat_cursor", "conversation_id", "created_at", "id"),
     )
 
 class PriceOffer(Base, TimestampMixin):

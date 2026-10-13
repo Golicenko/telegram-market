@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import func, select, text
 
 from app import publications
+from app.config import Settings, get_settings
 from app.models import ConversationMessage, Listing, PublicationDraft, StarPayment, User, Wallet, WalletTransaction
 from app.schemas import ListingCreate
 from app.services import create_listing
@@ -114,16 +115,54 @@ async def test_last_free_slot_race_and_failed_pin_does_not_consume_slot():
 
 
 @pytest.mark.asyncio
+async def test_real_webhook_route_secret_owner_frozen_amount_and_admin_settings(monkeypatch):
+    from app import routes
+    async with isolated_pg() as (_, sessions):
+        user = await signed_login(sessions, 88701)
+        admin = await signed_login(sessions, 88702)
+        async with sessions() as session, session.begin():
+            (await session.get(User, user.id)).publication_count = 5
+        application = app(sessions)
+        settings = Settings(bot_token="referral-test-token", admin_id=admin.telegram_id, debug=False)
+        application.dependency_overrides[get_settings] = lambda: settings
+        answers = []
+        async def answer(query_id, ok, error):
+            answers.append(ok)
+        monkeypatch.setattr(routes, "answer_pre_checkout_query", answer)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
+            draft = (await client.post("/api/publication-drafts", headers=headers(user), json=listing_payload().model_dump(mode="json"))).json()
+            updated = await client.put("/api/admin/publication-rules", headers=headers(admin), json={"free_limit": 5, "price_stars": 8, "enabled": True, "reason": "Frozen price check"})
+            assert updated.status_code == 200, updated.text
+            hook = {"pre_checkout_query": {"id": "checkout", "from": {"id": user.telegram_id}, "invoice_payload": publications.PREFIX + draft["id"], "currency": "XTR", "total_amount": 5}}
+            assert (await client.post("/api/telegram/webhook", json=hook)).status_code == 403
+            trusted = {"X-Telegram-Bot-Api-Secret-Token": settings.effective_telegram_webhook_secret}
+            assert (await client.post("/api/telegram/webhook", headers=trusted, json=hook)).status_code == 200
+            assert answers == [True]
+            receipt = {"message": {"from": {"id": user.telegram_id}, "successful_payment": payment(draft)}}
+            for _ in range(2):
+                response = await client.post("/api/telegram/webhook", headers=trusted, json=receipt)
+                assert response.status_code == 200, response.text
+            stored = (await client.get('/api/publication-drafts/' + draft['id'], headers=headers(user))).json()
+            assert stored["status"] == "published"
+        async with sessions() as session:
+            assert await session.scalar(select(func.count()).select_from(StarPayment)) == 1
+            assert await session.scalar(select(func.count()).select_from(WalletTransaction)) == 0
+
+
+@pytest.mark.asyncio
 async def test_price_snapshot_paid_recovery_and_admin_refund(monkeypatch):
     async with isolated_pg() as (_, sessions):
         user = await signed_login(sessions, 88301)
         admin = await signed_login(sessions, 88302)
         async with sessions() as session, session.begin():
             (await session.get(User, user.id)).publication_count = 5
+            (await session.scalar(select(Wallet).where(Wallet.user_id == user.id))).purchased_balance = 5
         payload = listing_payload()
         payload.promote_for_24h = True
         async with sessions() as session:
             draft = await publications.create_draft(payload, user, session)
+        async with sessions() as session, session.begin():
+            (await session.scalar(select(Wallet).where(Wallet.user_id == user.id))).purchased_balance = 0
         async with sessions() as session:
             await publications.update_rules(publications.RulesUpdate(free_limit=5, price_stars=9, enabled=True, reason="Test change"), admin, session)
         async with sessions() as session:
