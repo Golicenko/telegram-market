@@ -199,7 +199,7 @@ async def create_listing(
             from .models import PublicationDraft, PublicationRules
             publication = None
             if publication_id:
-                publication = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == publication_id).with_for_update())
+                publication = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == publication_id).with_for_update().execution_options(populate_existing=True))
                 if not publication or publication.user_id != seller.id or publication.status not in {"paid", "published"} or not publication.payment_id:
                     raise HTTPException(409, "Оплата публикации не подтверждена")
                 if publication.request_id != request_id or publication.payload != payload.model_dump(mode="json"):
@@ -216,6 +216,12 @@ async def create_listing(
                     )
                 )
             if listing is None:
+                if seller.is_blocked:
+                    raise HTTPException(403, "Публикация заблокированного аккаунта требует проверки администратора")
+                if quota_user and request_id and not publication:
+                    saved_draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.user_id == seller.id, PublicationDraft.request_id == request_id))
+                    if saved_draft:
+                        raise HTTPException(402, {"code": "publication_payment_required", "price_stars": saved_draft.price_stars, "message": "Откройте сохранённый черновик публикации"})
                 if quota_user and not publication:
                     rules = await session.get(PublicationRules, 1)
                     limit = rules.free_limit if rules else 5
@@ -288,6 +294,8 @@ async def create_listing(
                 if quota_user:
                     quota_user.publication_count += 1
             if publication:
+                if publication.status != "published":
+                    session.add(Notification(user_id=seller.id, notification_type="publication_published", title="Объявление опубликовано", body="Оплата Stars подтверждена. Объявление опубликовано в AutoFlow Market.", payload={"listing_id": str(listing.id)}, delivery_status="pending"))
                 publication.listing_id = listing.id
                 publication.status = "published"
                 publication.last_error = None

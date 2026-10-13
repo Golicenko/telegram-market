@@ -187,6 +187,54 @@ async def test_message_pagination_1000_access_and_duplicate_send():
 
 
 @pytest.mark.asyncio
+async def test_paid_draft_cannot_bypass_refund_lock_or_reuse_extra_charge(monkeypatch):
+    from fastapi import HTTPException
+    async with isolated_pg() as (_, sessions):
+        user = await signed_login(sessions, 88601)
+        admin = await signed_login(sessions, 88602)
+        async with sessions() as session, session.begin():
+            (await session.get(User, user.id)).publication_count = 5
+        payload = listing_payload()
+        async with sessions() as session:
+            draft = await publications.create_draft(payload, user, session)
+        draft_id = uuid.UUID(draft["id"])
+        async with sessions() as session:
+            await publications.receive_payment(session, user.telegram_id, payment(draft))
+        # Publication request is already paid; disabling the fee does not bypass it.
+        async with sessions() as session:
+            await publications.update_rules(publications.RulesUpdate(free_limit=5, price_stars=9, enabled=False, reason="Pause rollout"), admin, session)
+        async with sessions() as session:
+            with pytest.raises(HTTPException) as error:
+                await create_listing(session, user, payload, listing_type="regular")
+            assert error.value.status_code == 402
+        async with sessions() as stale:
+            cached = await stale.get(PublicationDraft, draft_id)
+            assert cached.status == "paid"
+            await stale.commit()
+            async with sessions() as other, other.begin():
+                (await other.get(PublicationDraft, draft_id)).status = "refund_pending"
+            with pytest.raises(HTTPException) as error:
+                await create_listing(stale, user, payload, listing_type="regular", publication_id=draft_id)
+            assert error.value.status_code == 409  # Row lock must refresh cached status.
+        extra = payment(draft)
+        async with sessions() as session:
+            await publications.receive_payment(session, user.telegram_id, extra)
+        async with sessions() as session:
+            receipt = await session.scalar(select(StarPayment).where(StarPayment.telegram_payment_charge_id == extra["telegram_payment_charge_id"]))
+            assert receipt.status == "publication_review" and receipt.af_coin_amount == 0
+            assert await session.scalar(select(func.count()).select_from(Listing)) == 0
+        calls = []
+        async def refund(method, params):
+            calls.append(params)
+            return {"result": True}
+        monkeypatch.setattr(publications, "call_bot_api", refund)
+        for _ in range(2):
+            async with sessions() as session:
+                await publications.refund_extra(receipt.id, publications.Resolution(reason="Duplicate charge"), admin, session)
+        assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_migration_counts_retained_history_including_deleted():
     async with isolated_pg(tables=False) as (engine, _):
         async with engine.begin() as conn:

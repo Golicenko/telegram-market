@@ -8,6 +8,7 @@ depends_on = None
 
 
 def upgrade():
+    op.execute("LOCK TABLE users, listings IN ACCESS EXCLUSIVE MODE")
     op.execute("ALTER TABLE users ADD COLUMN publication_count INTEGER NOT NULL DEFAULT 0")
     # All retained regular listings were created published by the old service.
     # Include sold, hidden, expired and soft-deleted; never guess hard-deleted history.

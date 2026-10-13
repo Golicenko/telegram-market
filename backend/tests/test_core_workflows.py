@@ -133,6 +133,9 @@ class FakeSession:
         return FakeTransaction()
 
     async def scalar(self, _query):
+        from app.models import PublicationDraft
+        if self.quota_user is not None and _query.column_descriptions[0].get("entity") is PublicationDraft:
+            return None
         if self.quota_user is not None and _query.column_descriptions[0].get("entity") is User:
             return self.quota_user
         return self.scalars.pop(0) if self.scalars else None

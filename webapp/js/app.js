@@ -806,6 +806,8 @@ function handleClick(event) {
 
   async function goBack() {
     if (window.AutoFlowDealConfirmation.dismiss()) return;
+    const publicationModal = document.querySelector("dialog.publication-modal[open]");
+    if (publicationModal) { publicationModal.dispatchEvent(new Event("cancel", { cancelable: true })); return; }
     if (primaryViews.has(state.currentView) || Date.now() < state.backBlockedUntil) return;
     state.backBlockedUntil = Date.now() + 450;
     const entry = state.navigationStack.pop();
@@ -942,6 +944,7 @@ function handleClick(event) {
       await refreshOpenConversation();
     }
   } catch (error) {
+    if (state.currentView === "deal-chat") setChatConnection("Нет соединения. Переписка восстановится автоматически.");
     if (!state.messagePollingFailureReported) {
       state.messagePollingFailureReported = true;
       reportClientError("message_polling", error);
@@ -1785,7 +1788,7 @@ function handleClick(event) {
     if (!panel) { panel = document.createElement("section"); panel.id = "publicationAdmin"; document.querySelector('[data-admin-panel="listings"]').prepend(panel); }
     panel.textContent = "Загрузка условий публикации…";
     try {
-      const [rules, drafts] = await Promise.all([api.request("/publication-rules"), api.request("/admin/publication-drafts")]);
+      const [rules, drafts, extras] = await Promise.all([api.request("/publication-rules"), api.request("/admin/publication-drafts"), api.request("/admin/publication-extra-payments")]);
       panel.replaceChildren(); const title = document.createElement("h2"); title.textContent = "Публикации за Stars"; panel.append(title);
       const form = document.createElement("form");
       for (const [key, labelText] of [["free_limit", "Бесплатных публикаций за всё время"], ["price_stars", "Стоимость последующих, Stars"]]) {
@@ -1796,6 +1799,12 @@ function handleClick(event) {
       const save = document.createElement("button"); save.type = "submit"; save.className = "publish-button"; save.textContent = "Сохранить условия"; form.append(save);
       form.onsubmit = async event => { event.preventDefault(); if (save.disabled) return; save.disabled = true; try { await api.request("/admin/publication-rules", { method: "PUT", body: JSON.stringify({ free_limit: Number(form.elements.free_limit.value), price_stars: Number(form.elements.price_stars.value), enabled: toggle.checked, reason: reason.value }) }); notify("Условия сохранены. Уже созданные счета сохраняют прежнюю цену."); } catch (error) { notify(error.message); } finally { save.disabled = false; } };
       panel.append(form);
+      for (const receipt of extras) {
+        const row = document.createElement("div"); row.textContent = `Дополнительная оплата публикации: ${receipt.price_stars} ⭐ · ${receipt.status}`;
+        const refund = document.createElement("button"); refund.type = "button"; refund.textContent = "Вернуть лишний платёж";
+        refund.onclick = async () => { const reason = window.prompt("Причина возврата дополнительного платежа"); if (!reason || reason.trim().length < 3 || !await confirmAction(`Вернуть ${receipt.price_stars} Stars?`)) return; refund.disabled = true; try { await api.request(`/admin/publication-extra-payments/${receipt.id}/refund`, { method: "POST", body: JSON.stringify({ reason }) }); await loadPublicationAdmin(); } catch (error) { notify(error.message); refund.disabled = false; } };
+        row.append(refund); panel.append(row);
+      }
       for (const draft of drafts) {
         const row = document.createElement("div"); const text = document.createElement("p"); text.textContent = `${draft.payload.brand} · ${draft.price_stars} ⭐ · ${draft.status} · ${draft.last_error || ""}`; row.append(text);
         for (const [action, caption] of [["retry", "Повторить публикацию"], ["refund", "Вернуть Stars"]]) {
@@ -2950,7 +2959,7 @@ async function hideCurrentConversation() {
       state.chatHasOlder = older.length === 100; state.messages = mergeChatMessages(older, state.messages);
       renderConversation(); requestAnimationFrame(() => { box.scrollTop = top + box.scrollHeight - height; });
     } catch (error) { setChatConnection("Не удалось загрузить историю. Попробуйте ещё раз."); }
-    finally { state.chatLoadingOlder = false; }
+    finally { state.chatLoadingOlder = false; const button = elements.dealMessages.querySelector(".chat-history-button"); if (button) { button.disabled = false; button.textContent = "Предыдущие сообщения"; } }
   }
 
   function installMessageCopy(bubble, text) {

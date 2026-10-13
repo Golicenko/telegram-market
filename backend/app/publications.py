@@ -189,14 +189,15 @@ async def fulfill(session, draft_id):
         await session.rollback()
         return
     user = await session.get(User, draft.user_id)
-    payload = ListingCreate.model_validate(draft.payload)
+    saved_payload = draft.payload
     await session.commit()
     try:
+        payload = ListingCreate.model_validate(saved_payload)
         await create_listing(session, user, payload, listing_type="regular", pinned=payload.promote_for_24h, publication_id=draft_id)
     except Exception as error:
         await session.rollback()
         async with session.begin():
-            draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == draft_id).with_for_update())
+            draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == draft_id).with_for_update().execution_options(populate_existing=True))
             if draft.status != "paid":
                 return
             draft.attempts += 1
@@ -223,14 +224,50 @@ async def admin_drafts(admin: User = Depends(require_admin), session: AsyncSessi
     return [output(row) for row in rows]
 
 
+@router.get("/admin/publication-extra-payments")
+async def extra_payments(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    rows = (await session.scalars(select(StarPayment).where(StarPayment.status.in_(["publication_review", "publication_extra_refund"])).order_by(StarPayment.created_at).limit(100))).all()
+    return [{"id": str(row.id), "price_stars": row.xtr_amount, "status": row.status} for row in rows]
+
+
 class Resolution(BaseModel):
     reason: str = Field(min_length=3, max_length=300)
+
+
+@router.post("/admin/publication-extra-payments/{payment_id}/refund")
+async def refund_extra(payment_id: uuid.UUID, payload: Resolution, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    async with session.begin():
+        receipt = await session.scalar(select(StarPayment).where(StarPayment.id == payment_id).with_for_update())
+        if not receipt or receipt.status not in {"publication_review", "publication_extra_refund", "publication_extra_refunded"}:
+            raise HTTPException(409, "Дополнительный платёж не найден")
+        if receipt.status == "publication_extra_refunded":
+            return {"status": receipt.status}
+        if receipt.status != "publication_extra_refund":
+            session.add(AdminAction(admin_id=admin.id, action="publication_extra_refund", target_type="payment", target_id=receipt.id, reason=payload.reason))
+        receipt.status = "publication_extra_refund"
+    await complete_extra_refund(session, payment_id)
+    return {"status": "publication_extra_refunded"}
+
+
+async def complete_extra_refund(session, payment_id):
+    async with session.begin():
+        receipt = await session.scalar(select(StarPayment).where(StarPayment.id == payment_id).with_for_update().execution_options(populate_existing=True))
+        if not receipt or receipt.status != "publication_extra_refund":
+            return
+        user = await session.get(User, receipt.user_id)
+        try:
+            await call_bot_api("refundStarPayment", {"user_id": user.telegram_id, "telegram_payment_charge_id": receipt.telegram_payment_charge_id})
+        except HTTPException as error:
+            if "CHARGE_ALREADY_REFUNDED" not in str(error.detail):
+                raise
+        receipt.status = "publication_extra_refunded"
+        session.add(Notification(user_id=user.id, notification_type="publication_refunded", title="Возврат дополнительной оплаты", body=f"Возвращён дополнительный платёж {receipt.xtr_amount} ⭐ за публикацию.", payload={}, delivery_status="pending"))
 
 
 @router.post("/admin/publication-drafts/{draft_id}/retry")
 async def admin_retry(draft_id: uuid.UUID, payload: Resolution, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     async with session.begin():
-        draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == draft_id).with_for_update())
+        draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == draft_id).with_for_update().execution_options(populate_existing=True))
         if not draft or draft.status not in {"review", "paid"} or not draft.payment_id:
             raise HTTPException(409, "Нет ожидающей оплаченной публикации")
         draft.status, draft.attempts = "paid", 0
@@ -243,7 +280,7 @@ async def admin_retry(draft_id: uuid.UUID, payload: Resolution, admin: User = De
 async def admin_refund(draft_id: uuid.UUID, payload: Resolution, admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     # Persist the intent before calling Telegram, retry the same charge after crash.
     async with session.begin():
-        draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == draft_id).with_for_update())
+        draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == draft_id).with_for_update().execution_options(populate_existing=True))
         if not draft or not draft.payment_id or draft.status not in {"paid", "review", "refund_pending", "refunded"}:
             raise HTTPException(409, "Возврат недоступен для опубликованного объявления")
         if draft.status == "refunded":
@@ -257,7 +294,7 @@ async def admin_refund(draft_id: uuid.UUID, payload: Resolution, admin: User = D
 
 async def refund_pending(session, draft_id):
     async with session.begin():
-        draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == draft_id).with_for_update())
+        draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == draft_id).with_for_update().execution_options(populate_existing=True))
         if draft.status != "refund_pending":
             return
         receipt = await session.get(StarPayment, draft.payment_id)
@@ -288,6 +325,14 @@ async def run_publication_worker():
                     except Exception as error:
                         await session.rollback()
                         logger.warning("publication_recovery_failed draft=%s error_type=%s", draft_id, type(error).__name__)
+                extra_ids = list((await session.scalars(select(StarPayment.id).where(StarPayment.status == "publication_extra_refund").limit(30))).all())
+                await session.commit()
+                for payment_id in extra_ids:
+                    try:
+                        await complete_extra_refund(session, payment_id)
+                    except Exception as error:
+                        await session.rollback()
+                        logger.warning("publication_extra_refund_failed payment=%s error_type=%s", payment_id, type(error).__name__)
         except Exception as error:
             logger.warning("publication_worker_failed error_type=%s", type(error).__name__)
         await asyncio.sleep(60)
