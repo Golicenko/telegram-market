@@ -68,6 +68,8 @@ async def test_http_create_edit_get_and_database_reopen(tmp_path):
     @sa.event.listens_for(engine, "connect")
     def sequence_fixture(connection, _record):
         connection.create_function("nextval", 1, lambda _name: 1)
+        # SQLite tests cover HTTP/serialization only, not PostgreSQL locking.
+        connection.create_function("pg_advisory_xact_lock", 1, lambda _key: None)
     with engine.begin() as connection:
         for model in (User, Listing, ListingImage, ListingLike, Conversation, AdminAction):
             connection.execute(CreateTable(model.__table__))

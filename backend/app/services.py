@@ -9,7 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
-from .deal_lifecycle import audit_deal, stop_reminders, delivery_deadline_expired
+from .content_catalog import next_publication_revision
+from .deal_lifecycle import audit_deal, stop_reminders, delivery_deadline_expired, seller_has_accepted, escalate_accepted_delivery
 from .seller_orders import paid_order_body
 from .chat_access import ACTIVE_DEAL_STATUSES, require_active_chat, require_active_chat_by_id
 from .inactivity import record_buyer_request, record_seller_response, hide_active_listings, offer_response_expired, SELLER_NOTICE, BUYER_NOTICE
@@ -243,7 +244,7 @@ async def create_listing(
                     delivery_time_estimate=payload.delivery_time_estimate,
                     pinned=admin_pinned or paid_pinned,
                     pinned_until=now + timedelta(hours=settings.listing_promotion_hours) if admin_pinned or paid_pinned else None,
-                    content_revision=await session.scalar(select(func.nextval("content_publication_revision_seq"))) if listing_type == "unique" else None,
+                    content_revision=await next_publication_revision(session) if listing_type == "unique" else None,
                 )
                 session.add(listing)
                 await session.flush()
@@ -390,10 +391,9 @@ async def set_listing_publication(session: AsyncSession, admin: User, listing_id
         listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
         if not listing or listing.status in {"deleted", "sold", "reserved"}:
             raise HTTPException(status_code=409, detail="Listing publication state cannot be changed")
-        was_active = listing.status == "active"
         listing.status = "active" if published else "paused"
-        if published and listing.listing_type == "unique" and not was_active:
-            listing.content_revision = await session.scalar(select(func.nextval("content_publication_revision_seq")))
+        if published and listing.listing_type == "unique" and listing.content_revision is None:
+            listing.content_revision = await next_publication_revision(session)
         session.add(AdminAction(admin_id=admin.id, action="publish_listing" if published else "unpublish_listing", target_type="listing", target_id=listing.id))
     return listing
 
@@ -489,7 +489,7 @@ async def create_training_product(session: AsyncSession, admin: User, payload) -
                 published=payload.published,
                 pinned=payload.pinned,
                 views_count=0,
-                content_revision=await session.scalar(select(func.nextval("content_publication_revision_seq"))) if payload.published else None,
+                content_revision=await next_publication_revision(session) if payload.published else None,
                 published_at=datetime.now(UTC) if payload.published else None,
             )
             session.add(product)
@@ -532,8 +532,8 @@ async def update_training_product(session: AsyncSession, admin: User, product_id
                 status_code=409,
                 detail="Сначала сохраните хотя бы один материал, затем опубликуйте обучение",
             )
-        if target_published and not product.published:
-            product.content_revision = await session.scalar(select(func.nextval("content_publication_revision_seq")))
+        if target_published and product.content_revision is None:
+            product.content_revision = await next_publication_revision(session)
             product.published_at = datetime.now(UTC)
         for field, value in changes.items():
             if field == "price_af_coins" and value is not None:
@@ -584,11 +584,10 @@ async def set_training_product_state(
                     status_code=409,
                     detail="Сначала сохраните хотя бы один материал, затем опубликуйте обучение",
                 )
-            was_published = product.published and product.deleted_at is None
             product.deleted_at = None
             product.published = True
-            if not was_published:
-                product.content_revision = await session.scalar(select(func.nextval("content_publication_revision_seq")))
+            if product.content_revision is None:
+                product.content_revision = await next_publication_revision(session)
                 product.published_at = datetime.now(UTC)
         elif action == "hide":
             product.published = False
@@ -1935,7 +1934,7 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
             raise HTTPException(status_code=409, detail=f"Cannot change {deal.status} to {next_status}")
         now = datetime.now(UTC)
         if next_status in {"seller_contacted", "transfer_in_progress"} and delivery_deadline_expired(deal, now):
-            raise HTTPException(status_code=409, detail="Срок передачи истёк. Сделка ожидает автоматического возврата")
+            raise HTTPException(status_code=409, detail="Срок передачи истёк. Принятый заказ требует проверки администратора." if seller_has_accepted(deal) else "Срок передачи истёк. Сделка ожидает автоматического возврата")
         needs_response_marker = (
             actor.id == deal.seller_id
             and deal.status in {"paid", "seller_contacted"}
@@ -2193,12 +2192,14 @@ def _apply_deal_refund(
 
 
 async def cancel_deal(session: AsyncSession, actor: User, deal_id: uuid.UUID) -> Deal:
-    """Cancel an unstarted transfer and atomically release the buyer's reservation."""
+    """Cancel only before acceptance, serialized against the seller's Deal lock."""
     async with session.begin():
         deal, listing = await lock_deal_and_listing(session, deal_id)
         if not deal or actor.id not in {deal.buyer_id, deal.seller_id}:
             raise HTTPException(status_code=404, detail="Deal not found")
-        if deal.status not in {"paid", "seller_contacted"}:
+        if seller_has_accepted(deal):
+            raise HTTPException(status_code=409, detail="Продавец уже подтвердил сделку. Самостоятельная отмена недоступна. Обратитесь в поддержку.")
+        if deal.status != "paid" or deal.cancelled_at or deal.completed_at or deal.buyer_confirmed_at:
             raise HTTPException(status_code=409, detail="This deal can no longer be cancelled automatically")
 
         buyer_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
@@ -2245,6 +2246,7 @@ async def auto_cancel_unanswered_deal(
             or not deal.seller_response_deadline
             or response_deadline > current_time
             or deal.seller_responded_at is not None
+            or seller_has_accepted(deal)
             or deal.seller_timeout_processed_at is not None
         ):
             return None
@@ -2315,6 +2317,9 @@ async def auto_cancel_undelivered_deal(session: AsyncSession, deal_id: uuid.UUID
     async with session.begin():
         deal, listing = await lock_deal_and_listing(session, deal_id)
         if not deal or not delivery_deadline_expired(deal, current_time):
+            return False
+        if seller_has_accepted(deal):
+            await escalate_accepted_delivery(session, deal, current_time)
             return False
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == deal.buyer_id).with_for_update())
         if (not listing or not wallet or listing.status != "reserved"

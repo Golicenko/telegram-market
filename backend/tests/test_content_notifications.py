@@ -65,7 +65,7 @@ async def test_mark_seen_keeps_the_received_marker_when_newer_content_exists():
     user = make_user()
     # First snapshot says revision 4 now exists, but the browser only received marker 3.
     # The response therefore still reports revision 4 as unseen.
-    session = FakeSession([None, 4, 4, ContentSeenState(user_id=user.id, section="training", last_seen_revision=3), 4, 1])
+    session = FakeSession([4, ContentSeenState(user_id=user.id, section="training", last_seen_revision=3), 4, 1])
     result = await mark_content_seen("training", ContentMarkSeenCreate(marker=3), user, session)
     assert result == {"unseen_count": 1, "marker": 4}
     assert session.commits == 1

@@ -35,6 +35,11 @@ class Session:
     async def scalar(self, _query):
         return self.scalar_values.pop(0) if self.scalar_values else None
 
+    async def execute(self, query):
+        # This unit fixture is not a lock test; real concurrent writers are
+        # exercised in test_catalog_and_acceptance_postgres.py.
+        assert "pg_advisory_xact_lock" in str(query)
+
 
 def payload():
     return TrainingProductCreate(

@@ -24,12 +24,53 @@ test("badges are server-backed, disappear at zero and cap their label at 99+", (
   assert.match(app, /count > 99 \? "99\+" : String\(count\)/);
 });
 
-test("section opening marks only the server marker loaded before the refreshed list", () => {
-  const flow = app.slice(app.indexOf("async function openContentSection"), app.indexOf("async function refreshUnreadMessages"));
-  assert.ok(flow.indexOf('api.request("/content/unseen")') < flow.indexOf("await loadOptionalData("));
-  assert.ok(flow.indexOf("await loadOptionalData(") < flow.indexOf("mark-seen"));
-  assert.match(flow, /state\.failedOptional\.has\(section\)/);
-  assert.match(flow, /snapshot\?\.\[section\]\?\.marker/);
+function sectionHarness(request) {
+  const vm = require("node:vm");
+  const state = { currentView: "unique", contentLoads: { unique: 0, training: 0 }, contentSyncVersion: 0, contentLoading: 0, failedOptional: new Set(), contentUnseen: {} };
+  const context = { state, api: { request }, document: { hidden: false }, updateFilterOptions() {}, renderAll() { context.rendered = true; }, renderContentBadges() {}, loadOptionalData: async () => {} };
+  vm.createContext(context);
+  vm.runInContext(app.slice(app.indexOf("async function openContentSection"), app.indexOf("async function refreshContentBadges")), context);
+  return context;
+}
+
+test("acknowledges the rendered snapshot, not a later unseen revision", async () => {
+  let marker;
+  const c = sectionHarness(async (url, options) => {
+    if (url.endsWith("snapshot")) return { items: [{ id: "car" }], marker: 3 };
+    assert.equal(c.rendered, true); marker = JSON.parse(options.body).marker;
+    return { marker: 4, unseen_count: 1 };
+  });
+  await c.openContentSection("unique");
+  assert.equal(marker, 3); assert.equal(c.state.contentUnseen.unique.unseen_count, 1);
+  assert.equal(c.state.contentLoading, 0);
+});
+
+test("failed, hidden or abandoned catalogue load never marks content seen", async () => {
+  for (const mode of ["error", "hidden", "left"]) {
+    let calls = 0;
+    const c = sectionHarness(async () => {
+      calls++;
+      if (mode === "error") throw new Error("offline");
+      if (mode === "hidden") c.document.hidden = true;
+      if (mode === "left") c.state.currentView = "market";
+      return { items: [], marker: 4 };
+    });
+    if (mode === "error") await assert.rejects(c.openContentSection("unique"));
+    else await c.openContentSection("unique");
+    assert.equal(calls, 1); assert.equal(c.state.contentLoading, 0); assert.equal(c.rendered, undefined);
+  }
+});
+
+test("late section response cannot acknowledge a superseded snapshot", async () => {
+  let resolveFirst; const markers = []; let loads = 0;
+  const c = sectionHarness(async (url, options) => {
+    if (url.endsWith("snapshot")) return ++loads === 1 ? new Promise(resolve => { resolveFirst = resolve; }) : { items: [], marker: 4 };
+    markers.push(JSON.parse(options.body).marker); return { unseen_count: 0, marker: 4 };
+  });
+  const first = c.openContentSection("unique");
+  await c.openContentSection("unique");
+  resolveFirst({ items: [], marker: 3 }); await first;
+  assert.deepEqual(markers, [4]);
 });
 
 test("opening a training product records a backend view without blocking the page", () => {

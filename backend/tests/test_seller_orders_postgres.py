@@ -60,7 +60,7 @@ async def test_paid_order_notifies_before_id_once_and_routes_to_deal():
 
 
 @pytest.mark.asyncio
-async def test_parallel_acceptance_once_no_money_no_timer_extension_and_refund_at_24h():
+async def test_parallel_acceptance_once_no_money_no_timer_extension_and_review_at_24h():
     from app.routes import seller_contacted
     async with isolated_pg() as (_, sessions):
         buyer, seller, listing, deal = await paid_order(sessions)
@@ -95,12 +95,14 @@ async def test_parallel_acceptance_once_no_money_no_timer_extension_and_refund_a
         async def timeout():
             async with sessions() as session:
                 return await auto_cancel_undelivered_deal(session, deal.id, now=deadline + timedelta(seconds=1))
-        assert sum(await asyncio.gather(*(timeout() for _ in range(8)))) == 1
+        assert not any(await asyncio.gather(*(timeout() for _ in range(8))))
         async with sessions() as session:
             stored = await session.get(Deal, deal.id)
-            assert stored.status == "cancelled" and stored.cancellation_reason == "delivery_timeout"
-            assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).available_balance == 100
-            assert await session.scalar(select(func.count()).select_from(WalletTransaction).where(WalletTransaction.transaction_type == "refund")) == 1
+            assert stored.status == "disputed" and stored.needs_admin_review_at
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).frozen_balance == 100
+            assert await session.scalar(select(func.count()).select_from(WalletTransaction).where(WalletTransaction.transaction_type == "refund")) == 0
+            assert await session.scalar(select(func.count()).select_from(DealEvent).where(DealEvent.event_type == "accepted_delivery_overdue")) == 1
+            assert await session.scalar(select(func.count()).select_from(Notification).where(Notification.notification_type == "deal_review_status")) == 2
             assert await session.scalar(select(func.count()).select_from(WalletTransaction).where(WalletTransaction.transaction_type == "sale_income")) == 0
 
 

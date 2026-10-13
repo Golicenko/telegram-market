@@ -710,7 +710,7 @@ async def recover_seller_response_timeouts() -> None:
                 Deal.status.in_(("paid", "seller_contacted")),
                 or_(
                     and_(Deal.seller_response_deadline <= now, Deal.seller_responded_at.is_(None),
-                         Deal.seller_timeout_processed_at.is_(None)),
+                         Deal.seller_timeout_processed_at.is_(None), Deal.seller_accepted_at.is_(None), Deal.status == "paid"),
                     and_(Deal.seller_delivery_deadline <= now, Deal.transfer_started_at.is_(None)),
                 ),
             )
@@ -1183,6 +1183,8 @@ async def client_diagnostic(
 
 @router.get("/me", response_model=MeOut)
 async def me(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    from .content_catalog import initialize_content_seen
+    await initialize_content_seen(session, user.id)
     wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
     return MeOut(user=user, wallet=wallet, admin_access=staff_access(user))
 
@@ -1725,18 +1727,46 @@ async def content_unseen_section(session: AsyncSession, user_id: uuid.UUID, sect
 
 @router.get("/content/unseen", response_model=ContentUnseenOut)
 async def get_content_unseen(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    from .content_catalog import initialize_content_seen
+    await initialize_content_seen(session, user.id)
     return ContentUnseenOut(
         training=await content_unseen_section(session, user.id, "training"),
         unique=await content_unseen_section(session, user.id, "unique"),
     )
 
 
+@router.get("/content/{section}/snapshot")
+async def content_snapshot(section: str, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    from .content_catalog import catalogue, initialize_content_seen
+    if section not in {"training", "unique"}:
+        raise HTTPException(404, "Раздел не найден")
+    await initialize_content_seen(session, user.id)
+    model, visible = catalogue(section)
+    if section == "unique":
+        await expire_promotions(session)
+    if section == "training" and user.role == "admin":
+        visible = (TrainingProduct.deleted_at.is_(None), or_(TrainingProduct.published.is_(True), TrainingProduct.admin_id == user.id))
+    # The marker is derived from exactly the rows returned by this SELECT,
+    # never a second MAX query that can observe a later publication.
+    rows = list((await session.scalars(select(model).where(*visible)
+        .order_by(model.pinned.desc(), model.created_at.desc()))).all())
+    marker = max((row.content_revision or 0 for row in rows if section != "training" or row.published), default=0)
+    items = ([TrainingProductOut.model_validate(row) for row in rows] if section == "training"
+             else await listing_collection_out(session, rows, user.id))
+    return {"items": items, "marker": marker}
+
+
 @router.post("/content/{section}/mark-seen")
 async def mark_content_seen(section: str, payload: ContentMarkSeenCreate, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
     if section not in {"training", "unique"}:
         raise HTTPException(status_code=404, detail="Раздел не найден")
-    current = await content_unseen_section(session, user.id, section)
-    marker = min(int(payload.marker), int(current["marker"]))
+    # Hidden/deleted content may have been present in the loaded snapshot.
+    # Capping at the currently VISIBLE max would lose that acknowledgement and
+    # show it as unread again after restore. Never acknowledge future revisions.
+    model = TrainingProduct if section == "training" else Listing
+    conditions = () if section == "training" else (Listing.listing_type == "unique",)
+    published_max = int(await session.scalar(select(func.coalesce(func.max(model.content_revision), 0)).where(*conditions)) or 0)
+    marker = min(int(payload.marker), published_max)
     await session.execute(
         pg_insert(ContentSeenState)
         .values(user_id=user.id, section=section, last_seen_revision=marker)

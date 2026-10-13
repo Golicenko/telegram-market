@@ -74,6 +74,13 @@ const server = http.createServer((req,res)=>{
       await accept.evaluate(el=>{el.click();el.click();});
       assert(await accept.isDisabled());
       await accept.waitFor({state:"hidden"});assert.equal(accepts,1);
+      assert.equal(await page.locator('[data-deal-action="cancel"]').count(),0);
+      user={id:"buyer",telegram_id:1,first_name:"Buyer",role:"user"};
+      await page.reload();
+      await page.getByText("Продавец принял заказ. Отмена — только через поддержку. Средства остаются под защитой.",{exact:true}).waitFor();
+      assert.equal(await page.locator('[data-deal-action="cancel"]').count(),0);
+      assert(await page.getByRole('button',{name:'Нужна помощь',exact:true}).isVisible());
+      user={id:"seller",telegram_id:2,first_name:"Seller",role:"user"};
       await page.reload();
       const transfer=page.locator('[data-deal-action="transfer"]');await transfer.waitFor();
       assert.equal(await page.locator('[data-deal-action="seller-contacted"]').count(),0);
@@ -139,6 +146,14 @@ const server = http.createServer((req,res)=>{
       await modal.getByText("Сделка завершена",{exact:true}).waitFor();
       await modal.waitFor({state:"detached"});
       assert.equal(receipts,1);assert.equal(deal.status,"completed");
+      // Separate recovered review state: support remains reachable, no financial CTA.
+      deal.status="disputed";
+      await page.goto(base+"/?deal_id=deal");
+      await page.getByRole('button',{name:'Связаться с поддержкой',exact:true}).waitFor();
+      assert.equal(await page.locator('[data-deal-action="cancel"],[data-deal-action="transfer"],[data-deal-action="confirm"]').count(),0);
+      await page.getByRole('button',{name:'Связаться с поддержкой',exact:true}).click();
+      await page.locator('[data-view="support"]').waitFor({state:'visible'});
+      assert.equal(receipts,1);assert.equal(transfers,2);
       await page.goto(base+"/?view=profile");
       await page.locator('[data-view="profile"]').waitFor({state:"visible"});
       assert.deepEqual(errors,[]);

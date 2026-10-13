@@ -51,7 +51,7 @@ async def queue_seller_order_reminder(session, deal_id, now=None):
         body = (f"🚗 Заказ #{str(deal.id)[:8]} ожидает вашего ответа.\n"
             "Откройте сделку и нажмите «Принять заказ», если готовы передать машину.\n"
             f"Срок передачи: {utc(deal.seller_delivery_deadline):%d.%m.%Y %H:%M} UTC. "
-            "Без отметки передачи до срока покупателю будет выполнен возврат.")
+            "Если заказ не принят — по истечении срока будет возврат. Если принят, но не передан — проверка администратора.")
         session.add(Notification(user_id=deal.seller_id, notification_type="seller_order_reminder",
             title="Заказ ожидает ответа", body=body, delivery_status="pending",
             payload={"deal_id":str(deal.id), "stage":stage}))
