@@ -74,6 +74,13 @@ const server = http.createServer((req,res)=>{
       await accept.evaluate(el=>{el.click();el.click();});
       assert(await accept.isDisabled());
       await accept.waitFor({state:"hidden"});assert.equal(accepts,1);
+      assert.equal(await page.locator('[data-deal-action="cancel"]').count(),0);
+      user={id:"buyer",telegram_id:1,first_name:"Buyer",role:"user"};
+      await page.reload();
+      await page.getByText("Продавец принял заказ. Отмена — только через поддержку. Средства остаются под защитой.",{exact:true}).waitFor();
+      assert.equal(await page.locator('[data-deal-action="cancel"]').count(),0);
+      assert(await page.getByRole('button',{name:'Нужна помощь',exact:true}).isVisible());
+      user={id:"seller",telegram_id:2,first_name:"Seller",role:"user"};
       await page.reload();
       const transfer=page.locator('[data-deal-action="transfer"]');await transfer.waitFor();
       assert.equal(await page.locator('[data-deal-action="seller-contacted"]').count(),0);

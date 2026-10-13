@@ -710,7 +710,7 @@ async def recover_seller_response_timeouts() -> None:
                 Deal.status.in_(("paid", "seller_contacted")),
                 or_(
                     and_(Deal.seller_response_deadline <= now, Deal.seller_responded_at.is_(None),
-                         Deal.seller_timeout_processed_at.is_(None)),
+                         Deal.seller_timeout_processed_at.is_(None), Deal.seller_accepted_at.is_(None), Deal.status == "paid"),
                     and_(Deal.seller_delivery_deadline <= now, Deal.transfer_started_at.is_(None)),
                 ),
             )

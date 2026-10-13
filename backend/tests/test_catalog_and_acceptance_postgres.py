@@ -38,7 +38,7 @@ def headers(user):
 async def draft(sessions, admin, section):
     async with sessions() as session, session.begin():
         item = (TrainingProduct(admin_id=admin.id, title="Course", short_description="Short", full_description="Full", cover_url="/test", product_type="personal", price_af_coins=10, published=False)
-                if section == "training" else Listing(seller_id=admin.id, listing_type="unique", status="paused", brand="Car", model="Test", power_hp=1, max_speed_kph=1, description="Test", price_af_coins=10))
+                if section == "training" else Listing(seller_id=admin.id, listing_type="unique", game_version="car_parking_1", status="paused", brand="Car", model="Test", power_hp=1, max_speed_kph=1, description="Test", price_af_coins=10))
         session.add(item)
     return item
 
@@ -176,3 +176,44 @@ async def test_migration_resets_existing_badges_without_deleting_users():
             assert await conn.scalar(text("SELECT COUNT(*) FROM users")) == 1
             assert await conn.scalar(text("SELECT last_seen_revision FROM content_seen_states WHERE section='training'")) == 7
             assert await conn.scalar(text("SELECT COUNT(*) FROM content_seen_states")) == 2
+
+
+@pytest.mark.asyncio
+async def test_publication_revisions_serialize_until_commit_and_rollback_is_not_visible():
+    from app.content_catalog import next_publication_revision
+    async with isolated_pg() as (engine, sessions):
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE SEQUENCE content_publication_revision_seq"))
+        admin = await signed_login(sessions, 88011)
+        admin.role = "admin"
+        first, second = await draft(sessions, admin, "training"), await draft(sessions, admin, "training")
+        async with sessions() as writer:
+            async with writer.begin():
+                item = await writer.get(TrainingProduct, first.id)
+                item.content_revision = await next_publication_revision(writer)
+                revision = item.content_revision
+                item.published = True
+                await writer.flush()
+                started = asyncio.Event()
+                async def competing():
+                    started.set()
+                    return await publish(sessions, admin, "training", second)
+                other = asyncio.create_task(competing())
+                await started.wait()
+                await asyncio.sleep(0.05)
+                assert not other.done()  # N+1 cannot commit ahead of N.
+                async with sessions() as reader:
+                    assert not await reader.scalar(select(TrainingProduct.published).where(TrainingProduct.id == first.id))
+            published = await asyncio.wait_for(other, 10)
+            assert published.content_revision > revision
+        third = await draft(sessions, admin, "training")
+        with pytest.raises(RuntimeError):
+            async with sessions() as writer, writer.begin():
+                item = await writer.get(TrainingProduct, third.id)
+                item.content_revision = await next_publication_revision(writer)
+                item.published = True
+                await writer.flush()
+                raise RuntimeError("Publication failed")
+        async with sessions() as reader:
+            item = await reader.get(TrainingProduct, third.id)
+            assert not item.published and item.content_revision is None

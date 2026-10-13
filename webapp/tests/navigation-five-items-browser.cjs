@@ -36,14 +36,20 @@ const server = http.createServer((req, res) => {
       });
       const user = { id: 'navigation-test-user', telegram_id: 1, first_name: 'Покупатель', username: null, photo_url: null, role: 'user' };
       const wallet = { available_balance: 100, frozen_balance: 0, total_earned: 0 };
+      const counts = { unique: 3, training: 1 }, acknowledgements = [];
       await page.route('**/api/**', route => {
         const endpoint = new URL(route.request().url()).pathname.slice(4);
         let body = [];
         if (endpoint === '/me') body = { user, wallet };
         else if (endpoint === '/profile') body = { user, wallet, active_listings: [], sold_listings: [], wallet_transactions: [], withdrawals: [], conversations: [], deal_threads: [] };
         else if (endpoint === '/conversations/unread-summary') body = { total_unread: 0, conversations: [] };
-        else if (endpoint === '/content/unseen') body = { unique: { unseen_count: 3, marker: 3 }, training: { unseen_count: 1, marker: 1 } };
-        else if (endpoint.endsWith('/mark-seen')) body = { unseen_count: 0, marker: 3 };
+        else if (endpoint === '/content/unseen') body = { unique: { unseen_count: counts.unique, marker: 3 }, training: { unseen_count: counts.training, marker: 1 } };
+        else if (endpoint.endsWith('/snapshot')) body = { items: [], marker: endpoint.includes('/unique/') ? 3 : 1 };
+        else if (endpoint.endsWith('/mark-seen')) {
+          const section = endpoint.includes('/unique/') ? 'unique' : 'training';
+          acknowledgements.push({ section, marker: route.request().postDataJSON().marker }); counts[section] = 0;
+          body = { unseen_count: 0, marker: section === 'unique' ? 3 : 1 };
+        }
         return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
       });
       const url = `http://127.0.0.1:${server.address().port}/`;
@@ -89,6 +95,7 @@ const server = http.createServer((req, res) => {
       for (const view of ['unique', 'training', 'market', 'profile']) {
         await nav.locator(`[data-nav-target="${view}"]`).click();
         await page.locator(`[data-view="${view}"]`).waitFor({ state: 'visible' });
+        if (['unique', 'training'].includes(view)) await nav.locator(`#${view}ContentBadge`).waitFor({ state: 'hidden' });
         assert.equal(await nav.locator('[aria-current="page"]').getAttribute('data-nav-target'), view);
         await more.click();
         assert(await referralPage.isVisible());
@@ -108,6 +115,9 @@ const server = http.createServer((req, res) => {
       await referralPage.waitFor({ state: 'visible' });
       assert(!await page.locator('[data-view="market"]').isVisible());
       assert.equal(await page.locator('[data-view="more"]').count(), 1);
+      await nav.locator('#uniqueContentBadge').waitFor({ state: 'hidden' });
+      await nav.locator('#trainingContentBadge').waitFor({ state: 'hidden' });
+      assert.deepEqual(acknowledgements, [{ section: 'unique', marker: 3 }, { section: 'training', marker: 1 }]);
       assert.deepEqual(errors, []);
       console.log(`${width}px OK: equal cells, centered Market, 4 PNGs, safe area, routes, badges, referral page/header`);
       await context.close();
