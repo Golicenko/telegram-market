@@ -146,6 +146,14 @@ const server = http.createServer((req,res)=>{
       await modal.getByText("Сделка завершена",{exact:true}).waitFor();
       await modal.waitFor({state:"detached"});
       assert.equal(receipts,1);assert.equal(deal.status,"completed");
+      // Separate recovered review state: support remains reachable, no financial CTA.
+      deal.status="disputed";
+      await page.goto(base+"/?deal_id=deal");
+      await page.getByRole('button',{name:'Связаться с поддержкой',exact:true}).waitFor();
+      assert.equal(await page.locator('[data-deal-action="cancel"],[data-deal-action="transfer"],[data-deal-action="confirm"]').count(),0);
+      await page.getByRole('button',{name:'Связаться с поддержкой',exact:true}).click();
+      await page.locator('[data-view="support"]').waitFor({state:'visible'});
+      assert.equal(receipts,1);assert.equal(transfers,2);
       await page.goto(base+"/?view=profile");
       await page.locator('[data-view="profile"]').waitFor({state:"visible"});
       assert.deepEqual(errors,[]);

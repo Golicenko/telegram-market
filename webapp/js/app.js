@@ -2440,7 +2440,7 @@ async function hideCurrentConversation() {
       panel.append(title, copy); return;
     }
     if (isBuyer && hasDetails) {
-      title.textContent = deal.seller_accepted_at ? "✅ Продавец принял заказ" : "⏳ Оплачено, ждём ответа продавца";
+      title.textContent = deal.seller_accepted_at || deal.status === "seller_contacted" ? "✅ Продавец принял заказ" : "⏳ Оплачено, ждём ответа продавца";
       copy.textContent = `Ваш ID для передачи: ${deal.buyer_game_id}\nСредства удерживаются до подтверждения получения. Если необходимо что-то уточнить, используйте чат ниже.`;
       panel.append(title, copy);
       return;
@@ -2576,7 +2576,7 @@ async function hideCurrentConversation() {
         state.dealTimerId = window.setInterval(updateDeliveryTimer, 1000);
       }
     }
-    if (isSeller && !deal.seller_accepted_at && ["paid", "seller_contacted"].includes(deal.status)) {
+    if (isSeller && !deal.seller_accepted_at && deal.status === "paid") {
       const accept = document.createElement("button"); accept.className = "deal-confirm"; accept.dataset.dealAction = "seller-contacted"; accept.textContent = "Принять заказ";
       accept.disabled = Boolean(deal.seller_delivery_deadline && new Date(deal.seller_delivery_deadline).getTime() <= Date.now());
       elements.dealControls.append(accept);
@@ -2627,6 +2627,11 @@ async function hideCurrentConversation() {
       if (deal.status === "paid" && !deal.seller_accepted_at && !deal.transfer_started_at) secondary.append(cancel);
       else { const notice = document.createElement("p"); notice.textContent = "Продавец принял заказ. Отмена — только через поддержку. Средства остаются под защитой."; elements.dealControls.append(notice); }
       secondary.append(support); elements.dealControls.append(secondary);
+    }
+    if ((isBuyer || isSeller) && deal.status === "disputed") {
+      const support = document.createElement("button"); support.className = "deal-support";
+      support.dataset.dealAction = "support"; support.textContent = "Связаться с поддержкой";
+      elements.dealControls.append(support);
     }
   }
 
