@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .config import get_settings
 from .content_catalog import next_publication_revision
 from .deal_lifecycle import audit_deal, stop_reminders, delivery_deadline_expired, seller_has_accepted, escalate_accepted_delivery
-from .seller_orders import paid_order_body
+from .seller_orders import paid_order_body, paid_order_payload
 from .chat_access import ACTIVE_DEAL_STATUSES, require_active_chat, require_active_chat_by_id
 from .inactivity import record_buyer_request, record_seller_response, hide_active_listings, offer_response_expired, SELLER_NOTICE, BUYER_NOTICE
 from .models import (
@@ -1629,7 +1629,7 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
                     "deal_created",
                     "Вашу машину купили",
                     paid_order_body(deal, listing),
-                    {"deal_id": str(deal.id)},
+                    await paid_order_payload(session, deal, listing),
                 )
 
         session.add(
@@ -1764,7 +1764,7 @@ async def _purchase_locked_listing(
             "deal_created",
             "Вашу машину купили",
             paid_order_body(deal, listing),
-            {"deal_id": str(deal.id)},
+            await paid_order_payload(session, deal, listing),
         )
     return deal, seller.telegram_id if seller and seller.bot_started else None
 

@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import logging
 from sqlalchemy import select, or_
 from .config import get_settings
-from .models import Deal, DealEvent, Notification
+from .models import Deal, DealEvent, ListingImage, Notification
 from .deal_lifecycle import audit_deal
 
 logger = logging.getLogger("autoflow.seller_orders")
@@ -15,11 +15,26 @@ def utc(value):
 
 def paid_order_body(deal, listing):
     game = {"car_parking_1":"Car Parking 1", "car_parking_2":"Car Parking 2"}.get(listing.game_version, "")
+    # Listing names are unbounded; keep all essential fields within a photo caption.
+    name = " ".join(filter(None, (listing.brand, listing.model)))
+    name = name if len(name) <= 180 else name[:179] + "…"
     return (f"🚗 Вашу машину купили — заказ #{str(deal.id)[:8]}\n"
-        f"Автомобиль: {listing.brand} {listing.model} · {game}\nСумма: {deal.price_af_coins} AF\n"
+        f"Автомобиль: {name} · {game}\nСумма: {deal.price_af_coins} AF\n"
         "Откройте заказ, примите его, проверьте ID покупателя и передайте машину.\n"
         f"Срок передачи: {utc(deal.seller_delivery_deadline):%d.%m.%Y %H:%M} UTC. "
         "Если ID ещё не указан — дождитесь его в сделке. Деньги пока удерживаются.")
+
+
+async def paid_order_payload(session, deal, listing):
+    """Freeze this purchase's first image in the existing transactional outbox."""
+    photo = await session.scalar(select(ListingImage.url).where(
+        ListingImage.listing_id == listing.id).order_by(ListingImage.position, ListingImage.id).limit(1))
+    return {"deal_id": str(deal.id), "sale_snapshot": {
+        "listing_id": str(listing.id), "photo_url": photo,
+        "name": " ".join(filter(None, (listing.brand, listing.model))),
+        "game_version": listing.game_version, "price_af_coins": str(deal.price_af_coins),
+        "order_number": str(deal.id)[:8],
+    }}
 
 
 async def queue_seller_order_reminder(session, deal_id, now=None):
