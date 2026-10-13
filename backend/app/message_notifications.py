@@ -1,9 +1,11 @@
 """Durable, recipient-scoped Telegram outbox. Never replay an ambiguous send."""
 import asyncio
+import hashlib
 import logging
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin, urlsplit
 
 import httpx
 from sqlalchemy import select, update, or_
@@ -13,7 +15,7 @@ from .deal_lifecycle import delivery_deadline_expired
 from .config import get_settings
 from .database import SessionLocal
 from .frontend import versioned_webapp_url
-from .models import Conversation, ConversationMessage, Deal, DealEvent, Notification, User
+from .models import Conversation, ConversationMessage, Deal, DealEvent, Listing, Notification, User
 
 logger = logging.getLogger("autoflow.message_notifications")
 
@@ -118,13 +120,78 @@ async def claim_delivery(session, user_id, now):
             notice.delivery_claimed_at = now
             notice.delivery_attempts = int(notice.delivery_attempts or 0) + 1
         contact_url = None
+        photo_url = None
+        if latest.notification_type == "deal_created":
+            if "sale_snapshot" not in latest.payload:
+                # Only already-pending pre-upgrade notices. Never replay sent notices.
+                from .seller_orders import paid_order_payload
+                deal = await session.get(Deal, uuid.UUID(latest.payload["deal_id"]))
+                listing = await session.get(Listing, deal.listing_id) if deal else None
+                if listing and listing.seller_id == user.id:
+                    latest.payload = {**latest.payload, **await paid_order_payload(session, deal, listing),
+                                      "photo_snapshot_source": "legacy_listing"}
+                    logger.info("purchase_photo_legacy_snapshot notification_id=%s deal_id=%s", latest.id, deal.id)
+            photo_url = latest.payload.get("sale_snapshot", {}).get("photo_url")
         if latest.notification_type == "withdrawal_created" and latest.payload.get("withdrawal_user_id"):
             from .withdrawal_support import profile_url
             target_user = await session.get(User, uuid.UUID(latest.payload["withdrawal_user_id"]))
             if target_user:
                 contact_url = profile_url(target_user)
         return {"ids": [notice.id for notice in eligible], "telegram_id": user.telegram_id, "text": text,
-                "params": params, "contact_url": contact_url}
+                "params": params, "contact_url": contact_url,
+                "notification_type": latest.notification_type, "photo_url": photo_url}
+
+
+def purchase_photo_reference(value, base):
+    """Resolve public upload URLs; preserve Telegram file_id rather than URL-joining it."""
+    if not isinstance(value, str) or not value.strip():
+        return None, "photo_missing"
+    value = value.strip()
+    if any(ord(char) < 32 for char in value) or "\\" in value:
+        return None, "photo_reference_invalid"
+    if re.fullmatch(r"[A-Za-z0-9_-]{20,}", value):
+        return value, None
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme and parsed.scheme.lower() not in {"http", "https"}:
+            return None, "photo_scheme_invalid"
+        resolved = urljoin(base.rstrip("/") + "/", value)
+        parsed = urlsplit(resolved)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return None, "photo_url_invalid"
+        return resolved, None
+    except ValueError:
+        return None, "photo_url_invalid"
+
+
+def safe_delivery_error(value, token):
+    # Telegram errors may echo a URL: never log bot tokens or signed media query strings.
+    value = str(value).replace(token, "[redacted]") if token else str(value)
+    return re.sub(r"(?:https?://|tg://)\S+", "[url]", value).replace("\n", " ").replace("\r", " ")[:180]
+
+
+async def post_delivery(client, settings, method, payload):
+    try:
+        response = await client.post(f"https://api.telegram.org/bot{settings.bot_token}/{method}", json=payload)
+        data = response.json()
+        if not isinstance(data, dict):
+            return "unknown", "invalid_telegram_response", None
+        if response.is_success and data.get("ok") is True:
+            return "sent", None, response.status_code
+        if data.get("ok") is not False:
+            return "unknown", "invalid_telegram_response", None
+        if (response.status_code == 403 and data.get("error_code") == 403
+                and "bot was blocked by the user" in str(data.get("description", "")).lower()):
+            return "blocked", "telegram_bot_blocked_by_user", 403
+        if method == "sendPhoto" and response.status_code >= 500:
+            return "unknown", f"telegram_http_{response.status_code}", response.status_code
+        reason = f"telegram_http_{response.status_code}"
+        if method == "sendPhoto":
+            reason += ":" + safe_delivery_error(data.get("description", ""), settings.bot_token)
+        return "failed", reason, response.status_code
+    except (httpx.HTTPError, ValueError) as error:
+        # No Telegram idempotency key: a lost response may mean already delivered.
+        return "unknown", f"delivery_result_unknown:{type(error).__name__}", None
 
 
 async def send_delivery(job):
@@ -133,29 +200,37 @@ async def send_delivery(job):
     if not settings.bot_token or not base:
         return "failed", "configuration_missing"
     target = versioned_webapp_url(f"{base.rstrip('/')}/?{urlencode(job['params'])}")
+    is_purchase = job.get("notification_type") == "deal_created"
     payload = {"chat_id": job["telegram_id"], "text": job["text"], "reply_markup": {
-        "inline_keyboard": [[{"text": "Открыть", "web_app": {"url": target}}]]}}
+        "inline_keyboard": [[{"text": "Открыть сделку" if is_purchase else "Открыть", "web_app": {"url": target}}]]}}
     if job.get("contact_url"):
         payload["reply_markup"]["inline_keyboard"] = [
             [{"text": "Открыть пользователя", "url": job["contact_url"]},
              {"text": "Открыть заявку", "web_app": {"url": target}}],
             [{"text": "Связаться через бота", "web_app": {"url": target + "&contact=1"}}],
         ]
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(f"https://api.telegram.org/bot{settings.bot_token}/sendMessage", json=payload)
-        data = response.json()
-        if not isinstance(data, dict):
-            return "unknown", "invalid_telegram_response"
-        if response.is_success and data.get("ok") is True:
-            return "sent", None
-        if (response.status_code == 403 and data.get("error_code") == 403
-                and "bot was blocked by the user" in str(data.get("description", "")).lower()):
-            return "blocked", "telegram_bot_blocked_by_user"
-        return "failed", f"telegram_http_{response.status_code}"
-    except (httpx.HTTPError, ValueError):
-        # Telegram has no sendMessage idempotency key. A timeout may mean delivered.
-        return "unknown", "delivery_result_unknown"
+    photo_error = None
+    async with httpx.AsyncClient(timeout=15) as client:
+        if is_purchase:
+            photo, photo_error = purchase_photo_reference(job.get("photo_url"), base)
+            if photo:
+                photo_payload = {"chat_id": job["telegram_id"], "photo": photo,
+                                 "caption": job["text"][:1024], "reply_markup": payload["reply_markup"]}
+                status, photo_error, code = await post_delivery(client, settings, "sendPhoto", photo_payload)
+                if status == "sent":
+                    return status, None
+                logger.warning("purchase_photo_failed notification_ids=%s deal_id=%s photo_hash=%s reason=%s",
+                    job.get("ids"), job["params"].get("deal_id"), hashlib.sha256(photo.encode()).hexdigest()[:16], photo_error)
+                # A definitive 400 rejects the photo. Never send text after an ambiguous
+                # timeout/5xx, a block or rate limit: it could duplicate/spam the recipient.
+                if status != "failed" or code != 400:
+                    return status, (photo_error or "photo_failed")[:128]
+            else:
+                logger.warning("purchase_photo_missing notification_ids=%s deal_id=%s reason=%s",
+                    job.get("ids"), job["params"].get("deal_id"), photo_error)
+        status, error, _ = await post_delivery(client, settings, "sendMessage", payload)
+        detail = (f"photo_fallback:{photo_error}" + (f";{error}" if error else "")) if photo_error else error
+        return status, detail[:128] if detail else None
 
 
 async def queue_blocked_seller_alert(session, notice_id):
