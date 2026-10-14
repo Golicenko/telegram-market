@@ -294,7 +294,9 @@ async def expire_promotions(session: AsyncSession) -> None:
     result = await session.execute(
         update(Listing)
         .where(Listing.pinned.is_(True), Listing.pinned_until <= datetime.now(UTC))
-        .values(pinned=False, pinned_until=None)
+        # Retain the exact paid period for the durable expiry/renewal worker.
+        # Removing priority must not erase the evidence before it is processed.
+        .values(pinned=False)
     )
     if result.rowcount:
         await session.commit()

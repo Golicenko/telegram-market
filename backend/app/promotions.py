@@ -99,7 +99,8 @@ async def renewal_quote(renewal_id: uuid.UUID, user: User = Depends(get_current_
     await check_renewal(session, renewal_id, user.id, listing)
     wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
     return {**quote_values(wallet.available_balance if wallet else 0, expiry), "renewal_id": expiry.id,
-            "listing_id": listing.id, "title": " ".join(filter(None, (listing.brand, listing.model)))}
+            "listing_id": listing.id, "price_stars": expiry.price_stars,
+            "title": " ".join(filter(None, (listing.brand, listing.model)))}
 
 
 async def start_order(session, user, payload):

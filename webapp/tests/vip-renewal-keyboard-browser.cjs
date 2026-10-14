@@ -13,13 +13,13 @@ const server = http.createServer((req,res) => {
 });
 (async()=>{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-  const browser=await chromium.launch({channel:'msedge',headless:true});
+  const browser=await chromium.launch({...(process.env.CI ? {} : {channel:'msedge'}),headless:true});
   try {
     for (const width of [320,360,390,430]) {
       const page=await browser.newPage({viewport:{width,height:760},isMobile:true,hasTouch:true});
       const errors=[],messages=[]; let idSends=0, failId=true, starts=0, cancels=0, status='awaiting_payment';
       const user={id:'buyer',role:'user',first_name:'Покупатель'},wallet={available_balance:4,frozen_balance:0};
-      const listing={id:'car',seller_id:'seller',brand:'BMW M5 F90 с длинным названием',model:'',status:'active',listing_type:'regular',images:[],price_af_coins:100,game_version:width%3?'car_parking_1':'car_parking_2',pinned:true,pinned_until:new Date(Date.now()+60000).toISOString()};
+      const listing={id:'car',seller_id:'seller',brand:'BMW M5 F90 с длинным названием',model:'',power_hp:600,max_speed_kph:300,status:'active',listing_type:'regular',images:[],price_af_coins:100,game_version:width%3?'car_parking_1':'car_parking_2',pinned:true,pinned_until:new Date(Date.now()+60000).toISOString()};
       const deal={id:'deal',buyer_id:'buyer',seller_id:'seller',status:'paid',price_af_coins:100,buyer_game_id:null};
       const conversation={id:'thread',conversation_type:'deal',listing,deal,counterparty:{id:'seller',name:'Продавец'},offers:[]};
       page.on('pageerror',error=>errors.push(error.message));
@@ -46,7 +46,7 @@ const server = http.createServer((req,res) => {
           deal.buyer_game_id=route.request().postDataJSON().buyer_game_id;body=deal;
         }
         else if(endpoint==='/listings')body=[listing];
-        else if(endpoint==='/vip/renewals/expiry')body={listing_id:'car',renewal_id:'expiry',title:listing.brand,cost_af:10,balance_af:4,stars:6,duration_hours:72,af_per_star:1};
+        else if(endpoint==='/vip/renewals/expiry')body={listing_id:'car',renewal_id:'expiry',title:listing.brand,price_stars:10,cost_af:10,balance_af:4,stars:6,duration_hours:72,af_per_star:1};
         else if(endpoint==='/vip/orders'&&route.request().method()==='POST'){
           starts++;assert.equal(route.request().postDataJSON().renewal_id,'expiry');
           status='awaiting_payment';body={id:'order'};
@@ -69,11 +69,16 @@ const server = http.createServer((req,res) => {
       assert.equal(await input.inputValue(),'00AB123');
       const submit=page.getByRole('button',{name:'Отправить продавцу',exact:true});
       for(const control of [input,submit]){const b=await control.boundingBox();assert(b && b.height>=44 && b.y>=0 && b.y+b.height<=350,JSON.stringify(b));}
-      await submit.click();await page.waitForFunction(()=>!document.querySelector('.deal-delivery__form button').disabled);
+      await submit.click();
+      try { await page.getByText('Ошибка тестовой сети',{exact:true}).waitFor({timeout:4000}); }
+      catch(error){console.log({idSends,errors,toast:await page.locator('#toast').textContent(),html:await input.evaluate(el=>el.form.outerHTML)});throw error;}
+      await page.waitForFunction(()=>!document.querySelector('.deal-delivery__form button').disabled);
       assert.equal(await input.inputValue(),'00AB123');
       await input.fill('00ZX987654321'); // Same browser input event as paste, preserve leading zeroes.
       await submit.evaluate(el=>{el.click();el.click();});
-      await input.waitFor({state:'detached'});assert.equal(idSends,2);assert.equal(deal.buyer_game_id,'00ZX987654321');
+      try { await input.waitFor({state:'detached',timeout:10000}); }
+      catch(error){console.log({idSends,deal,errors,toast:await page.locator('#toast').textContent()});throw error;}
+      assert.equal(idSends,2);assert.equal(deal.buyer_game_id,'00ZX987654321');
       await page.evaluate(()=>window.keyboard(760));
       const chat=page.locator('#chatInput');await chat.tap();await chat.fill('Длинный черновик '.repeat(30));
       for(const height of [340,760,360,760]){await page.evaluate(h=>window.keyboard(h),height);assert.equal(await chat.inputValue(),'Длинный черновик '.repeat(30));}
@@ -82,7 +87,7 @@ const server = http.createServer((req,res) => {
       assert(!await page.locator('meta[name=viewport]').getAttribute('content').then(v=>/user-scalable=no|maximum-scale=1/.test(v)));
       await page.goto(base+'/?vip_renewal=expiry');
       await page.getByRole('heading',{name:'Продление VIP',exact:true}).waitFor();
-      await page.screenshot({path:path.join(__dirname,`vip-renewal-modal-${width}.png`)});
+      await page.screenshot({path:path.join(__dirname,`vip-renewal-modal-${width}.png`),animations:'disabled'});
       assert.equal(starts,0,'opening link must never create invoice');
       assert.match(await page.locator('#purchaseModalText').textContent(),/BMW M5.*\n.*\n.*10 AF.*72 ч.*4 AF.*6 ⭐/s);
       await page.locator('#purchaseModalAction').evaluate(el=>{el.click();el.click();});
@@ -95,7 +100,7 @@ const server = http.createServer((req,res) => {
       assert.equal(starts,2);
       const card=page.locator('.car-card.is-pinned').first();await card.waitFor();
       assert(await card.locator('.car-vip-badge').isVisible());
-      await page.screenshot({path:path.join(__dirname,`vip-renewal-${width}.png`)});
+      await page.screenshot({path:path.join(__dirname,`vip-renewal-${width}.png`),animations:'disabled'});
       const vipBox=await card.locator('.car-vip-badge').boundingBox(),gameBox=await card.locator('.listing-game-badge').boundingBox();
       assert(vipBox.y+vipBox.height<=gameBox.y);
       await page.emulateMedia({reducedMotion:'reduce'});

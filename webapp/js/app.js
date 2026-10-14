@@ -1341,9 +1341,11 @@ function handleClick(event) {
     state.pinnedCardTimer = null;
     const now = Date.now();
     let nextExpiry = Infinity;
+    let expired = false;
     document.querySelectorAll(".car-card[data-pinned-until]").forEach(card => {
       const expiry = Date.parse(card.dataset.pinnedUntil);
       const active = expiry > now;
+      if (!active && card.classList.contains("is-pinned")) expired = true;
       card.classList.toggle("is-pinned", active);
       if (active) nextExpiry = Math.min(nextExpiry, expiry);
     });
@@ -1351,6 +1353,9 @@ function handleClick(event) {
     if (Number.isFinite(nextExpiry) && !document.hidden) {
       state.pinnedCardTimer = window.setTimeout(refreshPinnedCardAppearance, Math.min(nextExpiry - now + 1, 2147483647));
     }
+    // Re-fetch authoritative order once when a displayed period expires. Never
+    // assign new pin state/priority locally or reset the user's filter inputs.
+    if (expired) void loadOptionalData(["regular", "unique"]);
   }
 
   function renderListings() {
@@ -2007,7 +2012,9 @@ function handleClick(event) {
     elements.purchaseModal.querySelector(".eyebrow").textContent = renewalId ? "Предложение для вашего автомобиля" : "VIP-закрепление";
     elements.purchaseModalTitle.textContent = renewalId ? "Продление VIP" : "VIP-закрепление";
     elements.purchaseModalText.textContent = `${renewalId ? `${quote.title}\nВаше VIP-закрепление завершилось.\n` : ""}Стоимость: ${formatNumber(quote.cost_af)} AF · ${quote.duration_hours} ч. С баланса: ${formatNumber(quote.balance_af)} AF. Доплатить: ${quote.stars} ⭐.`;
-    elements.purchaseModalAmount.textContent = `${formatNumber(quote.cost_af)} AF`;
+    elements.purchaseModalAmount.textContent = renewalId
+      ? `${quote.duration_hours === 72 ? "3 дня" : `${quote.duration_hours} ч.`} — ${quote.price_stars} ⭐`
+      : `${formatNumber(quote.cost_af)} AF`;
     elements.purchaseModalNote.textContent = `AF резервируются до оплаты. При отмене резерв освобождается. Курс доплаты: 1 ⭐ = ${quote.af_per_star} AF.${Number(quote.rounding_credit_af) ? ` Остаток ${formatNumber(quote.rounding_credit_af)} AF останется на балансе.` : ""}`;
     elements.purchaseModalAction.textContent = quote.stars ? `${renewalId ? "Продлить за" : "Оплатить"} ${quote.stars} ⭐` : `${renewalId ? "Продлить за" : "Оплатить"} ${formatNumber(quote.cost_af)} AF`;
     elements.purchaseModalAction.disabled = false;
@@ -2597,10 +2604,9 @@ async function hideCurrentConversation() {
     renderDealDeliveryPanel();
     renderOffers();
     renderDealControls();
-    requestAnimationFrame(() => {
-      elements.dealMessages.scrollTop = atBottom ? elements.dealMessages.scrollHeight : previousTop;
-      document.getElementById("chatJumpLatest").hidden = Boolean(atBottom);
-    });
+    // Restore in this render, not a later frame that can race user scrolling.
+    elements.dealMessages.scrollTop = atBottom ? elements.dealMessages.scrollHeight : previousTop;
+    document.getElementById("chatJumpLatest").hidden = Boolean(atBottom);
   }
 
   function renderOfferMessage(bubble, message) {
@@ -3123,9 +3129,12 @@ async function hideCurrentConversation() {
     const fieldFocused = ["INPUT", "TEXTAREA", "SELECT"].includes(activeField?.tagName);
     const zoomed = Number(viewport?.scale || 1) > 1.05;
     if (zoomed) return; // Preserve user-controlled accessibility zoom.
-    if (!fieldFocused) state.restingViewportHeight = Math.max(fullHeight, Number(telegram?.viewportStableHeight) || 0);
+    const wasKeyboardOpen = document.body.classList.contains("input-keyboard-open");
+    // Tapping Submit blurs the field before click. Keep layout stable until the
+    // viewport actually recovers; moving the button here would swallow the tap.
+    if (!fieldFocused && !wasKeyboardOpen) state.restingViewportHeight = Math.max(fullHeight, Number(telegram?.viewportStableHeight) || 0);
     const resting = state.restingViewportHeight || Number(telegram?.viewportStableHeight) || window.innerHeight;
-    const keyboardOpen = fieldFocused && resting - fullHeight > 100;
+    const keyboardOpen = (fieldFocused || wasKeyboardOpen) && resting - fullHeight > 100;
     const height = fullHeight;
     const width = window.innerWidth;
     document.body.classList.toggle("chat-keyboard-open", keyboardOpen);

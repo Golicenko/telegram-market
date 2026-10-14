@@ -20,6 +20,11 @@ async def expired(sessions, monkeypatch, balance=4, game="car_parking_1"):
         row.pinned = True
         row.pinned_until = datetime.now(UTC) - timedelta(seconds=1)
     monkeypatch.setattr(promotions, "SessionLocal", sessions)
+    # Market reads can expire priority before the worker wakes. They must not
+    # erase the stored period or swallow its notification.
+    from app.routes import expire_promotions
+    async with sessions() as session:
+        await expire_promotions(session)
     await asyncio.gather(promotions.expire_once(), promotions.expire_once())
     async with sessions() as session:
         expiry = await session.scalar(select(VipExpiry))
@@ -127,6 +132,29 @@ async def test_cancel_no_pin_no_final_debit_and_retry(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_market_read_expires_priority_without_losing_worker_event(monkeypatch):
+    from app.routes import list_listings
+    async with isolated_pg() as (_, sessions):
+        seller, listing = await setup(sessions)
+        async with sessions() as session, session.begin():
+            row = await session.get(Listing, listing.id)
+            row.pinned = True
+            row.pinned_until = datetime.now(UTC) - timedelta(seconds=1)
+            row.created_at = datetime.now(UTC) - timedelta(days=1)
+            newer = Listing(seller_id=seller.id, game_version="car_parking_2", listing_type="regular", status="active",
+                brand="Newer", model="CP2", power_hp=100, max_speed_kph=200, description="Test", price_af_coins=100)
+            session.add(newer)
+        async with sessions() as session:
+            rows = await list_listings("regular", None, None, None, None, None, seller, session)
+            assert rows[0].id == newer.id
+            assert rows[1].id == listing.id and not rows[1].pinned
+        monkeypatch.setattr(promotions, "SessionLocal", sessions)
+        await promotions.expire_once()
+        async with sessions() as session:
+            assert (await session.scalar(select(VipExpiry))).listing_id == listing.id
+
+
+@pytest.mark.asyncio
 async def test_outbox_claim_restart_and_stale_notification(monkeypatch):
     async with isolated_pg() as (_, sessions):
         seller, listing, expiry = await expired(sessions, monkeypatch, 10)
@@ -162,6 +190,9 @@ async def test_real_migration_retains_pin_and_supports_expiry(monkeypatch):
         async with engine.begin() as conn:
             await conn.execute(text("INSERT INTO users(id,telegram_id,first_name,role) VALUES (:id,980009,'Legacy','user')"), {"id": uid})
             await conn.execute(text("INSERT INTO listings(id,seller_id,listing_type,status,brand,model,description,power_hp,max_speed_kph,price_af_coins,pinned,pinned_until,game_version) VALUES (:id,:seller,'regular','active','Legacy','CP2','Test',1,1,100,true,now()-interval '1 second','car_parking_2')"), {"id": lid, "seller": uid})
+            active_id = uuid.uuid4()
+            active_until = datetime.now(UTC) + timedelta(hours=13)
+            await conn.execute(text("INSERT INTO listings(id,seller_id,listing_type,status,brand,model,description,power_hp,max_speed_kph,price_af_coins,pinned,pinned_until,game_version) VALUES (:id,:seller,'regular','active','Active','CP1','Test',1,1,55,true,:until,'car_parking_1')"), {"id": active_id, "seller": uid, "until": active_until})
             await conn.run_sync(lambda sync: apply_revisions(sync, target="head", after="0050_listing_promotions"))
         monkeypatch.setattr(promotions, "SessionLocal", sessions)
         await promotions.expire_once()
@@ -169,3 +200,26 @@ async def test_real_migration_retains_pin_and_supports_expiry(monkeypatch):
             row = await session.get(Listing, lid)
             assert row.status == "active" and not row.pinned and row.price_af_coins == 100
             assert (await session.scalar(select(VipExpiry))).listing_id == lid
+            active = await session.get(Listing, active_id)
+            assert active.pinned and active.pinned_until == active_until and active.price_af_coins == 55
+
+
+@pytest.mark.asyncio
+async def test_disabled_notifications_and_exact_configured_period(monkeypatch):
+    from app.config import Settings
+    monkeypatch.setattr(promotions, "get_settings", lambda: Settings(vip_expiry_notifications_enabled=False,
+        vip_renewal_price_stars=12, vip_renewal_hours=96))
+    async with isolated_pg() as (_, sessions):
+        seller, listing, expiry = await expired(sessions, monkeypatch, 20)
+        async with sessions() as session:
+            assert await session.scalar(select(func.count()).select_from(Notification)) == 0
+            quote = await promotions.renewal_quote(expiry.id, seller, session)
+            assert quote["price_stars"] == 12 and quote["duration_hours"] == 96
+        order = await renew(sessions, seller, listing, expiry)
+        await fulfill(sessions, order)
+        async with sessions() as session:
+            row = await session.get(Listing, listing.id)
+            assert 345500 < (row.pinned_until - datetime.now(UTC)).total_seconds() <= 345600
+        await promotions.expire_once()  # Not 24h, and not blindly one fixed period.
+        async with sessions() as session:
+            assert await session.scalar(select(func.count()).select_from(VipExpiry)) == 1
