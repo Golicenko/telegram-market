@@ -265,7 +265,8 @@ async def test_paid_draft_cannot_bypass_refund_lock_or_reuse_extra_charge(monkey
         async with sessions() as session:
             receipt = await session.scalar(select(StarPayment).where(StarPayment.telegram_payment_charge_id == extra["telegram_payment_charge_id"]))
             assert receipt.status == "publication_review" and receipt.af_coin_amount == 0
-            assert await session.scalar(select(func.count()).select_from(Listing)) == 0
+            assert await session.scalar(select(func.count()).select_from(Listing)) == 5
+            assert await session.scalar(select(func.count()).select_from(Listing).where(Listing.client_request_id == payload.client_request_id)) == 0
         calls = []
         async def refund(method, params):
             calls.append(params)
