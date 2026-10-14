@@ -103,7 +103,13 @@ input::placeholder, textarea::placeholder { color:#677381; }
 .car-card { position:relative; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:linear-gradient(180deg,#111b26,#0b121b); box-shadow:0 10px 26px rgba(0,0,0,.24); }
 .car-card.is-unique { border-color:rgba(255,180,20,.76); background:linear-gradient(180deg,#21170d,#0d131b 65%); box-shadow:0 0 0 1px rgba(255,143,0,.12),0 0 18px rgba(255,151,0,.16); }
 .unique-label { position:absolute; z-index:2; left:7px; bottom:7px; padding:4px 6px; border:1px solid rgba(255,221,107,.55); border-radius:6px; color:#251603; background:linear-gradient(135deg,#ffd83c,#ff8d00); font-size:9px; font-weight:900; text-transform:uppercase; }
-.car-card.is-pinned{border-color:rgba(174,130,51,.85);box-shadow:0 0 9px rgba(174,130,51,.13),0 10px 26px rgba(0,0,0,.24)}
+.car-card.is-pinned{border-color:#b99a4a;background:linear-gradient(150deg,#18202b,#0b121b 65%);box-shadow:inset 0 1px 0 #f3d77a55,0 -2px 12px #d4af3714,0 10px 26px #0004}
+.car-card.is-pinned::after{content:"";position:absolute;z-index:4;top:0;left:0;width:28%;height:1px;background:linear-gradient(90deg,transparent,#f3d77a,transparent);pointer-events:none;opacity:0;animation:vip-edge-sheen 9s ease-in-out infinite}
+.car-vip-badge{display:none;position:absolute;z-index:3;top:8px;left:8px;padding:4px 7px;border:1px solid #d4af3799;border-radius:6px;color:#f3d77a;background:#121921e6;font-size:10px;font-weight:800;letter-spacing:.08em;pointer-events:none}
+.car-card.is-pinned .car-vip-badge{display:block}
+.car-card.is-pinned .listing-game-badge{top:36px}
+@keyframes vip-edge-sheen{0%,70%,100%{opacity:0;transform:translateX(-100%)}75%{opacity:.65}92%{opacity:0;transform:translateX(360%)}}
+@media(prefers-reduced-motion:reduce){.car-card.is-pinned::after{animation:none}}
 .listing-game-badge{position:absolute;z-index:3;top:7px;left:7px;max-width:calc(100% - 14px);padding:4px 7px;border:1px solid rgba(255,211,133,.5);border-radius:7px;background:rgba(102,65,24,.76);color:#fff0cb;text-shadow:0 1px 2px rgba(40,24,4,.6);font-size:10px;font-weight:700;line-height:1.2;white-space:nowrap;pointer-events:none}
 .listing-game-badge[data-game="car_parking_2"]{background:rgba(34,73,112,.78);border-color:rgba(142,208,255,.5);color:#e3f4ff}
 .seller-delivery-deadline{display:grid;gap:5px;margin-bottom:9px;padding:9px;border:1px solid rgba(255,194,74,.55);border-radius:9px;background:rgba(181,115,20,.14)}
@@ -754,7 +760,11 @@ main{padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));p
 #chatConnection{display:block;padding:4px 0;color:#e0bc76;font-size:12px}#chatConnection[hidden],#chatJumpLatest[hidden]{display:none}
 #chatJumpLatest,.chat-history-button{min-height:44px;border:1px solid #31506e;border-radius:16px;color:#ddecff;background:#14283d;padding:8px 14px;align-self:center}
 #chatCopyMenu{position:fixed;z-index:10000;min-width:130px;min-height:44px;border:1px solid #4a607b;border-radius:12px;background:#142337;color:#fff;box-shadow:0 6px 22px #0008;animation:publication-in .16s ease-out}
-body.chat-keyboard-open .chat-listing,body.chat-keyboard-open .offer-panel,body.chat-keyboard-open .deal-delivery,body.chat-keyboard-open .deal-controls{display:none!important}
+body.chat-keyboard-open .chat-listing,body.chat-keyboard-open .offer-panel,body.chat-keyboard-open .deal-controls{display:none!important}
+body.chat-keyboard-open:not(.deal-details-required) .deal-delivery{display:none!important}
+body.chat-keyboard-open.deal-details-required .deal-delivery{flex:0 1 auto;max-height:calc(var(--app-viewport-height,100dvh) - 100px);min-height:0;overflow:auto}
+body.chat-keyboard-open.deal-details-required .chat-compose,body.chat-keyboard-open.deal-details-required .chat-status{display:none}
+body.chat-keyboard-open.deal-details-required .messages{min-height:0}
 body.chat-keyboard-open .chat-compose{padding-bottom:0}
 @keyframes publication-in{from{opacity:0;transform:translateY(5px) scale(.98)}to{opacity:1;transform:none}}
 @media(prefers-reduced-motion:reduce){.publication-modal,#chatCopyMenu{animation:none}.messages{scroll-behavior:auto}}
@@ -774,3 +784,13 @@ body.chat-keyboard-open .chat-compose{padding-bottom:0}
 .training-sales__summary span { color: #b8c4d9; font-size: 12px; }
 .training-sales__card { padding: 12px 0; border-bottom: 1px solid #233146; overflow-wrap: anywhere; }
 .training-sales__card h3, .training-sales__card p { margin: 6px 0; }
+
+/* One viewport measurement drives both chat and dialogs. Never disable pinch zoom. */
+body input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=hidden]):not([type=submit]),body textarea,body select{font-size:16px!important;scroll-margin-block:20px;min-width:0}
+.deal-delivery__form input,.deal-delivery__form button{min-height:44px}
+body.input-keyboard-open dialog[open]{position:fixed;top:calc(var(--app-viewport-top,0px) + 8px);bottom:auto;margin:0 auto;max-height:calc(var(--app-viewport-height,100dvh) - 16px);overflow-y:auto;overscroll-behavior:contain;transform:none}
+body.input-keyboard-open .bottom-nav{visibility:hidden}
+.vip-renewal-modal{border-color:#b99a4a;background:linear-gradient(145deg,#17202b,#090f18);box-shadow:0 18px 60px #0008;animation:publication-in .18s ease-out}
+.vip-renewal-modal h2{color:#f3d77a}.vip-renewal-modal .eyebrow{color:#c9b478}.vip-renewal-modal p{white-space:pre-line;overflow-wrap:anywhere}
+.vip-renewal-modal .publish-button{background:linear-gradient(135deg,#f3d77a,#caa54c);color:#211a0b}
+@media(prefers-reduced-motion:reduce){.vip-renewal-modal{animation:none}}

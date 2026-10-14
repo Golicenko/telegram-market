@@ -13,7 +13,7 @@ from .auth import get_current_user, require_admin
 from .bot import call_bot_api
 from .config import get_settings
 from .database import AsyncSession, SessionLocal, get_session
-from .models import Listing, ListingPromotion, Notification, PublicationDraft, StarPayment, StarPaymentIntent, User, Wallet
+from .models import Listing, ListingPromotion, Notification, PublicationDraft, StarPayment, StarPaymentIntent, User, VipExpiry, Wallet
 from .schemas import ListingCreate
 from .services import (consume_purchase_hold, create_listing, hold_for_purchase, money,
                        process_successful_payment, release_purchase_hold, wallet_snapshot, wallet_transaction)
@@ -31,14 +31,14 @@ def set_parts(order, values):
     order.funding = dict(zip(("purchased", "earned", "bonus"), map(str, values)))
 
 
-def quote_values(available):
+def quote_values(available, renewal=None):
     settings = get_settings()
-    cost = money(settings.listing_promotion_cost_af_coins)
+    cost = money(renewal.price_stars if renewal else settings.listing_promotion_cost_af_coins)
     balance = min(cost, money(available))
     # The existing top-up service credits exactly one purchased AF per XTR.
     stars = int((cost - balance).to_integral_value(rounding=ROUND_CEILING))
     return {"cost_af": cost, "balance_af": balance, "stars": stars,
-            "duration_hours": settings.listing_promotion_hours, "af_per_star": 1,
+            "duration_hours": renewal.duration_hours if renewal else settings.listing_promotion_hours, "af_per_star": 1,
             "rounding_credit_af": money(stars - (cost - balance))}
 
 
@@ -47,6 +47,7 @@ def output(order, intent=None, *, admin=False):
         "status", "created_at", "paid_at", "pinned_until", "expires_at", "last_error")}
     result.update(number=str(order.id), invoice_url=intent.invoice_link if intent else None, af_per_star=1)
     result["listing_payload"] = order.listing_payload
+    result["renewal_id"] = order.renewal_id
     if admin:
         result.update(user_id=order.user_id, payment_id=order.payment_id, ledger_id=order.ledger_id)
     return result
@@ -56,11 +57,14 @@ class Start(BaseModel):
     request_id: uuid.UUID
     listing_id: uuid.UUID | None = None
     listing_payload: ListingCreate | None = None
+    renewal_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def one_target(self):
         if bool(self.listing_id) == bool(self.listing_payload):
             raise ValueError("Specify one listing or publication draft")
+        if self.renewal_id and not self.listing_id:
+            raise ValueError("Renewal requires an existing listing")
         if self.listing_payload and (not self.listing_payload.client_request_id or not self.listing_payload.promote_for_24h):
             raise ValueError("A pinned publication with a request ID is required")
         return self
@@ -72,6 +76,32 @@ async def quote(user: User = Depends(get_current_user), session: AsyncSession = 
     return quote_values(wallet.available_balance if wallet else 0)
 
 
+async def check_renewal(session, renewal_id, user_id, listing):
+    expiry = await session.get(VipExpiry, renewal_id)
+    if not expiry or expiry.user_id != user_id or not listing or expiry.listing_id != listing.id or listing.seller_id != user_id:
+        raise HTTPException(404, "Предложение продления не найдено")
+    if listing.status != "active" or listing.deleted_at:
+        raise HTTPException(409, "Это объявление больше недоступно для VIP-закрепления")
+    now = datetime.now(UTC)
+    if listing.pinned and listing.pinned_until and listing.pinned_until > now:
+        raise HTTPException(409, "VIP уже активен")
+    if expiry.redeemed_at or expiry.pinned_until > now or listing.pinned_until != expiry.pinned_until:
+        raise HTTPException(409, "Это предложение продления уже недействительно")
+    return expiry
+
+
+@router.get("/vip/renewals/{renewal_id}")
+async def renewal_quote(renewal_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    expiry = await session.get(VipExpiry, renewal_id)
+    if not expiry or expiry.user_id != user.id:
+        raise HTTPException(404, "Предложение продления не найдено")
+    listing = await session.get(Listing, expiry.listing_id)
+    await check_renewal(session, renewal_id, user.id, listing)
+    wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
+    return {**quote_values(wallet.available_balance if wallet else 0, expiry), "renewal_id": expiry.id,
+            "listing_id": listing.id, "title": " ".join(filter(None, (listing.brand, listing.model)))}
+
+
 async def start_order(session, user, payload):
     target = str(payload.listing_id) if payload.listing_id else f"draft:{payload.listing_payload.client_request_id}"
     saved = payload.listing_payload.model_dump(mode="json") if payload.listing_payload else None
@@ -81,23 +111,26 @@ async def start_order(session, user, payload):
         old = await session.scalar(select(ListingPromotion).where(ListingPromotion.user_id == user.id,
             ListingPromotion.request_id == payload.request_id))
         if old:
-            if old.target_key != target or old.listing_payload != saved:
+            if old.target_key != target or old.listing_payload != saved or old.renewal_id != payload.renewal_id:
                 raise HTTPException(409, "Идентификатор запроса уже используется")
             return old
         active = await session.scalar(select(ListingPromotion).where(ListingPromotion.user_id == user.id,
             ListingPromotion.target_key == target, ListingPromotion.status.in_(("awaiting_payment", "paid"))))
         if active:
-            if active.listing_payload != saved:
+            if active.listing_payload != saved or active.renewal_id != payload.renewal_id:
                 raise HTTPException(409, "Откройте ранее сохранённую оплату VIP")
             return active
+        renewal = None
         if payload.listing_id:
-            listing = await session.get(Listing, payload.listing_id)
+            listing = await session.scalar(select(Listing).where(Listing.id == payload.listing_id).with_for_update())
             if not listing or listing.seller_id != user.id:
                 raise HTTPException(404, "Объявление не найдено")
             if listing.status != "active" or listing.deleted_at is not None:
                 raise HTTPException(409, "Можно закрепить только активное объявление")
             if listing.pinned and listing.pinned_until and listing.pinned_until > datetime.now(UTC):
-                raise HTTPException(409, "Объявление уже закреплено")
+                raise HTTPException(409, "VIP уже активен")
+            if payload.renewal_id:
+                renewal = await check_renewal(session, payload.renewal_id, user.id, listing)
         else:
             # A VIP invoice cannot bypass the separate publication Stars fee.
             draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.user_id == user.id,
@@ -110,12 +143,12 @@ async def start_order(session, user, payload):
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id).with_for_update())
         if not wallet:
             raise HTTPException(409, "Кошелёк не найден")
-        values = quote_values(wallet.available_balance)
+        values = quote_values(wallet.available_balance, renewal)
         if values["stars"] > get_settings().star_topup_max:
             raise HTTPException(409, "Доплата превышает разрешённый размер счёта")
         now = datetime.now(UTC)
         order = ListingPromotion(id=uuid.uuid4(), user_id=user.id, request_id=payload.request_id,
-            target_key=target, listing_id=payload.listing_id, listing_payload=saved,
+            target_key=target, listing_id=payload.listing_id, listing_payload=saved, renewal_id=payload.renewal_id,
             cost_af=values["cost_af"], balance_af=values["balance_af"], stars=values["stars"],
             duration_hours=values["duration_hours"], status="awaiting_payment" if values["stars"] else "paid",
             expires_at=now + timedelta(minutes=30), paid_at=None if values["stars"] else now)
@@ -171,6 +204,9 @@ async def finish_locked(session, order, listing, wallet):
     consume_purchase_hold(wallet, *funding)
     wallet.version += 1
     now = datetime.now(UTC)
+    if order.renewal_id:
+        expiry = await check_renewal(session, order.renewal_id, order.user_id, listing)
+        expiry.redeemed_at = now
     listing.pinned, listing.pinned_until = True, now + timedelta(hours=order.duration_hours)
     entry = wallet_transaction(wallet, "listing_promotion", -order.cost_af, *before,
         f"VIP {order.id} до {listing.pinned_until.isoformat()}", external_reference=f"vip:{order.id}:complete", funding=funding)
@@ -269,6 +305,12 @@ async def validate_checkout(session, telegram_id, payload, currency, amount, que
         user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
         if not order or not user or user.is_blocked or order.user_id != user.id or order.status != "awaiting_payment" or currency != "XTR" or order.stars != amount or order.expires_at <= datetime.now(UTC):
             return False, "Счёт VIP недоступен. Откройте закрепление снова."
+        if order.renewal_id:
+            listing = await session.scalar(select(Listing).where(Listing.id == order.listing_id).with_for_update())
+            try:
+                await check_renewal(session, order.renewal_id, user.id, listing)
+            except HTTPException as exc:
+                return False, str(exc.detail)
         intent = await session.get(StarPaymentIntent, order.intent_id)
         prior = (intent.context or {}).get("checkout_query_id")
         if prior and prior != query_id:
@@ -374,6 +416,7 @@ async def admin_orders(limit: int = Query(default=25, ge=1, le=100), offset: int
 
 
 async def recover_once():
+    await expire_once()
     async with SessionLocal() as session:
         ids = (await session.scalars(select(ListingPromotion.id).where(or_(ListingPromotion.status == "paid",
             (ListingPromotion.status == "awaiting_payment") & (ListingPromotion.expires_at < datetime.now(UTC))))
@@ -402,6 +445,30 @@ async def recover_once():
                 receipt.status = "vip_extra_refunded"
                 session.add(Notification(user_id=user.id, notification_type="vip_extra_refunded", title="Дополнительная оплата возвращена",
                     body=f"Лишний платёж за VIP возвращён: {receipt.xtr_amount} ⭐.", payload={}, delivery_status="pending"))
+
+
+async def expire_once():
+    """Persist one event per exact DB expiry; no listing deletion or timer reset."""
+    settings = get_settings()
+    now = datetime.now(UTC)
+    async with SessionLocal() as session, session.begin():
+        existing = select(VipExpiry.id).where(VipExpiry.listing_id == Listing.id,
+            VipExpiry.pinned_until == Listing.pinned_until).exists()
+        listings = (await session.scalars(select(Listing).where(Listing.pinned_until <= now,
+            Listing.status == "active", Listing.deleted_at.is_(None), ~existing)
+            .order_by(Listing.pinned_until, Listing.id).limit(100).with_for_update(skip_locked=True))).all()
+        for listing in listings:
+            expiry = VipExpiry(id=uuid.uuid4(), listing_id=listing.id, user_id=listing.seller_id,
+                pinned_until=listing.pinned_until, price_stars=settings.vip_renewal_price_stars,
+                duration_hours=settings.vip_renewal_hours)
+            session.add(expiry)
+            listing.pinned = False
+            title = " ".join(filter(None, (listing.brand, listing.model)))
+            if settings.vip_expiry_notifications_enabled:
+                duration = f"{expiry.duration_hours // 24} дня" if expiry.duration_hours == 72 else f"{expiry.duration_hours} ч."
+                session.add(Notification(user_id=listing.seller_id, notification_type="vip_expired",
+                    title="Ваш VIP закончился", body=f"👑 Ваш VIP закончился!\n\nЗакрепление автомобиля {title} завершилось.\n\n🚀 Продлите VIP на {duration} всего за {expiry.price_stars} ⭐!",
+                    payload={"renewal_id": str(expiry.id), "listing_id": str(listing.id)}, delivery_status="pending"))
 
 
 async def run_worker():

@@ -433,6 +433,7 @@
     void openDealDeepLink();
     void openConversationDeepLink();
     void openListingDeepLink();
+    void openVipRenewalDeepLink();
     void openInactiveSellerAdminDeepLink();
     void openSectionDeepLink();
   }
@@ -1401,6 +1402,10 @@ function handleClick(event) {
     game.dataset.game = listing.game_version;
     game.textContent = listingGameLabel(listing);
     media.append(game);
+    const vip = document.createElement("span");
+    vip.className = "car-vip-badge";
+    vip.textContent = "VIP";
+    media.append(vip);
     const title = document.createElement("h3");
     title.textContent = listingTitle(listing);
     const price = document.createElement("div");
@@ -1683,7 +1688,8 @@ function handleClick(event) {
         flow.requestId ||= createRequestId();
         const order = await api.request("/vip/orders", {
           method: "POST", body: JSON.stringify({ request_id: flow.requestId,
-            ...(flow.submission ? { listing_payload: flow.submission.payload } : { listing_id: flow.listingId }) }),
+            ...(flow.submission ? { listing_payload: flow.submission.payload } : { listing_id: flow.listingId }),
+            ...(flow.renewalId ? { renewal_id: flow.renewalId } : {}) }),
         });
         flow.vipOrderId = order.id;
       }
@@ -1712,7 +1718,7 @@ function handleClick(event) {
       state.purchaseFlow = null;
       if (flow.submission) await finishListingSubmission(flow.submission);
       else await refreshMarketplace();
-      notify(`VIP-закрепление успешно оплачено · до ${formatDate(order.pinned_until)}`);
+      notify(flow.renewalId ? `VIP успешно продлён на ${order.duration_hours === 72 ? "3 дня" : `${order.duration_hours} ч.`}` : `VIP-закрепление успешно оплачено · до ${formatDate(order.pinned_until)}`);
     } catch (error) {
       elements.purchaseModalNote.textContent = error.message;
       elements.purchaseModalAction.textContent = "Повторить / проверить";
@@ -1758,7 +1764,7 @@ function handleClick(event) {
         button.textContent = `VIP: ${order.status === "paid" ? "оплачен · проверить закрепление" : "продолжить оплату"}`;
         button.onclick = () => {
           state.purchaseFlow = { kind: "listing-promotion-topup", busy: false, vipOrderId: order.id,
-            listingId: order.listing_id, submission: order.listing_payload ? { payload: order.listing_payload, targetView: "market" } : null };
+            listingId: order.listing_id, renewalId: order.renewal_id, submission: order.listing_payload ? { payload: order.listing_payload, targetView: "market" } : null };
           elements.purchaseModalTitle.textContent = "Сохранённая оплата VIP";
           elements.purchaseModalText.textContent = `Стоимость: ${formatNumber(order.cost_af)} AF · с баланса ${formatNumber(order.balance_af)} AF · доплата ${order.stars} ⭐`;
           elements.purchaseModalNote.textContent = "Не создавайте повторный платёж. Эта оплата сохранена на сервере.";
@@ -1984,9 +1990,9 @@ function handleClick(event) {
     if (submission.publishedPaidListingId) await openListingDetails(submission.publishedPaidListingId);
   }
 
-  async function openListingPromotionTopup(submission, error, listingId = null) {
+  async function openListingPromotionTopup(submission, error, listingId = null, renewalId = null) {
     let quote;
-    try { quote = await api.request("/vip/quote"); } catch (failure) { notify(failure.message); return; }
+    try { quote = await api.request(renewalId ? `/vip/renewals/${encodeURIComponent(renewalId)}` : "/vip/quote"); } catch (failure) { notify(failure.message); return; }
     state.purchaseFlow = {
       kind: "listing-promotion-topup",
       stage: "topup",
@@ -1994,13 +2000,16 @@ function handleClick(event) {
       intentId: null,
       missing: quote.stars,
       submission,
-      listingId,
+      listingId: quote.listing_id || listingId,
+      renewalId,
     };
-    elements.purchaseModalTitle.textContent = "VIP-закрепление";
-    elements.purchaseModalText.textContent = `Стоимость: ${formatNumber(quote.cost_af)} AF · ${quote.duration_hours} ч. С баланса: ${formatNumber(quote.balance_af)} AF. Доплатить: ${quote.stars} ⭐.`;
+    elements.purchaseModal.classList.toggle("vip-renewal-modal", Boolean(renewalId));
+    elements.purchaseModal.querySelector(".eyebrow").textContent = renewalId ? "Предложение для вашего автомобиля" : "VIP-закрепление";
+    elements.purchaseModalTitle.textContent = renewalId ? "Продление VIP" : "VIP-закрепление";
+    elements.purchaseModalText.textContent = `${renewalId ? `${quote.title}\nВаше VIP-закрепление завершилось.\n` : ""}Стоимость: ${formatNumber(quote.cost_af)} AF · ${quote.duration_hours} ч. С баланса: ${formatNumber(quote.balance_af)} AF. Доплатить: ${quote.stars} ⭐.`;
     elements.purchaseModalAmount.textContent = `${formatNumber(quote.cost_af)} AF`;
     elements.purchaseModalNote.textContent = `AF резервируются до оплаты. При отмене резерв освобождается. Курс доплаты: 1 ⭐ = ${quote.af_per_star} AF.${Number(quote.rounding_credit_af) ? ` Остаток ${formatNumber(quote.rounding_credit_af)} AF останется на балансе.` : ""}`;
-    elements.purchaseModalAction.textContent = quote.stars ? `Оплатить ${quote.stars} ⭐` : `Оплатить ${formatNumber(quote.cost_af)} AF`;
+    elements.purchaseModalAction.textContent = quote.stars ? `${renewalId ? "Продлить за" : "Оплатить"} ${quote.stars} ⭐` : `${renewalId ? "Продлить за" : "Оплатить"} ${formatNumber(quote.cost_af)} AF`;
     elements.purchaseModalAction.disabled = false;
     openDialog(elements.purchaseModal);
   }
@@ -2630,13 +2639,17 @@ async function hideCurrentConversation() {
   function renderDealDeliveryPanel() {
     const panel = elements.dealDeliveryPanel;
     const deal = state.currentConversation?.deal;
+    const isBuyer = deal?.buyer_id === state.me.user.id;
+    const hasDetails = Boolean(deal?.buyer_game_id);
+    const requiresDetails = isBuyer && !hasDetails && ["paid", "seller_contacted"].includes(deal.status);
+    document.body.classList.toggle("deal-details-required", requiresDetails);
+    // Polling, receipts and incoming messages must not detach a focused input.
+    // Keep the actual DOM node (including selection/composition and submit lock).
+    const existing = panel.querySelector(".deal-delivery__form");
+    if (requiresDetails && existing?.dataset.dealId === deal.id) return;
     panel.replaceChildren();
     panel.hidden = !deal;
     if (!deal) return;
-    const isBuyer = deal.buyer_id === state.me.user.id;
-    const hasDetails = Boolean(deal.buyer_game_id);
-    const requiresDetails = isBuyer && !hasDetails && ["paid", "seller_contacted"].includes(deal.status);
-    document.body.classList.toggle("deal-details-required", requiresDetails);
 
     const title = document.createElement("strong");
     const copy = document.createElement("p");
@@ -2682,14 +2695,21 @@ async function hideCurrentConversation() {
       panel.append(title, copy);
       return;
     }
+    if (!requiresDetails) return;
 
     title.textContent = "✅ Машина куплена";
     copy.textContent = "Укажите игровой ID, чтобы продавец смог передать вам автомобиль.";
     const form = document.createElement("form");
     form.className = "deal-delivery__form";
+    form.dataset.dealId = deal.id;
     form.innerHTML = `
       <label>Игровой ID<input name="buyer_game_id" type="text" inputmode="text" maxlength="128" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="AB123456" required></label>
       <button type="submit">Отправить продавцу</button>`;
+    state.deliveryDrafts ||= {};
+    form.elements.buyer_game_id.value = state.deliveryDrafts[deal.id] || "";
+    form.elements.buyer_game_id.addEventListener("input", event => {
+      state.deliveryDrafts[deal.id] = event.target.value;
+    });
     form.addEventListener("submit", submitDealDeliveryDetails);
     panel.append(title, copy, form);
   }
@@ -2710,6 +2730,8 @@ async function hideCurrentConversation() {
           buyer_game_id: gameId,
         }),
       });
+      delete state.deliveryDrafts?.[dealId];
+      if (state.currentConversation?.deal?.id !== dealId) return;
       state.currentConversation.deal = updated;
       state.messages = await api.request(`/conversations/${state.currentConversation.id}/messages?deal_id=${encodeURIComponent(dealId)}`);
       renderConversation();
@@ -3085,6 +3107,9 @@ async function hideCurrentConversation() {
     window.visualViewport?.addEventListener("resize", updateChatViewport);
     window.visualViewport?.addEventListener("scroll", updateChatViewport);
     window.addEventListener("orientationchange", updateChatViewport);
+    window.addEventListener("resize", updateChatViewport);
+    document.addEventListener("focusin", updateChatViewport);
+    document.addEventListener("focusout", () => requestAnimationFrame(updateChatViewport));
   }
 
   function updateChatViewport() {
@@ -3095,16 +3120,18 @@ async function hideCurrentConversation() {
     const available = [window.innerHeight, telegramHeight, visualHeight].filter(value => value > 0);
     const fullHeight = Math.min(...available);
     const activeField = document.activeElement;
-    const chatFieldFocused = Boolean(
-      activeField?.closest?.(".chat-view")
-      && ["INPUT", "TEXTAREA", "SELECT"].includes(activeField.tagName)
-    );
-    const keyboardOpen = chatFieldFocused && visualHeight > 0 && window.screen.height - visualHeight > 150;
+    const fieldFocused = ["INPUT", "TEXTAREA", "SELECT"].includes(activeField?.tagName);
     const zoomed = Number(viewport?.scale || 1) > 1.05;
     if (zoomed) return; // Preserve user-controlled accessibility zoom.
+    if (!fieldFocused) state.restingViewportHeight = Math.max(fullHeight, Number(telegram?.viewportStableHeight) || 0);
+    const resting = state.restingViewportHeight || Number(telegram?.viewportStableHeight) || window.innerHeight;
+    const keyboardOpen = fieldFocused && resting - fullHeight > 100;
     const height = fullHeight;
     const width = window.innerWidth;
     document.body.classList.toggle("chat-keyboard-open", keyboardOpen);
+    document.body.classList.toggle("input-keyboard-open", keyboardOpen);
+    document.documentElement.style.setProperty("--app-viewport-height", `${Math.round(height)}px`);
+    document.documentElement.style.setProperty("--app-viewport-top", `${Math.round(viewport?.offsetTop || 0)}px`);
     document.documentElement.style.setProperty("--chat-viewport-height", `${Math.round(height)}px`);
     document.documentElement.style.setProperty("--chat-viewport-top", `${Math.round(keyboardOpen ? viewport?.offsetTop || 0 : 0)}px`);
     document.documentElement.style.setProperty("--chat-viewport-width", `${Math.round(width)}px`);
@@ -4874,6 +4901,14 @@ async function hideCurrentConversation() {
     state.pendingListingDeepLink = null;
   }
 
+  async function openVipRenewalDeepLink() {
+    const renewalId = launchParams.get("vip_renewal");
+    if (!renewalId || !state.me || state.vipRenewalOpened) return;
+    state.vipRenewalOpened = true;
+    // The UUID selects an offer, not authority: backend checks the signed owner.
+    await openListingPromotionTopup(null, null, null, renewalId);
+  }
+
   async function openInactiveSellerAdminDeepLink() {
     const sellerId = state.pendingAdminUnpublishSellerDeepLink || state.pendingAdminUserDeepLink;
     if (!sellerId || !state.me || state.openingAdminSellerDeepLink) return;
@@ -5232,7 +5267,14 @@ async function hideCurrentConversation() {
     if (count) elements.syncStatusText.textContent = "Некоторые данные временно недоступны. Основные функции продолжают работать.";
   }
 
-  function openDialog(dialog) { typeof dialog.showModal === "function" ? dialog.showModal() : dialog.setAttribute("open", ""); }
+  function openDialog(dialog) {
+    if (dialog === elements.purchaseModal) {
+      const renewal = Boolean(state.purchaseFlow?.renewalId);
+      dialog.classList.toggle("vip-renewal-modal", renewal);
+      dialog.querySelector(".eyebrow").textContent = renewal ? "Предложение для вашего автомобиля" : "AutoFlow Market";
+    }
+    typeof dialog.showModal === "function" ? dialog.showModal() : dialog.setAttribute("open", "");
+  }
   function confirmAction(message) {
     return new Promise((resolve) => {
       if (telegram?.initData && telegram.showConfirm) telegram.showConfirm(message, resolve);
