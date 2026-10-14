@@ -16,9 +16,9 @@ const server = http.createServer((req,res) => {
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
   const browser = await chromium.launch({channel:'msedge',headless:true});
   try {
-    for (const width of [320,360,390,430]) {
+    for (const [width,withVip] of [[320,false],[360,false],[390,false],[430,false],[320,true],[430,true]]) {
       const page = await browser.newPage({viewport:{width,height:740},isMobile:true,hasTouch:true});
-      let draft = null, invoiceCalls = 0, serverPublished = false, retryCalls = 0;
+      let draft = null, invoiceCalls = 0, serverPublished = false, retryCalls = 0, vipComplete = false, vipCalls = 0;
       const errors = [];
       page.on('pageerror', e => errors.push(e.message));
       await page.addInitScript(() => {
@@ -36,6 +36,9 @@ const server = http.createServer((req,res) => {
         else if(endpoint==='/content/unseen') body={unique:{unseen_count:0},training:{unseen_count:0}};
         else if(endpoint==='/conversations/unread-summary') body={total_unread:0,conversations:[]};
         else if(endpoint==='/publication-rules') body={free_limit:5,price_stars:5,enabled:true,active_count:12,used:12,remaining:0,payment_required:true};
+        else if(endpoint==='/vip/quote') body={cost_af:5,balance_af:2,stars:3,duration_hours:24,af_per_star:1,rounding_credit_af:0};
+        else if(endpoint==='/vip/orders' && method==='POST') {vipCalls++;body={id:'vip'};}
+        else if(endpoint==='/vip/orders/vip') body={id:'vip',status:vipComplete?'completed':'awaiting_payment',cost_af:5,balance_af:2,stars:3,invoice_url:'https://t.me/$vip-fixture',pinned_until:'2026-10-15T12:00:00Z'};
         else if(endpoint==='/uploads') body={url:'/test.png'};
         else if(endpoint==='/listings' && method==='POST') return route.fulfill({status:402,contentType:'application/json',body:JSON.stringify({detail:{code:'publication_payment_required',message:'Требуется оплата публикации'}})});
         else if(endpoint==='/publication-drafts') {
@@ -44,7 +47,7 @@ const server = http.createServer((req,res) => {
         } else if(endpoint==='/publication-drafts/draft/invoice') {invoiceCalls++;body={...draft,invoice_url:'https://t.me/$fixture'};}
         else if(endpoint==='/publication-drafts/draft/retry' || endpoint==='/publication-drafts/draft') {
           if(method==='POST') retryCalls++;
-          body=serverPublished ? {...draft,status:'published',listing_id:'car'} : draft;
+          body=serverPublished ? {...draft,status:withVip&&!vipComplete?'paid':'published',listing_id:withVip&&!vipComplete?null:'car'} : draft;
         } else if(endpoint==='/listings/car') body={...draft.payload,id:'car',seller_id:'seller',status:'active',images:[],pinned:false};
         await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
       });
@@ -57,9 +60,10 @@ const server = http.createServer((req,res) => {
       await page.locator('[name=max_speed_kph]').fill('200');
       await page.locator('#carForm [name=description]').fill('Isolated test listing');
       await page.locator('#priceInput').fill('50');
-      await page.locator('[name=promote_for_24h]').uncheck();
+      await page.locator('[name=promote_for_24h]').setChecked(withVip);
       await page.locator('#carPhotos').setInputFiles({name:'car.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=','base64')});
       await page.locator('#carForm button[type=submit]').click();
+      if(withVip)await page.locator('#promotionChoicePaid').click();
       const modal = page.locator('.publication-modal'); await modal.waitFor();
       assert.match(await modal.innerText(), /У вас уже 12 активных объявлений/);
       assert.match(await page.locator('#publicationNote').innerText(), /Активных объявлений: 12/);
@@ -87,11 +91,21 @@ const server = http.createServer((req,res) => {
       assert.equal(await page.locator('#successOverlay').isVisible(),false,'Client paid callback is not authority');
       assert.equal(retryCalls,1);
       serverPublished=true;
-      await page.locator('#successTitle').filter({hasText:'Объявление опубликовано'}).waitFor();
+      if(withVip){
+        await page.locator('#purchaseModal').waitFor();
+        assert.match(await page.locator('#purchaseModal').innerText(),/С баланса: 2 AF.*Доплатить: 3 ⭐/);
+        assert.equal(vipCalls,0);
+        await page.locator('#purchaseModalAction').dblclick();
+        await page.waitForFunction(()=>window.invoiceOpenCount===3);
+        assert.equal(vipCalls,1);
+        await page.evaluate(()=>window.invoiceCallback('paid'));
+        vipComplete=true;
+        await page.locator('#purchaseModal').waitFor({state:'hidden'});
+      }else await page.locator('#successTitle').filter({hasText:'Объявление опубликовано'}).waitFor();
       assert.equal(invoiceCalls,2,'One invoice request for each explicit checkout, no extra retry charge');
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
       assert.deepEqual(errors,[]);
-      console.log(`${width}px: fee modal, cancel/Back, persisted resume, invoice cancel, server-only publication OK`);
+      console.log(`${width}px${withVip?' + VIP 2 AF/3 Stars':''}: fee modal, cancel/Back, persisted resume, invoice cancel, server-only publication OK`);
       await page.close();
     }
   } finally {await browser.close();server.close();}

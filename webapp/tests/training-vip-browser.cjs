@@ -14,7 +14,7 @@ const server = http.createServer((req,res)=>{
   try{
     for(const width of [320,360,390,430]){
       const page=await browser.newPage({viewport:{width,height:780},isMobile:true,hasTouch:true});
-      const errors=[], queries=[]; let order=null, posts=0, cancelled=0, backendPaid=false, edits=0, legacyPins=0;
+      const errors=[], queries=[]; let order=null, posts=0, cancelled=0, backendPaid=false, edits=0, legacyPins=0, capture=false;
       const user={id:'seller',telegram_id:1,first_name:'Длинное имя '.repeat(6),role:'admin'};
       const wallet={available_balance:2,frozen_balance:0,total_earned:0};
       const listing={id:'car',seller_id:'seller',seller:{...user},brand:'BMW',model:'M5',listing_type:'regular',game_version:'car_parking_2',status:'active',price_af_coins:100,power_hp:600,max_speed_kph:300,images:[],pinned:false,description:'Описание',created_at:new Date().toISOString()};
@@ -36,7 +36,7 @@ const server = http.createServer((req,res)=>{
         else if(endpoint==='/vip/orders/vip-one/cancel'){cancelled++;order.status='cancelled';body=order;}
         else if(endpoint==='/admin/training-analytics'){
           queries.push(url.search);
-          const item={id:'00000000-0000-0000-0000-000000000001',number:'00000000-0000-0000-0000-000000000001',title:'GameGuardian Android',buyer_name:'<img src=x onerror=alert(1)> Длинное имя '.repeat(5),buyer_id:'00000000-0000-0000-0000-000000000002',buyer_username:null,profile_url:'tg://user?id=1',purchased_at:'2026-10-13T22:15:23Z',amount_af:98,payment_method:'af_balance',payment_status:'paid',fulfillment_status:'completed',delivery_status:'delivered'};
+          const item={id:'00000000-0000-0000-0000-000000000001',number:'00000000-0000-0000-0000-000000000001',title:'GameGuardian Android',buyer_name:capture?'Максим · тестовый покупатель':'<img src=x onerror=alert(1)> Длинное имя '.repeat(5),buyer_id:'00000000-0000-0000-0000-000000000002',buyer_username:null,profile_url:'tg://user?id=1',purchased_at:'2026-10-13T22:15:23Z',amount_af:98,payment_method:'af_balance',payment_status:'paid',fulfillment_status:'completed',delivery_status:'delivered'};
           body={items:[item],total:1,has_more:false,timezone:'Europe/Bratislava',counts:{today:1,week:1,month:1,all_time:1},summary:{paid_count:1,gross_af:98,refund_af:0,net_af:98,unique_buyers:1,unverified_count:0},products:[{product_id:'p',title:'GameGuardian Android',today:1,week:1,month:1,all_time:1,gross_af:98,refund_af:0}],definitions:['Только подтверждённые покупки.']};
         }else if(endpoint==='/publication-rules')body={free_limit:5,price_stars:5,enabled:true,active_count:1,used:1,remaining:4,payment_required:false};
         await route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
@@ -77,7 +77,12 @@ const server = http.createServer((req,res)=>{
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
       const fonts=await page.locator('#trainingSales input').evaluateAll(inputs=>inputs.map(input=>parseFloat(getComputedStyle(input).fontSize)));
       assert(fonts.every(size=>size>=16));
+      capture=true;
+      await search.fill('');
+      await page.locator('#trainingSales button[type=submit]').click();
+      await page.locator('#trainingSales').getByText('Максим · тестовый покупатель',{exact:true}).waitFor();
       await page.waitForFunction(()=>!document.querySelector('#toast').classList.contains('is-visible'));
+      await page.waitForTimeout(400); // Finish the existing toast fade before the QA screenshot.
       await page.screenshot({path:path.join(__dirname,`training-sales-${width}.png`),fullPage:false});
       if(width===390){
         await page.locator('.training-sales__card').first().scrollIntoViewIfNeeded();
