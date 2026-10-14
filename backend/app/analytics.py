@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .admin_operations import date_window
+from .training_analytics import confirmed_purchase
 from .auth import get_current_user, require_admin
 from .config import get_settings
 from .database import SessionLocal, get_session
@@ -103,7 +104,7 @@ def financial_projection(lower, upper):
         source("topup_success", StarPayment, StarPayment.processed_at, StarPayment.xtr_amount, "Stars", StarPayment.status == "credited"),
         source("withdrawal_requested", WithdrawalRequest, WithdrawalRequest.created_at, WithdrawalRequest.amount, "AF"),
         source("withdrawal_paid", WithdrawalRequest, WithdrawalRequest.paid_at, WithdrawalRequest.payout_stars, "Stars", WithdrawalRequest.status == "paid"),
-        source("training_paid", TrainingPurchase, TrainingPurchase.created_at, TrainingPurchase.price_af_coins, "AF"),
+        source("training_paid", TrainingPurchase, TrainingPurchase.created_at, TrainingPurchase.price_af_coins, "AF", confirmed_purchase()),
         source("referral_registered", Referral, Referral.qualified_at),
         source("referral_milestone_paid", ReferralReward, ReferralReward.created_at, ReferralReward.amount, "AF", ReferralReward.milestone.is_not(None)),
         source("referral_topup_commission_paid", ReferralReward, ReferralReward.created_at, ReferralReward.amount, "AF", ReferralReward.payment_id.is_not(None)),
@@ -154,7 +155,7 @@ async def report_data(session, start, end, timezone):
         views = select(AnalyticsEvent.user_id, AnalyticsEvent.entity_id, func.min(AnalyticsEvent.created_at).label("first_at")).where(*event_range, AnalyticsEvent.event_name == "training_product_view").group_by(AnalyticsEvent.user_id, AnalyticsEvent.entity_id).subquery()
         matched = [TrainingPurchase.buyer_id == views.c.user_id, TrainingPurchase.product_id == views.c.entity_id,
                    TrainingPurchase.created_at >= views.c.first_at, TrainingPurchase.created_at < upper]
-        paid_training = select(func.count()).select_from(views).join(TrainingPurchase, and_(*matched))
+        paid_training = select(func.count()).select_from(views).join(TrainingPurchase, and_(*matched)).where(confirmed_purchase())
         funnels["training"] = {"viewed_user_products": await session.scalar(select(func.count()).select_from(views)), "paid_user_products": await session.scalar(paid_training)}
     lag = func.extract("epoch", Deal.seller_accepted_at - Deal.created_at)
     timing = (await session.execute(select(func.count(), func.avg(lag), func.percentile_cont(0.5).within_group(lag), func.percentile_cont(0.9).within_group(lag)).where(Deal.created_at >= lower, Deal.created_at < upper, Deal.seller_accepted_at.is_not(None), Deal.seller_accepted_at >= Deal.created_at))).one()
@@ -185,7 +186,7 @@ async def training_report(start: date | None = None, end: date | None = None,
     measured_from = max(lower, retained_from)
     available = bool(get_settings().analytics_enabled and state and measured_from < upper)
     views = select(AnalyticsEvent.entity_id, func.count().label("views"), func.count(func.distinct(AnalyticsEvent.user_id)).label("viewers")).where(AnalyticsEvent.event_name == "training_product_view", AnalyticsEvent.created_at >= measured_from, AnalyticsEvent.created_at < upper).group_by(AnalyticsEvent.entity_id).subquery()
-    sales = select(TrainingPurchase.product_id, func.count().label("paid"), func.count().filter(TrainingPurchase.delivery_status == "failed").label("delivery_failed"), func.count().filter((TrainingPurchase.delivery_status == "delivered") | (TrainingPurchase.status == "completed")).label("fulfilled")).where(TrainingPurchase.created_at >= lower, TrainingPurchase.created_at < upper).group_by(TrainingPurchase.product_id).subquery()
+    sales = select(TrainingPurchase.product_id, func.count().label("paid"), func.count().filter(TrainingPurchase.delivery_status == "failed").label("delivery_failed"), func.count().filter((TrainingPurchase.delivery_status == "delivered") | (TrainingPurchase.status == "completed")).label("fulfilled")).where(TrainingPurchase.created_at >= lower, TrainingPurchase.created_at < upper, confirmed_purchase()).group_by(TrainingPurchase.product_id).subquery()
     rows = (await session.execute(select(TrainingProduct.id, TrainingProduct.title,
         func.coalesce(views.c.views, 0).label("views"), func.coalesce(views.c.viewers, 0).label("viewers"),
         func.coalesce(sales.c.paid, 0).label("paid"), func.coalesce(sales.c.delivery_failed, 0).label("delivery_failed"), func.coalesce(sales.c.fulfilled, 0).label("fulfilled"))

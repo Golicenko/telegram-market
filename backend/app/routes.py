@@ -1891,13 +1891,14 @@ async def manage_training_products(
 
 @router.get("/admin/training/stats", response_model=TrainingAdminStatsOut)
 async def training_stats(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    from .training_analytics import confirmed_purchase
     total_sales, total_revenue, personal_sales, automatic_sales = (await session.execute(
         select(
             func.count(TrainingPurchase.id),
             func.coalesce(func.sum(TrainingPurchase.price_af_coins), 0),
             func.count(TrainingPurchase.id).filter(TrainingPurchase.product_type == "personal"),
             func.count(TrainingPurchase.id).filter(TrainingPurchase.product_type == "automatic"),
-        ).where(TrainingPurchase.seller_id == admin.id)
+        ).where(TrainingPurchase.seller_id == admin.id, confirmed_purchase())
     )).one()
     return TrainingAdminStatsOut(
         total_sales=int(total_sales or 0),

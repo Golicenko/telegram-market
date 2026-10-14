@@ -176,6 +176,9 @@ async def finish_locked(session, order, listing, wallet):
         f"VIP {order.id} до {listing.pinned_until.isoformat()}", external_reference=f"vip:{order.id}:complete", funding=funding)
     entry.id = uuid.uuid4()
     session.add(entry)
+    # Existing-order UPDATE may otherwise flush before the new ledger INSERT;
+    # persist the referenced row first, still inside the same transaction.
+    await session.flush()
     order.status, order.listing_id, order.pinned_until, order.ledger_id = "completed", listing.id, listing.pinned_until, entry.id
     order.last_error = None
     if order.intent_id:
@@ -246,7 +249,14 @@ async def fulfill(session, order_id):
     except Exception as exc:
         await session.rollback()
         # Paid receipt + reservation already committed. A restarted worker retries.
-        logger.warning("vip_fulfillment_retry order=%s error_type=%s", order_id, type(exc).__name__)
+        logger.warning("vip_fulfillment_retry order=%s error_type=%s sqlstate=%s constraint=%s", order_id, type(exc).__name__,
+            getattr(getattr(exc, "orig", None), "sqlstate", None),
+            getattr(getattr(getattr(exc, "orig", None), "__cause__", None), "constraint_name", None))
+        async with session.begin():
+            order = await session.scalar(select(ListingPromotion).where(ListingPromotion.id == order_id).with_for_update())
+            if order and order.status == "paid":
+                order.last_error = "Оплата сохранена. Сервер повторит активацию VIP; повторно платить не нужно."
+                order.updated_at = datetime.now(UTC)
 
 
 async def validate_checkout(session, telegram_id, payload, currency, amount, query_id):
@@ -390,6 +400,8 @@ async def recover_once():
                     if "CHARGE_ALREADY_REFUNDED" not in str(error.detail):
                         raise
                 receipt.status = "vip_extra_refunded"
+                session.add(Notification(user_id=user.id, notification_type="vip_extra_refunded", title="Дополнительная оплата возвращена",
+                    body=f"Лишний платёж за VIP возвращён: {receipt.xtr_amount} ⭐.", payload={}, delivery_status="pending"))
 
 
 async def run_worker():

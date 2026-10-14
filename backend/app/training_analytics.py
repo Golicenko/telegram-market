@@ -15,7 +15,7 @@ from .withdrawal_support import profile_url
 router = APIRouter(prefix="/api/admin/training-analytics", tags=["training analytics"])
 
 
-def sales_projection():
+def confirmed_purchase():
     # Never multiply a purchase by its delivery attempts, materials or ledger rows.
     debit = select(WalletTransaction.id).where(
         WalletTransaction.related_training_purchase_id == TrainingPurchase.id,
@@ -29,6 +29,10 @@ def sales_projection():
         StarPayment.status == "credited",
         StarPayment.raw_payload["is_test"].astext.is_distinct_from("true"),
     ).exists()
+    return and_(TrainingPurchase.payment_status == "paid", or_(debit, receipt))
+
+
+def sales_projection():
     refunds = select(WalletTransaction.related_training_purchase_id.label("purchase_id"),
         WalletTransaction.user_id.label("buyer_id"), func.sum(WalletTransaction.amount).label("amount"),
         func.max(WalletTransaction.created_at).label("refunded_at")).where(
@@ -36,7 +40,7 @@ def sales_projection():
             WalletTransaction.transaction_type.in_(("training_refund", "training_purchase_refund")),
             WalletTransaction.amount > 0,
         ).group_by(WalletTransaction.related_training_purchase_id, WalletTransaction.user_id).subquery()
-    confirmed = and_(TrainingPurchase.payment_status == "paid", or_(debit, receipt))
+    confirmed = confirmed_purchase()
     refund = func.coalesce(refunds.c.amount, 0)
     payment_state = case((~confirmed, "unverified"), (refund >= TrainingPurchase.price_af_coins, "refunded"),
                          (refund > 0, "partially_refunded"), else_="paid")

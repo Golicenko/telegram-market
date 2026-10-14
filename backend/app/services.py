@@ -330,6 +330,8 @@ async def create_listing(
                 publication.last_error = None
     except IntegrityError:
         await session.rollback()
+        if promotion_id:
+            raise  # The durable VIP worker retries the entire atomic operation.
         if request_id is None:
             raise
         listing = await session.scalar(

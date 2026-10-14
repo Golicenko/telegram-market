@@ -29,6 +29,7 @@ def date_window(start, end, timezone, now=None):
 
 
 async def overview_data(session, start, end, timezone):
+    from .training_analytics import confirmed_purchase
     lower, upper = date_window(start, end, timezone)
 
     async def count(model, field=None, *conditions):
@@ -54,7 +55,7 @@ async def overview_data(session, start, end, timezone):
         "credited_stars": int(payments[1]),
         "withdrawals_requested": await count(WithdrawalRequest, WithdrawalRequest.created_at),
         "withdrawals_paid": await count(WithdrawalRequest, WithdrawalRequest.paid_at, WithdrawalRequest.status == "paid"),
-        "training_paid": await count(TrainingPurchase, TrainingPurchase.created_at, TrainingPurchase.payment_status == "paid"),
+        "training_paid": await count(TrainingPurchase, TrainingPurchase.created_at, confirmed_purchase()),
     }
     pending = {
         "withdrawals": await count(WithdrawalRequest, None, WithdrawalRequest.status.in_(["pending", "approved"])),

@@ -176,8 +176,9 @@ async def test_unpaid_and_forged_payment_and_permissions():
         order = await start(sessions, seller, listing)
         await fulfill(sessions, order)  # Frontend says paid; backend does not.
         for change in ({"is_test": True}, {"total_amount": 1}, {"currency": "USD"}):
-            async with sessions() as session, pytest.raises(HTTPException):
-                await promotions.receive_payment(session, seller.telegram_id, {**payment(order), **change})
+            async with sessions() as session:
+                with pytest.raises(HTTPException):
+                    await promotions.receive_payment(session, seller.telegram_id, {**payment(order), **change})
         app = client_app(sessions)
         app.include_router(promotions.router)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:

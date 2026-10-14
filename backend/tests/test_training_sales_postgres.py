@@ -107,8 +107,9 @@ async def test_training_stars_webhook_replay_and_failed_payment_do_not_duplicate
             assert before["summary"]["paid_count"] == 0
         payment = {"invoice_payload": intent.invoice_payload, "currency": "XTR", "total_amount": 30,
             "telegram_payment_charge_id": str(uuid.uuid4())}
-        async with sessions() as session, pytest.raises(HTTPException):
-            await process_successful_payment(session, buyer.telegram_id, {**payment, "is_test": True})
+        async with sessions() as session:
+            with pytest.raises(HTTPException):
+                await process_successful_payment(session, buyer.telegram_id, {**payment, "is_test": True})
         async def pay():
             async with sessions() as session:
                 await process_successful_payment(session, buyer.telegram_id, payment)

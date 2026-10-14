@@ -1123,16 +1123,24 @@ function handleClick(event) {
     openSecondary("add");
   }
 
-  function configurePromotionOption(freeAdminPromotion) {
+  async function configurePromotionOption(freeAdminPromotion) {
     document.getElementById("promoteLabel").textContent = "✨ Закрепить объявление";
-    document.getElementById("promotePrice").textContent = freeAdminPromotion ? "Бесплатно" : "5 AF";
-    document.getElementById("promotionNote").textContent = "Объявление будет находиться выше остальных в течение 24 часов.";
+    document.getElementById("promotePrice").textContent = freeAdminPromotion ? "Бесплатно" : "Загружаем тариф…";
+    try {
+      const quote = await api.request("/vip/quote");
+      document.getElementById("promotePrice").textContent = freeAdminPromotion ? "Бесплатно" : `${formatNumber(quote.cost_af)} AF`;
+      document.getElementById("promotionNote").textContent = `Объявление будет находиться выше остальных в течение ${quote.duration_hours} часов.`;
+    } catch { document.getElementById("promotionNote").textContent = "Стоимость и срок будут проверены перед оплатой."; }
   }
 
-  function chooseInitialPromotion() {
+  async function chooseInitialPromotion() {
     const modal = document.getElementById("promotionChoiceModal");
     const paid = document.getElementById("promotionChoicePaid");
     const free = document.getElementById("promotionChoiceFree");
+    const quote = await api.request("/vip/quote");
+    modal.querySelector("p").textContent = `Ваше объявление будет показываться выше остальных в течение ${quote.duration_hours} часов.`;
+    modal.querySelector(".purchase-modal__amount").textContent = `${formatNumber(quote.cost_af)} AF`;
+    paid.textContent = `Закрепить за ${formatNumber(quote.cost_af)} AF`;
     return new Promise((resolve) => {
       let settled = false;
       const finish = (choice) => {
@@ -1759,7 +1767,7 @@ function handleClick(event) {
       for (const draft of drafts) {
         const button = document.createElement("button"); button.type = "button"; button.className = "ghost-button";
         button.textContent = `${draft.payload.brand} — ${{draft: "Продолжить оплату", paid: "Оплата получена · проверить публикацию", review: "На проверке администратора", refund_pending: "Возврат обрабатывается", refunded: "Stars возвращены"}[draft.status] || draft.status}`;
-        button.disabled = ["review", "refund_pending", "refunded"].includes(draft.status);
+        button.disabled = ["refund_pending", "refunded"].includes(draft.status) || (draft.status === "review" && !draft.payload.promote_for_24h);
         button.onclick = async () => { button.disabled = true; try { const listing = await payPublication(draft); if (listing) { state.pendingListingRequestId = null; await openListingDetails(listing.id); } } catch (error) { notify(error.message); } finally { button.disabled = false; } };
         box.append(button);
       }
@@ -1823,6 +1831,13 @@ function handleClick(event) {
       for (let attempt = 0; attempt < 15; attempt += 1) {
         draft = await api.request(`/publication-drafts/${draft.id}${attempt === 0 ? "/retry" : ""}`, attempt === 0 ? { method: "POST" } : {});
         if (draft.status === "published" && draft.listing_id) { showPurchaseSuccess("Объявление опубликовано", "Публикация подтверждена сервером"); return await api.request(`/listings/${draft.listing_id}`); }
+        if (["paid", "review"].includes(draft.status) && draft.payload.promote_for_24h) {
+          const quote = await api.request("/vip/quote");
+          if (quote.stars > 0) {
+            await openListingPromotionTopup({ payload: draft.payload, targetView: "market" }, null);
+            return null;
+          }
+        }
         if (["review", "refunded", "refund_pending"].includes(draft.status)) break;
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
@@ -2300,7 +2315,7 @@ function handleClick(event) {
   }
 
   function presentWalletTransaction(item) {
-    const hiddenTypes = new Set(["platform_commission", "purchase_completed", "dispute_completed", "training_purchase_completed"]);
+    const hiddenTypes = new Set(["platform_commission", "purchase_completed", "dispute_completed", "training_purchase_completed", "vip_reservation", "vip_topup_reserved", "vip_reservation_released"]);
     if (hiddenTypes.has(item.type)) return [];
     const labels = {
       protection_hold: "🚗 Покупка автомобиля",
