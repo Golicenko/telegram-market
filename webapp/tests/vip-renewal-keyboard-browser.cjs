@@ -26,7 +26,7 @@ const server = http.createServer((req,res) => {
       await page.addInitScript(()=>{
         window.keyboardHeight=760;window.invoiceResult='cancelled';window.invoices=0;
         Object.defineProperty(window.visualViewport,'height',{get:()=>window.keyboardHeight});
-        window.Telegram={WebApp:{initData:'fixture',viewportHeight:760,viewportStableHeight:760,ready(){},expand(){},onEvent(){},
+        window.Telegram={WebApp:{initData:'fixture',viewportHeight:760,viewportStableHeight:760,safeAreaInset:{top:24,bottom:34},contentSafeAreaInset:{top:12},ready(){},expand(){},onEvent(){},
           openInvoice(_url,callback){window.invoices++;callback(window.invoiceResult);},BackButton:{show(){},hide(){},onClick(fn){window.testBack=fn;}}}};
         window.keyboard=(height)=>{window.keyboardHeight=height;window.Telegram.WebApp.viewportHeight=height;window.visualViewport.dispatchEvent(new Event('resize'));};
       });
@@ -58,6 +58,10 @@ const server = http.createServer((req,res) => {
       const base='http://127.0.0.1:'+server.address().port;
       await page.goto(base+'/?deal_id=deal');
       const input=page.locator('[name=buyer_game_id]');await input.waitFor();await input.tap();
+      await page.getByRole('button',{name:'Отправить продавцу',exact:true}).click();
+      assert.equal(idSends,0,'empty ID does not submit');
+      await input.fill('0'.repeat(128));assert.equal((await input.inputValue()).length,128);
+      await input.press('End');await input.press('Backspace');assert.equal((await input.inputValue()).length,127);
       await input.fill('00AB123');
       await input.evaluate(el=>{window.originalIdInput=el;el.setSelectionRange(2,4);});
       await page.evaluate(()=>window.keyboard(350));
