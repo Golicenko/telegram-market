@@ -363,6 +363,7 @@
     bind(elements.syncRetry, "click", () => void retryFailedOptional(), "syncRetry");
     bind(elements.floatingChatButton, "click", openFloatingChat, "floatingChatButton");
     bind(elements.purchaseModalAction, "click", runPurchaseFlowAction, "purchaseModalAction");
+    bind(elements.purchaseModal, "cancel", (event) => { event.preventDefault(); void closePurchaseFlow(); }, "purchaseModal");
   }
 
   function bootstrap(options = {}) {
@@ -808,6 +809,7 @@ function handleClick(event) {
     if (window.AutoFlowDealConfirmation.dismiss()) return;
     const publicationModal = document.querySelector("dialog.publication-modal[open]");
     if (publicationModal) { publicationModal.dispatchEvent(new Event("cancel", { cancelable: true })); return; }
+    if (elements.purchaseModal?.open) { await closePurchaseFlow(); return; }
     if (primaryViews.has(state.currentView) || Date.now() < state.backBlockedUntil) return;
     state.backBlockedUntil = Date.now() + 450;
     const entry = state.navigationStack.pop();
@@ -1123,16 +1125,24 @@ function handleClick(event) {
     openSecondary("add");
   }
 
-  function configurePromotionOption(freeAdminPromotion) {
+  async function configurePromotionOption(freeAdminPromotion) {
     document.getElementById("promoteLabel").textContent = "✨ Закрепить объявление";
-    document.getElementById("promotePrice").textContent = freeAdminPromotion ? "Бесплатно" : "5 AF";
-    document.getElementById("promotionNote").textContent = "Объявление будет находиться выше остальных в течение 24 часов.";
+    document.getElementById("promotePrice").textContent = freeAdminPromotion ? "Бесплатно" : "Загружаем тариф…";
+    try {
+      const quote = await api.request("/vip/quote");
+      document.getElementById("promotePrice").textContent = freeAdminPromotion ? "Бесплатно" : `${formatNumber(quote.cost_af)} AF`;
+      document.getElementById("promotionNote").textContent = `Объявление будет находиться выше остальных в течение ${quote.duration_hours} часов.`;
+    } catch { document.getElementById("promotionNote").textContent = "Стоимость и срок будут проверены перед оплатой."; }
   }
 
-  function chooseInitialPromotion() {
+  async function chooseInitialPromotion() {
     const modal = document.getElementById("promotionChoiceModal");
     const paid = document.getElementById("promotionChoicePaid");
     const free = document.getElementById("promotionChoiceFree");
+    const quote = await api.request("/vip/quote");
+    modal.querySelector("p").textContent = `Ваше объявление будет показываться выше остальных в течение ${quote.duration_hours} часов.`;
+    modal.querySelector(".purchase-modal__amount").textContent = `${formatNumber(quote.cost_af)} AF`;
+    paid.textContent = `Закрепить за ${formatNumber(quote.cost_af)} AF`;
     return new Promise((resolve) => {
       let settled = false;
       const finish = (choice) => {
@@ -1439,7 +1449,7 @@ function handleClick(event) {
     if (isOwner) {
       const ownerActions = document.createElement("div"); ownerActions.className = "owner-actions";
       const edit = document.createElement("button"); edit.dataset.editListing = listing.id; edit.textContent = "Изменить";
-      const promote = document.createElement("button"); promote.dataset.promoteListing = listing.id; promote.textContent = listing.pinned ? "Закреплено" : (state.me.user.role === "admin" && listing.listing_type === "unique" ? "Закрепить бесплатно" : "Закрепить · 5 AF"); promote.disabled = listing.pinned || listing.status !== "active";
+      const promote = document.createElement("button"); promote.dataset.promoteListing = listing.id; promote.textContent = listing.pinned ? "Закреплено" : (state.me.user.role === "admin" && listing.listing_type === "unique" ? "Закрепить бесплатно" : "Закрепить"); promote.disabled = listing.pinned || listing.status !== "active";
       const remove = document.createElement("button"); remove.dataset.deleteListing = listing.id; remove.textContent = "Удалить"; remove.className = "is-danger";
       ownerActions.append(edit, promote, remove); actions.append(ownerActions);
     }
@@ -1571,8 +1581,15 @@ function handleClick(event) {
     openDialog(elements.purchaseModal);
   }
 
-  function closePurchaseFlow() {
+  async function closePurchaseFlow() {
     if (state.purchaseFlow?.busy) return;
+    const flow = state.purchaseFlow;
+    if (flow?.kind === "listing-promotion-topup" && flow.vipOrderId) {
+      flow.busy = true;
+      try { await api.request(`/vip/orders/${flow.vipOrderId}/cancel`, { method: "POST" }); }
+      catch { notify("Не удалось отменить резерв. Сервер проверит оплату и освободит неоплаченный резерв по сроку счёта."); }
+      finally { flow.busy = false; }
+    }
     if (elements.purchaseModal?.open) elements.purchaseModal.close();
     state.purchaseFlow = null;
   }
@@ -1658,82 +1675,49 @@ function handleClick(event) {
   }
 
   async function payListingPromotionShortfall(flow) {
-    if (!telegram?.initData || typeof telegram.openInvoice !== "function") {
-      elements.purchaseModalNote.textContent = "Откройте AUTOFLOW MARKET внутри Telegram, чтобы пополнить баланс.";
-      return;
-    }
     flow.busy = true;
     elements.purchaseModalAction.disabled = true;
     try {
-      if (!flow.intentId) {
+      if (!flow.vipOrderId) {
         elements.purchaseModalAction.textContent = "Создаём счёт…";
-        const amount = Math.ceil(flow.missing);
-        const intent = await api.request("/wallet/star-payments/intent", {
-          method: "POST",
-          body: JSON.stringify({ amount, purpose: "listing_promotion_topup" }),
+        flow.requestId ||= createRequestId();
+        const order = await api.request("/vip/orders", {
+          method: "POST", body: JSON.stringify({ request_id: flow.requestId,
+            ...(flow.submission ? { listing_payload: flow.submission.payload } : { listing_id: flow.listingId }) }),
         });
-        flow.intentId = intent.id;
-        const invoiceStatus = await new Promise((resolve, reject) => {
-          try { telegram.openInvoice(intent.invoice_url, resolve); }
-          catch (error) { reject(error); }
-        });
-        if (["cancelled", "failed"].includes(invoiceStatus)) {
-          track("topup_failure", null, invoiceStatus === "cancelled" ? "cancelled" : "telegram_failed");
-          flow.busy = false;
-          flow.intentId = null;
-          elements.purchaseModalAction.disabled = false;
-          elements.purchaseModalAction.textContent = `Пополнить ${amount} AF`;
-          elements.purchaseModalNote.textContent = "Оплата не завершена. Объявление и баланс не изменены.";
-          return;
+        flow.vipOrderId = order.id;
+      }
+      let order = await api.request(`/vip/orders/${flow.vipOrderId}`);
+      if (order.status === "awaiting_payment") {
+        if (!telegram?.initData || typeof telegram.openInvoice !== "function") throw new Error("Откройте приложение внутри Telegram для оплаты. Резерв AF освободится при отмене или истечении счёта.");
+        if (!order.invoice_url) throw new Error("Счёт ещё создаётся. Нажмите «Повторить».");
+        elements.purchaseModalText.textContent = `Стоимость: ${formatNumber(order.cost_af)} AF. С баланса: ${formatNumber(order.balance_af)} AF. Доплата: ${order.stars} ⭐.`;
+        const result = await new Promise((resolve, reject) => { try { telegram.openInvoice(order.invoice_url, resolve); } catch (error) { reject(error); } });
+        if (["cancelled", "failed"].includes(result)) {
+          order = await api.request(`/vip/orders/${order.id}/cancel`, { method: "POST" });
+          if (order.status === "cancelled") {
+            flow.vipOrderId = null; flow.requestId = null;
+            throw new Error("Оплата не завершена. Резерв AF освобождён, VIP не активирован.");
+          }
         }
       }
-      elements.purchaseModalTitle.textContent = "⏳ Платёж подтверждается";
-      elements.purchaseModalText.textContent = "Не закрывайте приложение. Обычно это занимает несколько секунд.";
-      elements.purchaseModalAction.textContent = "Проверяем…";
-      const payment = await waitForStarPayment(flow.intentId);
-      if (payment?.status !== "paid") {
-        flow.busy = false;
-        elements.purchaseModalAction.disabled = false;
-        elements.purchaseModalAction.textContent = "Проверить снова";
-        elements.purchaseModalNote.textContent = "Баланс изменится только после подтверждения backend.";
-        return;
+      elements.purchaseModalTitle.textContent = "Проверяем оплату VIP";
+      elements.purchaseModalNote.textContent = "Сервер завершит закрепление после подтверждения Telegram, даже если вы закроете приложение.";
+      for (let attempt = 0; attempt < 15 && ["awaiting_payment", "paid"].includes(order.status); attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        order = await api.request(`/vip/orders/${flow.vipOrderId}`);
       }
-      state.me = await api.request("/me");
-      renderBalance();
-      elements.purchaseModalTitle.textContent = "✅ AF Coins зачислены";
-      elements.purchaseModalText.textContent = flow.submission ? "Публикуем и закрепляем объявление…" : "Закрепляем объявление…";
-      let listing;
-      if (flow.submission) {
-        if (elements.purchaseModal?.open) elements.purchaseModal.close();
-        listing = flow.submission.path === "/listings" ? await publishWithQuota(flow.submission.payload, flow.submission) : await api.request(flow.submission.path, {
-          method: flow.submission.method,
-          body: JSON.stringify(flow.submission.payload),
-        });
-      } else {
-        listing = await api.request(`/listings/${flow.listingId}/promote`, { method: "POST" });
-      }
+      if (order.status !== "completed") throw new Error(order.last_error || "Оплата обрабатывается сервером. Повторно платить не нужно; можно проверить позже.");
       if (elements.purchaseModal?.open) elements.purchaseModal.close();
       state.purchaseFlow = null;
       if (flow.submission) await finishListingSubmission(flow.submission);
-      else {
-        await refreshMarketplace();
-        notify(`Объявление закреплено до ${formatDate(listing.pinned_until)}`);
-      }
+      else await refreshMarketplace();
+      notify(`VIP-закрепление успешно оплачено · до ${formatDate(order.pinned_until)}`);
     } catch (error) {
-      flow.busy = false;
-      elements.purchaseModalAction.disabled = false;
-      if (!elements.purchaseModal.open) notify(error.message);
-      if (Number(error.status) === 402 && error.detail?.purpose === "listing_promotion") {
-        flow.missing = Number(error.detail.missing_af_coins || flow.missing || 0);
-        flow.intentId = null;
-        elements.purchaseModalTitle.textContent = "Недостаточно AF Coins";
-        elements.purchaseModalText.textContent = `Для закрепления не хватает ${formatNumber(flow.missing)} AF.`;
-        elements.purchaseModalAction.textContent = `Пополнить ${Math.ceil(flow.missing)} AF`;
-        elements.purchaseModalNote.textContent = "Баланс изменился до завершения публикации. Можно доплатить новую точную разницу.";
-        return;
-      }
-      elements.purchaseModalAction.textContent = flow.intentId ? "Повторить публикацию" : `Пополнить ${Math.ceil(flow.missing)} AF`;
       elements.purchaseModalNote.textContent = error.message;
+      elements.purchaseModalAction.textContent = "Повторить / проверить";
+    } finally {
+      flow.busy = false; elements.purchaseModalAction.disabled = false;
     }
   }
 
@@ -1768,10 +1752,24 @@ function handleClick(event) {
       let box = document.getElementById("publicationDrafts");
       if (!box) { box = document.createElement("div"); box.id = "publicationDrafts"; elements.carForm.prepend(box); }
       box.replaceChildren();
+      const vipOrders = await api.request("/vip/orders");
+      for (const order of vipOrders.filter(item => ["awaiting_payment", "paid"].includes(item.status))) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "ghost-button";
+        button.textContent = `VIP: ${order.status === "paid" ? "оплачен · проверить закрепление" : "продолжить оплату"}`;
+        button.onclick = () => {
+          state.purchaseFlow = { kind: "listing-promotion-topup", busy: false, vipOrderId: order.id,
+            listingId: order.listing_id, submission: order.listing_payload ? { payload: order.listing_payload, targetView: "market" } : null };
+          elements.purchaseModalTitle.textContent = "Сохранённая оплата VIP";
+          elements.purchaseModalText.textContent = `Стоимость: ${formatNumber(order.cost_af)} AF · с баланса ${formatNumber(order.balance_af)} AF · доплата ${order.stars} ⭐`;
+          elements.purchaseModalNote.textContent = "Не создавайте повторный платёж. Эта оплата сохранена на сервере.";
+          elements.purchaseModalAction.textContent = "Продолжить / проверить"; elements.purchaseModalAction.disabled = false;
+          openDialog(elements.purchaseModal);
+        }; box.append(button);
+      }
       for (const draft of drafts) {
         const button = document.createElement("button"); button.type = "button"; button.className = "ghost-button";
         button.textContent = `${draft.payload.brand} — ${{draft: "Продолжить оплату", paid: "Оплата получена · проверить публикацию", review: "На проверке администратора", refund_pending: "Возврат обрабатывается", refunded: "Stars возвращены"}[draft.status] || draft.status}`;
-        button.disabled = ["review", "refund_pending", "refunded"].includes(draft.status);
+        button.disabled = ["refund_pending", "refunded"].includes(draft.status) || (draft.status === "review" && !draft.payload.promote_for_24h);
         button.onclick = async () => { button.disabled = true; try { const listing = await payPublication(draft); if (listing) { state.pendingListingRequestId = null; await openListingDetails(listing.id); } } catch (error) { notify(error.message); } finally { button.disabled = false; } };
         box.append(button);
       }
@@ -1797,7 +1795,7 @@ function handleClick(event) {
       const title = document.createElement("h2"); title.textContent = "Лимит бесплатных объявлений";
       const price = document.createElement("strong"); price.textContent = `${draft.price_stars} ⭐`;
       const text = document.createElement("p"); text.textContent = `У вас уже ${state.publicationRules?.active_count ?? state.publicationRules?.used ?? "несколько"} активных объявлений. Чтобы разместить ещё одно, удалите старое объявление или оплатите публикацию за ${draft.price_stars} ⭐.`;
-      const extra = document.createElement("small"); extra.textContent = draft.payload.promote_for_24h ? "Вы также выбрали закрепление: оно оплачивается отдельно с баланса AF по действующим правилам." : "Это не пополнение AF. Реферальная комиссия не начисляется.";
+      const extra = document.createElement("small"); extra.textContent = draft.payload.promote_for_24h ? "VIP оплачивается отдельно: AF с баланса и, при нехватке, доплата Stars. Объявление появится после оплаты публикации и VIP. Если передумаете, возврат невыполненной публикации доступен через поддержку." : "Это не пополнение AF. Реферальная комиссия не начисляется.";
       const controls = document.createElement("div"); controls.className = "publication-actions";
       const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "ghost-button"; cancel.textContent = "Отмена";
       const pay = document.createElement("button"); pay.type = "button"; pay.className = "publish-button"; pay.textContent = `Оплатить ${draft.price_stars} ⭐`;
@@ -1835,6 +1833,10 @@ function handleClick(event) {
       for (let attempt = 0; attempt < 15; attempt += 1) {
         draft = await api.request(`/publication-drafts/${draft.id}${attempt === 0 ? "/retry" : ""}`, attempt === 0 ? { method: "POST" } : {});
         if (draft.status === "published" && draft.listing_id) { showPurchaseSuccess("Объявление опубликовано", "Публикация подтверждена сервером"); return await api.request(`/listings/${draft.listing_id}`); }
+        if (["paid", "review"].includes(draft.status) && draft.payload.promote_for_24h) {
+          await openListingPromotionTopup({ payload: draft.payload, targetView: "market" }, null);
+          return null;
+        }
         if (["review", "refunded", "refund_pending"].includes(draft.status)) break;
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
@@ -1911,10 +1913,8 @@ function handleClick(event) {
       if (state.photoFiles.length > 10) throw new Error("Можно добавить не более 10 фотографий");
       const promotionSelected = formData.get("promote_for_24h") === "on";
       let shouldPromote = promotionSelected;
-      if (promotionSelected && state.listingMode === "regular") {
-        shouldPromote = state.editingListingId
-          ? await confirmAction("Закрепить объявление за 5 AF Coins?")
-          : await chooseInitialPromotion();
+      if (promotionSelected && state.listingMode === "regular" && !state.editingListingId) {
+        shouldPromote = await chooseInitialPromotion();
       }
       const imageUrls = [];
       for (const [index, file] of state.photoFiles.entries()) {
@@ -1943,6 +1943,11 @@ function handleClick(event) {
       const savedListing = path === "/listings" && listingSubmission.method === "POST"
         ? await publishWithQuota(payload, listingSubmission)
         : await api.request(path, { method: listingSubmission.method, body: JSON.stringify(payload) });
+      if (shouldPromote && !savedListing.pinned && state.editingListingId && state.listingMode === "regular") {
+        // Editing is free; VIP has its own server-priced confirmation, including shortfall.
+        await finishListingSubmission(listingSubmission);
+        return openListingPromotionTopup(null, null, savedListing.id);
+      }
       let promotionError = null;
       if (shouldPromote && !savedListing.pinned && (state.editingListingId || state.listingMode === "unique")) {
         try {
@@ -1979,23 +1984,23 @@ function handleClick(event) {
     if (submission.publishedPaidListingId) await openListingDetails(submission.publishedPaidListingId);
   }
 
-  function openListingPromotionTopup(submission, error, listingId = null) {
-    const available = Number(error.detail?.available_af_coins || 0);
-    const missing = Number(error.detail?.missing_af_coins || 0);
+  async function openListingPromotionTopup(submission, error, listingId = null) {
+    let quote;
+    try { quote = await api.request("/vip/quote"); } catch (failure) { notify(failure.message); return; }
     state.purchaseFlow = {
       kind: "listing-promotion-topup",
       stage: "topup",
       busy: false,
       intentId: null,
-      missing,
+      missing: quote.stars,
       submission,
       listingId,
     };
-    elements.purchaseModalTitle.textContent = "Недостаточно AF Coins";
-    elements.purchaseModalText.textContent = `На балансе: ${formatNumber(available)} AF. Для закрепления не хватает ${formatNumber(missing)} AF.`;
-    elements.purchaseModalAmount.replaceChildren(document.createTextNode(`${formatNumber(missing)} `), coin("af-coin--small"));
-    elements.purchaseModalNote.textContent = "После подтверждения оплаты объявление будет опубликовано или закреплено автоматически.";
-    elements.purchaseModalAction.textContent = `Пополнить ${Math.ceil(missing)} AF`;
+    elements.purchaseModalTitle.textContent = "VIP-закрепление";
+    elements.purchaseModalText.textContent = `Стоимость: ${formatNumber(quote.cost_af)} AF · ${quote.duration_hours} ч. С баланса: ${formatNumber(quote.balance_af)} AF. Доплатить: ${quote.stars} ⭐.`;
+    elements.purchaseModalAmount.textContent = `${formatNumber(quote.cost_af)} AF`;
+    elements.purchaseModalNote.textContent = `AF резервируются до оплаты. При отмене резерв освобождается. Курс доплаты: 1 ⭐ = ${quote.af_per_star} AF.${Number(quote.rounding_credit_af) ? ` Остаток ${formatNumber(quote.rounding_credit_af)} AF останется на балансе.` : ""}`;
+    elements.purchaseModalAction.textContent = quote.stars ? `Оплатить ${quote.stars} ⭐` : `Оплатить ${formatNumber(quote.cost_af)} AF`;
     elements.purchaseModalAction.disabled = false;
     openDialog(elements.purchaseModal);
   }
@@ -2113,7 +2118,7 @@ function handleClick(event) {
   async function promoteListing(id) {
     const source = findListing(id);
     const freeAdminPromotion = state.me?.user.role === "admin" && source?.listing_type === "unique";
-    if (!freeAdminPromotion && !(await confirmAction("Закрепить объявление за 5 AF Coins?"))) return;
+    if (!freeAdminPromotion) return openListingPromotionTopup(null, null, id);
     try { const listing = await api.request(freeAdminPromotion ? `/admin/listings/${id}/promote` : `/listings/${id}/promote`, { method: "POST" }); await refreshMarketplace(); notify(`Объявление закреплено до ${formatDate(listing.pinned_until)}`); }
     catch (error) {
       if (!freeAdminPromotion && Number(error.status) === 402 && error.detail?.purpose === "listing_promotion") {
@@ -2312,7 +2317,7 @@ function handleClick(event) {
   }
 
   function presentWalletTransaction(item) {
-    const hiddenTypes = new Set(["platform_commission", "purchase_completed", "dispute_completed", "training_purchase_completed"]);
+    const hiddenTypes = new Set(["platform_commission", "purchase_completed", "dispute_completed", "training_purchase_completed", "vip_reservation", "vip_topup_reserved", "vip_reservation_released"]);
     if (hiddenTypes.has(item.type)) return [];
     const labels = {
       protection_hold: "🚗 Покупка автомобиля",
@@ -4434,6 +4439,26 @@ async function hideCurrentConversation() {
       const remove = document.createElement("button"); remove.dataset.adminListingAction = "delete"; remove.dataset.listingId = listing.id; remove.textContent = "Удалить"; actions.append(promotion, publication, remove); card.append(title, meta, actions); return card;
     }));
     window.AutoFlowAdmin.pager(elements.adminListings, "listings", listings.length, loadAdminListings);
+    let journal = document.getElementById("adminVipJournal");
+    if (!journal) { journal = document.createElement("details"); journal.id = "adminVipJournal"; elements.adminListings.after(journal); }
+    const title = document.createElement("summary"); title.textContent = "История оплаты VIP";
+    const body = document.createElement("div"); journal.replaceChildren(title, body);
+    let offset = 0;
+    const load = async () => {
+      body.textContent = "Загружаем операции…";
+      try {
+        const result = await api.request(`/admin/vip/orders?limit=25&offset=${offset}`);
+        const labels = { awaiting_payment: "Ожидает оплаты", paid: "Оплачено · активация", completed: "Активировано", cancelled: "Отменено · резерв освобождён", restored: "Средства восстановлены в AF" };
+        body.replaceChildren(...result.items.map(item => {
+          const card = document.createElement("div"); card.className = "training-sales__card";
+          for (const text of [`Операция №${item.number}`, `Пользователь: ${item.user_id}`, `Объявление: ${item.listing_id || "Сохранённый черновик"}`, `Стоимость: ${formatNumber(item.cost_af)} AF · с баланса: ${formatNumber(item.balance_af)} AF · Stars: ${item.stars}`, `${labels[item.status]} · ${formatDate(item.created_at)}`, `Срок: ${item.duration_hours} ч. · до: ${item.pinned_until ? formatDate(item.pinned_until) : "—"}`, `Telegram payment ID: ${item.telegram_payment_charge_id || "—"}`, item.last_error || ""]) { const p = document.createElement("p"); p.textContent = text; card.append(p); }
+          return card;
+        }));
+        if (!result.items.length) body.textContent = "Новых операций VIP пока нет. Старые списания сохранены в истории кошельков.";
+        for (const [label, step, disabled] of [["Назад", -25, offset === 0], ["Далее", 25, !result.has_more]]) { const button = document.createElement("button"); button.textContent = label; button.disabled = disabled; button.onclick = () => { offset += step; void load(); }; body.append(button); }
+      } catch (error) { body.textContent = error.message; const retry = document.createElement("button"); retry.textContent = "Повторить"; retry.onclick = load; body.append(retry); }
+    };
+    journal.ontoggle = () => { if (journal.open) void load(); };
   }
 
   async function adminListingAction(button) {
@@ -4544,6 +4569,10 @@ async function hideCurrentConversation() {
   async function loadAdminTraining(filter = "all") {
     if (state.me?.user.role !== "admin") return;
     state.adminTrainingFilter = filter;
+    if (window.AutoFlowTrainingSales) {
+      state.trainingSales ||= window.AutoFlowTrainingSales.mount(api, document.querySelector('[data-admin-panel="training"]'));
+      void state.trainingSales.load();
+    }
     const [productsResult, statsResult, ordersResult] = await Promise.allSettled([
       api.request(`/admin/training/management?filter=${encodeURIComponent(filter)}`),
       api.request("/admin/training/stats"),

@@ -1852,13 +1852,14 @@ async def manage_training_products(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
+    from .training_analytics import confirmed_purchase
     aggregate = (
         select(
             TrainingPurchase.product_id.label("product_id"),
             func.count(TrainingPurchase.id).label("purchase_count"),
             func.coalesce(func.sum(TrainingPurchase.price_af_coins), 0).label("revenue"),
         )
-        .group_by(TrainingPurchase.product_id)
+        .where(confirmed_purchase()).group_by(TrainingPurchase.product_id)
         .subquery()
     )
     statement = (
@@ -1891,13 +1892,14 @@ async def manage_training_products(
 
 @router.get("/admin/training/stats", response_model=TrainingAdminStatsOut)
 async def training_stats(admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    from .training_analytics import confirmed_purchase
     total_sales, total_revenue, personal_sales, automatic_sales = (await session.execute(
         select(
             func.count(TrainingPurchase.id),
             func.coalesce(func.sum(TrainingPurchase.price_af_coins), 0),
             func.count(TrainingPurchase.id).filter(TrainingPurchase.product_type == "personal"),
             func.count(TrainingPurchase.id).filter(TrainingPurchase.product_type == "automatic"),
-        ).where(TrainingPurchase.seller_id == admin.id)
+        ).where(TrainingPurchase.seller_id == admin.id, confirmed_purchase())
     )).one()
     return TrainingAdminStatsOut(
         total_sales=int(total_sales or 0),
@@ -3760,6 +3762,15 @@ async def telegram_webhook(
     pre_checkout = update.get("pre_checkout_query") or {}
     if pre_checkout.get("id"):
         sender = pre_checkout.get("from") or {}
+        from .promotions import PREFIX as VIP_PREFIX, validate_checkout as validate_vip_checkout
+        if str(pre_checkout.get("invoice_payload") or "").startswith(VIP_PREFIX):
+            if not expected_secret:
+                raise HTTPException(503, "Платёжный webhook не настроен")
+            accepted, error_message = await validate_vip_checkout(session, int(sender.get("id") or 0),
+                str(pre_checkout.get("invoice_payload")), str(pre_checkout.get("currency")),
+                int(pre_checkout.get("total_amount") or 0), str(pre_checkout["id"]))
+            await answer_pre_checkout_query(pre_checkout["id"], accepted, error_message)
+            return {"ok": True}
         from .publications import PREFIX, validate_checkout
         if str(pre_checkout.get("invoice_payload") or "").startswith(PREFIX):
             if not expected_secret:
@@ -3928,6 +3939,13 @@ async def telegram_webhook(
         background_tasks.add_task(send_bot_menu, int(sender["id"]), start_payload=start_payload)
     payment = message.get("successful_payment")
     if payment and sender.get("id"):
+        from .promotions import PREFIX as VIP_PREFIX, receive_payment as receive_vip_payment, fulfill as fulfill_vip
+        if str(payment.get("invoice_payload") or "").startswith(VIP_PREFIX):
+            if not expected_secret:
+                raise HTTPException(503, "Платёжный webhook не настроен")
+            order_id = await receive_vip_payment(session, int(sender["id"]), payment)
+            await fulfill_vip(session, order_id)
+            return {"ok": True}
         from .publications import PREFIX, receive_payment, fulfill
         if str(payment.get("invoice_payload") or "").startswith(PREFIX):
             if not expected_secret:

@@ -1,4 +1,5 @@
 import uuid
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from typing import Awaitable, Callable
@@ -188,6 +189,7 @@ async def create_listing(
     listing_type: str,
     pinned: bool = False,
     publication_id: uuid.UUID | None = None,
+    promotion_id: uuid.UUID | None = None,
 ) -> Listing:
     settings = get_settings()
     if listing_type == "unique" and seller.role != "admin":
@@ -197,11 +199,21 @@ async def create_listing(
     try:
         async with session.begin():
             from .models import PublicationDraft
+            promotion = None
+            if promotion_id:
+                from .models import ListingPromotion
+                promotion = await session.scalar(select(ListingPromotion).where(ListingPromotion.id == promotion_id).with_for_update().execution_options(populate_existing=True))
+                if not promotion or promotion.user_id != seller.id or promotion.listing_payload != payload.model_dump(mode="json"):
+                    raise HTTPException(409, "VIP связан с другим черновиком")
+                if promotion.status == "completed":
+                    return await session.get(Listing, promotion.listing_id)
+                if promotion.status != "paid":
+                    raise HTTPException(409, "Оплата VIP ещё не подтверждена")
             publication = None
             saved_draft = None
             if publication_id:
                 publication = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == publication_id).with_for_update().execution_options(populate_existing=True))
-                if not publication or publication.user_id != seller.id or publication.status not in {"paid", "published"} or not publication.payment_id:
+                if not publication or publication.user_id != seller.id or publication.status not in ({"paid", "published", "review"} if promotion else {"paid", "published"}) or not publication.payment_id:
                     raise HTTPException(409, "Оплата публикации не подтверждена")
                 if publication.request_id != request_id or publication.payload != payload.model_dump(mode="json"):
                     raise HTTPException(409, "Оплата связана с другим черновиком")
@@ -240,14 +252,14 @@ async def create_listing(
                 admin_pinned = seller.role == "admin" and listing_type == "unique" and pinned
                 paid_pinned = listing_type == "regular" and pinned
                 promotion_wallet = None
-                promotion_cost = money(settings.listing_promotion_cost_af_coins)
+                promotion_cost = money(promotion.cost_af if promotion else settings.listing_promotion_cost_af_coins)
                 promotion_before = None
                 if paid_pinned:
                     promotion_wallet = await session.scalar(
                         select(Wallet).where(Wallet.user_id == seller.id).with_for_update()
                     )
                     available = money(promotion_wallet.available_balance if promotion_wallet else Decimal("0"))
-                    if available < promotion_cost:
+                    if not promotion and available < promotion_cost:
                         missing = money(promotion_cost - available)
                         raise HTTPException(
                             status_code=402,
@@ -282,12 +294,14 @@ async def create_listing(
                 await session.flush()
                 for position, url in enumerate(payload.image_urls):
                     session.add(ListingImage(listing_id=listing.id, url=url, position=position))
-                if paid_pinned and promotion_wallet and promotion_before:
+                if promotion and promotion_wallet:
+                    from .promotions import finish_locked
+                    await finish_locked(session, promotion, listing, promotion_wallet)
+                elif paid_pinned and promotion_wallet and promotion_before:
                     before_available, before_frozen = promotion_before
                     funding = debit_spendable(promotion_wallet, promotion_cost)
                     promotion_wallet.version += 1
-                    session.add(
-                        wallet_transaction(
+                    entry = wallet_transaction(
                             promotion_wallet,
                             "listing_promotion",
                             -promotion_cost,
@@ -297,13 +311,17 @@ async def create_listing(
                             external_reference=f"listing-promotion:{listing.id}:initial",
                             funding=funding,
                         )
-                    )
+                    session.add(entry)
+                    from .promotions import record_balance_pin
+                    record_balance_pin(session, listing, promotion_wallet, promotion_cost, funding, entry)
                 if listing_type == "unique":
                     session.add(AdminAction(admin_id=seller.id, action="create_unique_listing", target_type="listing", target_id=listing.id))
                 if quota_user:
                     quota_user.publication_count += 1
                 if saved_draft:
                     saved_draft.status, saved_draft.listing_id = "published", listing.id
+            elif promotion:
+                raise HTTPException(409, "Объявление уже опубликовано; оплата VIP будет восстановлена")
             if publication:
                 if publication.status != "published":
                     session.add(Notification(user_id=seller.id, notification_type="publication_published", title="Объявление опубликовано", body="Оплата Stars подтверждена. Объявление опубликовано в AutoFlow Market.", payload={"listing_id": str(listing.id)}, delivery_status="pending"))
@@ -312,6 +330,8 @@ async def create_listing(
                 publication.last_error = None
     except IntegrityError:
         await session.rollback()
+        if promotion_id:
+            raise  # The durable VIP worker retries the entire atomic operation.
         if request_id is None:
             raise
         listing = await session.scalar(
@@ -361,8 +381,7 @@ async def charge_listing_promotion(session: AsyncSession, actor: User, listing: 
     before_available, before_frozen = wallet_snapshot(wallet)
     funding = debit_spendable(wallet, cost)
     wallet.version += 1
-    session.add(
-        wallet_transaction(
+    entry = wallet_transaction(
             wallet,
             "listing_promotion",
             -cost,
@@ -372,7 +391,9 @@ async def charge_listing_promotion(session: AsyncSession, actor: User, listing: 
             external_reference=f"listing-promotion:{listing.id}:{listing.pinned_until.isoformat()}",
             funding=funding,
         )
-    )
+    session.add(entry)
+    from .promotions import record_balance_pin
+    record_balance_pin(session, listing, wallet, cost, funding, entry)
 
 
 async def promote_listing(session: AsyncSession, actor: User, listing_id: uuid.UUID) -> Listing:
@@ -2828,7 +2849,7 @@ async def validate_star_pre_checkout(
     return True, None
 
 
-async def process_successful_payment(session: AsyncSession, telegram_id: int, payment: dict) -> bool:
+async def process_successful_payment(session: AsyncSession, telegram_id: int, payment: dict, *, _within_transaction=False) -> bool:
     if payment.get("is_test"):
         raise HTTPException(status_code=400, detail="Test payments cannot credit production balances")
     if payment.get("currency") != "XTR":
@@ -2836,10 +2857,11 @@ async def process_successful_payment(session: AsyncSession, telegram_id: int, pa
     invoice_payload = str(payment.get("invoice_payload") or "")
     charge_id = str(payment.get("telegram_payment_charge_id") or "")
     xtr_amount = int(payment.get("total_amount") or 0)
-    if not invoice_payload.startswith(("autoflow_topup:", "autoflow_training:")) or not charge_id or xtr_amount <= 0:
+    prefixes = ("autoflow_topup:", "autoflow_training:", "autoflow_vip:") if _within_transaction else ("autoflow_topup:", "autoflow_training:")
+    if not invoice_payload.startswith(prefixes) or not charge_id or xtr_amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid successful_payment payload")
 
-    async with session.begin():
+    async with (nullcontext() if _within_transaction else session.begin()):
         if await session.scalar(select(StarPayment.id).where(StarPayment.telegram_payment_charge_id == charge_id)):
             from .referrals import logger as referral_logger
             referral_logger.info("referral_duplicate_payment_prevented")

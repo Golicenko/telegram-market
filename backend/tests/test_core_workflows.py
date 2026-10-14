@@ -358,7 +358,7 @@ def test_listing_form_uses_new_prices_explicit_pin_choice_and_shortfall_resume()
     assert "Закрепить за 5 AF" in html and "Опубликовать бесплатно" in html
     assert "chooseInitialPromotion()" in script
     assert "payload.promote_for_24h = shouldPromote" in script
-    assert 'purpose: "listing_promotion_topup"' in script
+    assert 'api.request("/vip/orders"' in script
     assert "payListingPromotionShortfall(flow)" in script
     assert "listing_promotion_topup" in migration
     assert "drop_table" not in migration

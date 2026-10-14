@@ -50,6 +50,6 @@ test('paid submission retains server listing identity for opening its detail aft
   const submission={};await c.publishWithQuota({client_request_id:'request'},submission);
   assert.equal(submission.publishedPaidListingId,'published');
   const opened=[];Object.assign(c,{elements:{carForm:{reset(){}},photoPreview:{replaceChildren(){}}},state:{},refreshMarketplace:async()=>{},navigate:async()=>{},notify(){},openListingDetails:async id=>opened.push(id)});
-  vm.runInContext(fn('async function finishListingSubmission','function openListingPromotionTopup'),c);
+  vm.runInContext(fn('async function finishListingSubmission','async function openListingPromotionTopup'),c);
   await c.finishListingSubmission(submission);assert.deepEqual(opened,['published']);
 });

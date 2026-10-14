@@ -22,6 +22,8 @@ from .admin_operations import router as admin_operations_router
 from .analytics import router as analytics_router, run_analytics_retention
 from .referrals import backfill_referral_codes
 from .publications import router as publication_router, run_publication_worker
+from .promotions import router as promotion_router, run_worker as run_promotion_worker
+from .training_analytics import router as training_analytics_router
 
 
 settings = get_settings()
@@ -68,6 +70,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(run_startup_job("referral_code_backfill", backfill_referral_codes)),
         asyncio.create_task(run_startup_job("analytics_retention", run_analytics_retention)),
         asyncio.create_task(run_startup_job("publication_recovery", run_publication_worker)),
+        asyncio.create_task(run_startup_job("vip_recovery", run_promotion_worker)),
     ]
     try:
         yield
@@ -132,6 +135,8 @@ app.include_router(referral_router)
 app.include_router(admin_operations_router)
 app.include_router(analytics_router)
 app.include_router(publication_router)
+app.include_router(promotion_router)
+app.include_router(training_analytics_router)
 
 
 @app.get("/", include_in_schema=False)
