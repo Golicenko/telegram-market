@@ -20,7 +20,6 @@ from app.schemas import ListingCreate
 from app.services import (
     charge_listing_promotion,
     create_star_payment_intent,
-    create_withdrawal,
     create_listing,
     hold_for_purchase,
     process_successful_payment,
@@ -327,8 +326,8 @@ async def test_expired_pin_is_removed_without_deleting_listing():
 
         async def execute(self, statement):
             assert "pinned_until" in str(statement)
+            assert "pinned_until" not in statement.compile().params  # predicate only, never erase the period
             listing.pinned = False
-            listing.pinned_until = None
             return type("Result", (), {"rowcount": 1})()
 
         async def commit(self):
@@ -339,7 +338,7 @@ async def test_expired_pin_is_removed_without_deleting_listing():
     assert session.committed is True
     assert listing.status == "active"
     assert listing.pinned is False
-    assert listing.pinned_until is None
+    assert listing.pinned_until is not None
 
 
 def test_listing_form_uses_new_prices_explicit_pin_choice_and_shortfall_resume():
@@ -392,7 +391,6 @@ async def test_successful_star_payment_is_credited_once():
 
 @pytest.mark.asyncio
 async def test_purchased_af_coins_cannot_be_withdrawn(monkeypatch):
-    from types import SimpleNamespace
     from app.gift_withdrawals import preview_withdrawal
     async def catalog(): return [{"id": "test-only", "star_count": 15}]
     monkeypatch.setattr("app.gift_withdrawals.available_gifts", catalog)

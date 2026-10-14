@@ -14,7 +14,8 @@ test("chat uses visual viewport and Telegram viewport events", () => {
   assert.match(css, /--chat-viewport-height/);
   assert.match(html, /viewport-fit=cover/);
   assert.match(app, /telegram\?\.viewportHeight/);
-  assert.doesNotMatch(app, /telegram\?\.viewportStableHeight/);
+  assert.match(app, /restingViewportHeight/);
+  assert.match(app, /const fullHeight = Math.min\(\.\.\.available\)/);
 });
 
 test("mobile conversation is edge anchored without the half-screen transform", () => {

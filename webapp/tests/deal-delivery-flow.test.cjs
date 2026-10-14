@@ -24,8 +24,9 @@ test("deal delivery form persists via the backend and has a mobile-safe layout",
   assert.match(app, /У вас есть 24 часа, чтобы передать машину покупателю/);
   assert.match(app, /data-copy-game-id/);
   assert.match(app, /✅ ID скопирован/);
-  assert.match(app, /activeField\?\.closest\?\.\("\.chat-view"\)/);
-  assert.match(app, /\["INPUT", "TEXTAREA", "SELECT"\]\.includes\(activeField\.tagName\)/);
+  assert.match(app, /existing\?\.dataset\.dealId === deal\.id\) return/);
+  assert.match(app, /\["INPUT", "TEXTAREA", "SELECT"\]\.includes\(activeField\?\.tagName\)/);
+  assert.match(css, /chat-keyboard-open:not\(\.deal-details-required\) \.deal-delivery/);
   assert.match(css, /\.deal-delivery__form input\[type="text"\].*font-size:16px/);
   assert.match(app, /hasDeliveryDetails && \["paid", "seller_contacted"\]/);
   assert.match(app, /✅ Машина передана/);

@@ -61,6 +61,16 @@ async def claim_delivery(session, user_id, now):
             return None
         relevant = []
         for notice in pending:
+            if notice.notification_type == "vip_expired":
+                from .promotions import check_renewal
+                from fastapi import HTTPException
+                listing = await session.get(Listing, uuid.UUID(notice.payload["listing_id"]))
+                try:
+                    await check_renewal(session, uuid.UUID(notice.payload["renewal_id"]), user.id, listing)
+                except HTTPException:
+                    notice.delivery_status = "suppressed"
+                    notice.delivery_error = "vip_renewal_no_longer_available"
+                    continue
             if notice.notification_type in {"seller_order_reminder", "deal_created", "seller_order_accepted"}:
                 deal = await session.get(Deal, uuid.UUID(notice.payload["deal_id"]))
                 stale = not deal or deal.status not in {"paid", "seller_contacted"} or delivery_deadline_expired(deal, now)
@@ -108,7 +118,8 @@ async def claim_delivery(session, user_id, now):
                 return None
             latest = eligible[0]
             text = latest.body
-            params = ({"admin_user_id": latest.payload["seller_id"]}
+            params = ({"vip_renewal": latest.payload["renewal_id"]} if latest.notification_type == "vip_expired" else
+                      {"admin_user_id": latest.payload["seller_id"]}
                       if latest.notification_type in {"seller_blocked_bot", "seller_notice_failed"} else
                       {"admin_deal_id": latest.payload["admin_deal_id"]} if latest.payload.get("admin_deal_id") else
                       {"admin_withdrawal_id": latest.payload["admin_withdrawal_id"]} if latest.payload.get("admin_withdrawal_id") else
@@ -208,7 +219,7 @@ async def send_delivery(job):
     target = versioned_webapp_url(f"{base.rstrip('/')}/?{urlencode(job['params'])}")
     is_purchase = job.get("notification_type") == "deal_created"
     payload = {"chat_id": job["telegram_id"], "text": job["text"], "reply_markup": {
-        "inline_keyboard": [[{"text": "Открыть сделку" if is_purchase else "Открыть", "web_app": {"url": target}}]]}}
+        "inline_keyboard": [[{"text": "Открыть сделку" if is_purchase else "Продлить VIP" if job.get("notification_type") == "vip_expired" else "Открыть", "web_app": {"url": target}}]]}}
     if job.get("contact_url"):
         payload["reply_markup"]["inline_keyboard"] = [
             [{"text": "Открыть пользователя", "url": job["contact_url"]},
