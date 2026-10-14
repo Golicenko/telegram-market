@@ -730,6 +730,36 @@ class PublicationDraft(Base, TimestampMixin):
     )
 
 
+class ListingPromotion(Base, TimestampMixin):
+    __tablename__ = "listing_promotions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    target_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    listing_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"))
+    listing_payload: Mapped[dict | None] = mapped_column(JSONB)
+    cost_af: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    balance_af: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    stars: Mapped[int] = mapped_column(Integer, nullable=False)
+    duration_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    funding: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    intent_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("star_payment_intents.id", ondelete="RESTRICT"), unique=True)
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("star_payments.id", ondelete="RESTRICT"), unique=True)
+    ledger_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("wallet_transactions.id", ondelete="RESTRICT"), unique=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pinned_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(300))
+    __table_args__ = (
+        UniqueConstraint("user_id", "request_id", name="uq_promotion_request"),
+        CheckConstraint("cost_af > 0 AND balance_af >= 0 AND balance_af <= cost_af AND stars >= 0 AND duration_hours > 0", name="ck_promotion_amounts"),
+        CheckConstraint("status IN ('awaiting_payment','paid','completed','cancelled','restored')", name="ck_promotion_status"),
+        Index("uq_promotion_active_target", "user_id", "target_key", unique=True,
+              postgresql_where=sql_text("status IN ('awaiting_payment','paid')")),
+    )
+
+
 class StarPayment(Base):
     __tablename__ = "star_payments"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

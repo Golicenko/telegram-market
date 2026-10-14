@@ -14,6 +14,7 @@ def test_build_script_stamps_all_assets_with_one_content_hash(tmp_path, monkeypa
     (webapp / "js" / "deal-confirmation.js").write_text("confirmation", encoding="utf-8")
     (webapp / "js" / "admin-operations.js").write_text("admin", encoding="utf-8")
     (webapp / "js" / "analytics.js").write_text("analytics", encoding="utf-8")
+    (webapp / "js" / "training-sales.js").write_text("training-sales", encoding="utf-8")
     index = webapp / "index.html"
     index.write_text(
         '<meta name="autoflow-build" content="source">'
@@ -23,6 +24,7 @@ def test_build_script_stamps_all_assets_with_one_content_hash(tmp_path, monkeypa
         '<script src="js/deal-confirmation.js?v=old"></script>'
         '<script src="js/admin-operations.js?v=old"></script>'
         '<script src="js/analytics.js?v=old"></script>'
+        '<script src="js/training-sales.js?v=old"></script>'
         '<script src="js/app.js?v=old"></script>',
         encoding="utf-8",
     )
