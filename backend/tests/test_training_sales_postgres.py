@@ -69,6 +69,9 @@ async def test_real_purchase_retries_search_dates_refunds_and_legacy(kind):
         assert (await report(search=str(buyer.telegram_id)))["total"] == 1
         assert (await report(search=str(order.id)))["total"] == 1
         assert (await report(buyer="Unknown"))["total"] == 0
+        assert (await report(buyer="%"))["total"] == 0
+        assert (await report(search="%"))["total"] == 0
+        assert (await report(buyer="example_buyer"))["total"] == 1
         assert (await report(start=when.date(), end=when.date()))["total"] == 0
         assert (await report(timezone="UTC", start=when.date(), end=when.date()))["total"] == 1
         # The report reads refund facts, never performs or invents a refund.

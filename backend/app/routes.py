@@ -1852,13 +1852,14 @@ async def manage_training_products(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
+    from .training_analytics import confirmed_purchase
     aggregate = (
         select(
             TrainingPurchase.product_id.label("product_id"),
             func.count(TrainingPurchase.id).label("purchase_count"),
             func.coalesce(func.sum(TrainingPurchase.price_af_coins), 0).label("revenue"),
         )
-        .group_by(TrainingPurchase.product_id)
+        .where(confirmed_purchase()).group_by(TrainingPurchase.product_id)
         .subquery()
     )
     statement = (

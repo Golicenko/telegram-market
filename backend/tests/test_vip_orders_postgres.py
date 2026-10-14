@@ -215,3 +215,162 @@ def test_config_drives_quote_not_client_and_bonus_is_spendable(monkeypatch):
     monkeypatch.setattr(promotions, "get_settings", lambda: Settings(listing_promotion_cost_af_coins=7, listing_promotion_hours=12))
     assert promotions.quote_values(2) == {"cost_af": Decimal("7.00"), "balance_af": Decimal("2.00"), "stars": 5,
         "duration_hours": 12, "af_per_star": 1, "rounding_credit_af": Decimal("0.00")}
+
+
+@pytest.mark.asyncio
+async def test_signed_api_invoice_webhook_auth_and_retry(monkeypatch):
+    from app import routes
+    from app.config import get_settings
+    async with isolated_pg() as (_, sessions):
+        seller, listing = await setup(sessions)
+        app = client_app(sessions)
+        app.include_router(promotions.router)
+        settings = Settings(bot_token="referral-test-token", debug=False)
+        app.dependency_overrides[get_settings] = lambda: settings
+        calls = []
+        async def bot(method, body):
+            calls.append((method, body))
+            return {"result": "https://t.me/$test-vip"}
+        async def answer(*_args):
+            return None
+        monkeypatch.setattr(promotions, "call_bot_api", bot)
+        monkeypatch.setattr(routes, "answer_pre_checkout_query", answer)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            payload = {"request_id": str(uuid.uuid4()), "listing_id": str(listing.id)}
+            responses = await asyncio.gather(*[client.post("/api/vip/orders", json=payload, headers=headers(seller)) for _ in range(3)])
+            assert all(r.status_code == 200 for r in responses), [r.text for r in responses]
+            assert len({r.json()["id"] for r in responses}) == 1 and len(calls) == 1
+            data = responses[0].json()
+            assert data["invoice_url"] == "https://t.me/$test-vip" and data["status"] == "awaiting_payment"
+            receipt = {"currency": "XTR", "total_amount": 3, "invoice_payload": promotions.PREFIX + data["id"], "telegram_payment_charge_id": "api-charge"}
+            event = {"message": {"from": {"id": seller.telegram_id}, "successful_payment": receipt}}
+            assert (await client.post("/api/telegram/webhook", json=event)).status_code == 403
+            auth = {"X-Telegram-Bot-Api-Secret-Token": settings.effective_telegram_webhook_secret}
+            for _ in range(2):
+                response = await client.post("/api/telegram/webhook", json=event, headers=auth)
+                assert response.status_code == 200, response.text
+            response = await client.get(f'/api/vip/orders/{data["id"]}', headers=headers(seller))
+            assert response.json()["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_cancel_payment_race_and_invoice_creation_failure(monkeypatch):
+    async with isolated_pg() as (_, sessions):
+        seller, listing = await setup(sessions)
+        order = await start(sessions, seller, listing)
+        async def fail(*_args):
+            raise HTTPException(502, "Telegram unavailable")
+        monkeypatch.setattr(promotions, "call_bot_api", fail)
+        async with sessions() as session:
+            with pytest.raises(HTTPException):
+                await promotions.invoice(session, order.id)
+        async with sessions() as session:
+            from app.services import debit_spendable
+            wallet = await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))
+            assert wallet.frozen_balance == 2 and wallet.available_balance == 0
+            with pytest.raises(HTTPException):
+                debit_spendable(wallet, Decimal(1))
+        async def cancel():
+            async with sessions() as session:
+                await promotions.cancel(order.id, seller, session)
+        await asyncio.gather(cancel(), receive(sessions, seller, order), cancel())
+        await fulfill(sessions, order)
+        async with sessions() as session:
+            order = await session.get(ListingPromotion, order.id)
+            wallet = await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))
+            assert wallet.frozen_balance == 0
+            assert (order.status, wallet.available_balance) in [("completed", 0), ("restored", 5)]
+
+
+@pytest.mark.asyncio
+async def test_paid_publication_plus_separate_vip_stars_is_not_charged_twice():
+    from app import publications
+    from test_publication_stars_postgres import seed_slots, listing_payload, payment as publication_payment
+    async with isolated_pg() as (_, sessions):
+        seller = await signed_login(sessions, 980003)
+        async with sessions() as session, session.begin():
+            await seed_slots(session, seller, 5)
+            (await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))).purchased_balance = 2
+        payload = listing_payload().model_copy(update={"promote_for_24h": True})
+        async with sessions() as session:
+            draft = await publications.create_draft(payload, seller, session)
+        async with sessions() as session:
+            await publications.receive_payment(session, seller.telegram_id, publication_payment(draft))
+        async with sessions() as session:
+            await publications.fulfill(session, uuid.UUID(draft["id"]))
+        async with sessions() as session:
+            order = await promotions.start_order(session, seller, promotions.Start(request_id=uuid.uuid4(), listing_payload=payload))
+        await receive(sessions, seller, order)
+        await fulfill(sessions, order)
+        async with sessions() as session:
+            await publications.fulfill(session, uuid.UUID(draft["id"]))
+        async with sessions() as session:
+            assert (await session.get(ListingPromotion, order.id)).status == "completed"
+            assert await session.scalar(select(func.count()).select_from(Listing)) == 6
+            assert await session.scalar(select(func.count()).select_from(StarPayment)) == 2  # 5 publication + 3 VIP.
+            wallet = await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))
+            assert wallet.available_balance == wallet.frozen_balance == 0
+
+
+@pytest.mark.asyncio
+async def test_migrated_schema_rollback_and_restart_recovery(monkeypatch):
+    from test_referral_bonus_postgres import apply_revisions
+    async with isolated_pg(tables=False) as (engine, sessions):
+        async with engine.begin() as conn:
+            await conn.run_sync(lambda sync: apply_revisions(sync, target="head"))
+        seller, listing = await setup(sessions)
+        order = await start(sessions, seller, listing)
+        await receive(sessions, seller, order)
+        real_finish = promotions.finish_locked
+        async def crash(session, order, listing, wallet):
+            await real_finish(session, order, listing, wallet)
+            await session.flush()
+            raise RuntimeError("Isolated crash after flush, before commit")
+        monkeypatch.setattr(promotions, "finish_locked", crash)
+        await fulfill(sessions, order)
+        async with sessions() as session:
+            assert (await session.get(ListingPromotion, order.id)).status == "paid"
+            assert not (await session.get(Listing, listing.id)).pinned
+            wallet = await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))
+            assert wallet.available_balance == 0 and wallet.frozen_balance == 5
+            assert await session.scalar(select(func.count()).select_from(WalletTransaction).where(WalletTransaction.transaction_type == "listing_promotion")) == 0
+            assert await session.scalar(select(func.count()).select_from(Notification).where(Notification.notification_type == "vip_completed")) == 0
+        monkeypatch.setattr(promotions, "finish_locked", real_finish)
+        monkeypatch.setattr(promotions, "SessionLocal", sessions)
+        await promotions.recover_once()
+        await promotions.recover_once()
+        async with sessions() as session:
+            assert (await session.get(ListingPromotion, order.id)).status == "completed"
+            assert (await session.get(Listing, listing.id)).pinned
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))).frozen_balance == 0
+            assert await session.scalar(select(func.count()).select_from(WalletTransaction).where(WalletTransaction.transaction_type == "listing_promotion")) == 1
+
+
+@pytest.mark.asyncio
+async def test_extra_refund_after_telegram_success_before_local_commit(monkeypatch):
+    async with isolated_pg() as (_, sessions):
+        seller, listing = await setup(sessions)
+        order = await start(sessions, seller, listing)
+        await receive(sessions, seller, order)
+        await fulfill(sessions, order)
+        await receive(sessions, seller, order, "extra")
+        monkeypatch.setattr(promotions, "SessionLocal", sessions)
+        attempts = []
+        async def interrupted(method, body):
+            attempts.append(body)
+            raise RuntimeError("Telegram accepted refund, connection lost")
+        monkeypatch.setattr(promotions, "call_bot_api", interrupted)
+        with pytest.raises(RuntimeError):
+            await promotions.recover_once()
+        async def already_done(method, body):
+            attempts.append(body)
+            raise HTTPException(400, "CHARGE_ALREADY_REFUNDED")
+        monkeypatch.setattr(promotions, "call_bot_api", already_done)
+        await promotions.recover_once()
+        await promotions.recover_once()
+        assert len(attempts) == 2 and attempts[0] == attempts[1]
+        async with sessions() as session:
+            assert await session.scalar(select(func.count()).select_from(StarPayment).where(StarPayment.status == "vip_extra_refunded")) == 1
+            assert await session.scalar(select(func.count()).select_from(Notification).where(Notification.notification_type == "vip_extra_refunded")) == 1
+            wallet = await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))
+            assert wallet.available_balance == wallet.frozen_balance == 0

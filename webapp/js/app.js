@@ -1447,7 +1447,7 @@ function handleClick(event) {
     if (isOwner) {
       const ownerActions = document.createElement("div"); ownerActions.className = "owner-actions";
       const edit = document.createElement("button"); edit.dataset.editListing = listing.id; edit.textContent = "Изменить";
-      const promote = document.createElement("button"); promote.dataset.promoteListing = listing.id; promote.textContent = listing.pinned ? "Закреплено" : (state.me.user.role === "admin" && listing.listing_type === "unique" ? "Закрепить бесплатно" : "Закрепить · 5 AF"); promote.disabled = listing.pinned || listing.status !== "active";
+      const promote = document.createElement("button"); promote.dataset.promoteListing = listing.id; promote.textContent = listing.pinned ? "Закреплено" : (state.me.user.role === "admin" && listing.listing_type === "unique" ? "Закрепить бесплатно" : "Закрепить"); promote.disabled = listing.pinned || listing.status !== "active";
       const remove = document.createElement("button"); remove.dataset.deleteListing = listing.id; remove.textContent = "Удалить"; remove.className = "is-danger";
       ownerActions.append(edit, promote, remove); actions.append(ownerActions);
     }
@@ -1914,10 +1914,8 @@ function handleClick(event) {
       if (state.photoFiles.length > 10) throw new Error("Можно добавить не более 10 фотографий");
       const promotionSelected = formData.get("promote_for_24h") === "on";
       let shouldPromote = promotionSelected;
-      if (promotionSelected && state.listingMode === "regular") {
-        shouldPromote = state.editingListingId
-          ? await confirmAction("Закрепить объявление за 5 AF Coins?")
-          : await chooseInitialPromotion();
+      if (promotionSelected && state.listingMode === "regular" && !state.editingListingId) {
+        shouldPromote = await chooseInitialPromotion();
       }
       const imageUrls = [];
       for (const [index, file] of state.photoFiles.entries()) {
@@ -1946,6 +1944,11 @@ function handleClick(event) {
       const savedListing = path === "/listings" && listingSubmission.method === "POST"
         ? await publishWithQuota(payload, listingSubmission)
         : await api.request(path, { method: listingSubmission.method, body: JSON.stringify(payload) });
+      if (shouldPromote && !savedListing.pinned && state.editingListingId && state.listingMode === "regular") {
+        // Editing is free; VIP has its own server-priced confirmation, including shortfall.
+        await finishListingSubmission(listingSubmission);
+        return openListingPromotionTopup(null, null, savedListing.id);
+      }
       let promotionError = null;
       if (shouldPromote && !savedListing.pinned && (state.editingListingId || state.listingMode === "unique")) {
         try {

@@ -71,11 +71,11 @@ async def report_data(session, *, start=None, end=None, timezone="Europe/Bratisl
     if payment_status:
         common.append(sales.c.payment_status == payment_status)
     if buyer:
-        term = f"%{buyer.strip().lstrip('@')}%"
+        term = "%" + buyer.strip().lstrip('@').replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "%"
         common.append(or_(sales.c.buyer_username.ilike(term, escape="\\"), sales.c.buyer_name.ilike(term, escape="\\"),
             cast(sales.c.buyer_telegram_id, String) == buyer.strip(), cast(sales.c.buyer_id, String) == buyer.strip()))
     if search:
-        term = f"%{search.strip().lstrip('#@').replace('%', r'\%').replace('_', r'\_')}%"
+        term = "%" + search.strip().lstrip('#@').replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "%"
         common.append(or_(sales.c.title.ilike(term, escape="\\"), sales.c.buyer_username.ilike(term, escape="\\"),
             sales.c.buyer_name.ilike(term, escape="\\"), cast(sales.c.buyer_telegram_id, String) == search.strip(),
             cast(sales.c.id, String).ilike(term, escape="\\")))
