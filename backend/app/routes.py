@@ -395,7 +395,9 @@ async def queue_counterparty_notification(
         background_tasks.add_task(send_bot_notification, recipient.telegram_id, text)
 
 
-async def support_ticket_out(session: AsyncSession, ticket: SupportTicket) -> SupportTicketOut:
+async def support_ticket_out(session: AsyncSession, ticket: SupportTicket, *, admin_mode=False) -> SupportTicketOut:
+    from .support_catalog import ticket_number, topic_label
+    from .withdrawal_support import profile_url
     messages = list(
         (
             await session.scalars(
@@ -428,6 +430,9 @@ async def support_ticket_out(session: AsyncSession, ticket: SupportTicket) -> Su
             )).all())
     return SupportTicketOut.model_validate(ticket).model_copy(
         update={
+            "public_number": ticket_number(ticket),
+            "topic_label": topic_label(ticket.topic),
+            "contact_url": profile_url(author) if admin_mode and author else None,
             "messages": [SupportMessageOut.model_validate(message) for message in messages],
             "conversation_messages": [ConversationMessageOut.model_validate(message) for message in conversation_messages],
             "events": [SupportCaseEventOut.model_validate(event) for event in events],
@@ -3342,6 +3347,13 @@ async def support_tickets(
     return [await support_ticket_out(session, ticket) for ticket in tickets]
 
 
+@router.get("/support/categories")
+async def support_categories(user: User = Depends(get_current_user)):
+    from .support_catalog import CATEGORIES
+    return [{"key": key, "icon": icon, "label": label, "deal_related": related}
+            for key, icon, label, related in CATEGORIES]
+
+
 @router.post("/support/tickets", response_model=SupportTicketOut, status_code=201)
 async def create_support_ticket(
     payload: SupportTicketCreate,
@@ -3349,11 +3361,29 @@ async def create_support_ticket(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    from .support_catalog import ticket_notice, ticket_number
     async with session.begin():
+        await session.scalar(select(User).where(User.id == user.id).with_for_update(key_share=True))
+        if payload.client_request_id:
+            previous = await session.scalar(select(SupportTicket).join(SupportMessage, SupportMessage.ticket_id == SupportTicket.id).where(
+                SupportTicket.author_id == user.id, SupportMessage.sender_id == user.id,
+                SupportMessage.client_request_id == payload.client_request_id,
+            ))
+            if previous:
+                original = await session.scalar(select(SupportMessage.body).where(SupportMessage.ticket_id == previous.id,
+                    SupportMessage.client_request_id == payload.client_request_id, SupportMessage.sender_id == user.id))
+                if previous.topic != payload.topic or previous.deal_id != payload.deal_id or original != payload.message.strip():
+                    raise HTTPException(409, "Идентификатор обращения уже использован")
+                return await support_ticket_out(session, previous)
+        deal = await session.get(Deal, payload.deal_id) if payload.deal_id else None
+        if payload.deal_id and (not deal or user.id not in {deal.buyer_id, deal.seller_id}):
+            raise HTTPException(404, "Сделка не найдена")
         ticket = SupportTicket(
             user_id=user.id,
             author_id=user.id,
             case_type="general",
+            deal_id=deal.id if deal else None,
+            listing_id=deal.listing_id if deal else None,
             topic=payload.topic.strip(),
             status="open",
             screenshot_url=payload.screenshot_url,
@@ -3361,11 +3391,11 @@ async def create_support_ticket(
         )
         session.add(ticket)
         await session.flush()
-        session.add(SupportMessage(ticket_id=ticket.id, sender_id=user.id, body=payload.message.strip()))
+        session.add(SupportMessage(ticket_id=ticket.id, sender_id=user.id, body=payload.message.strip(), client_request_id=payload.client_request_id))
         administrators = list(
             (
                 await session.scalars(
-                    select(User).where(User.role == "admin", User.bot_started.is_(True))
+                    select(User).where(or_(User.role == "admin", User.telegram_id.in_(get_settings().support_telegram_ids)))
                 )
             ).all()
         )
@@ -3375,15 +3405,12 @@ async def create_support_ticket(
                 administrator.id,
                 "support_ticket",
                 "Новое обращение в поддержку",
-                payload.topic.strip(),
-                {"ticket_id": str(ticket.id)},
+                ticket_notice(ticket, user, payload.message),
+                {"ticket_id": str(ticket.id), "support_user_id": str(user.id),
+                 **({"linked_deal_id": str(deal.id)} if deal else {})},
             )
-    for administrator in administrators:
-        background_tasks.add_task(
-            send_bot_notification,
-            administrator.telegram_id,
-            "Новое обращение в поддержку AUTOFLOW MARKET",
-        )
+        await create_notification(session, user.id, "support_created", "Обращение отправлено",
+            f"Ваше обращение №{ticket_number(ticket)} отправлено в поддержку", {"ticket_id": str(ticket.id)})
     return await support_ticket_out(session, ticket)
 
 
@@ -3403,7 +3430,7 @@ async def reply_to_support_ticket(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    ticket = await session.get(SupportTicket, ticket_id)
+    ticket = await session.scalar(select(SupportTicket).where(SupportTicket.id == ticket_id).with_for_update().execution_options(populate_existing=True))
     if not ticket or user.id not in {ticket.author_id, ticket.buyer_id, ticket.seller_id}:
         raise HTTPException(status_code=404, detail="Обращение не найдено")
     if ticket.status == "closed":
@@ -3443,9 +3470,6 @@ async def reply_to_support_ticket(
         )
     await session.commit()
     await session.refresh(message)
-    for administrator in administrators:
-        if administrator.bot_started:
-            background_tasks.add_task(send_bot_notification, administrator.telegram_id, "Новое сообщение в поддержке AUTOFLOW MARKET")
     return message
 
 
@@ -3476,7 +3500,7 @@ async def admin_support_tickets(
             )
         ).all()
     )
-    return [await support_ticket_out(session, ticket) for ticket in tickets]
+    return [await support_ticket_out(session, ticket, admin_mode=True) for ticket in tickets]
 
 
 @router.get("/admin/support/tickets/{ticket_id}", response_model=SupportTicketOut)
@@ -3508,7 +3532,7 @@ async def admin_support_ticket(
     ))
     await session.commit()
     await session.refresh(ticket)
-    return await support_ticket_out(session, ticket)
+    return await support_ticket_out(session, ticket, admin_mode=True)
 
 
 @router.post("/admin/support/tickets/{ticket_id}/messages", response_model=SupportMessageOut, status_code=201)
@@ -3522,8 +3546,6 @@ async def admin_reply_to_support_ticket(
     ticket = await session.get(SupportTicket, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Обращение не найдено")
-    if ticket.withdrawal_id:
-        ticket = await session.scalar(select(SupportTicket).where(SupportTicket.id == ticket_id).with_for_update().execution_options(populate_existing=True))
     if ticket.withdrawal_id and not payload.client_request_id:
         raise HTTPException(422, "Требуется идентификатор сообщения")
     if ticket.withdrawal_id and len(payload.message.strip()) > 3500:
@@ -3531,6 +3553,7 @@ async def admin_reply_to_support_ticket(
     deal = None
     if ticket.case_type == "deal" and ticket.deal_id:
         deal = await session.scalar(select(Deal).where(Deal.id == ticket.deal_id).with_for_update())
+    ticket = await session.scalar(select(SupportTicket).where(SupportTicket.id == ticket_id).with_for_update().execution_options(populate_existing=True))
     if payload.client_request_id:
         existing = await session.scalar(select(SupportMessage).where(
             SupportMessage.ticket_id == ticket.id,
@@ -3584,9 +3607,6 @@ async def admin_reply_to_support_ticket(
             target_id=ticket.id, reason="Ответ поддержки", metadata_json={"message_id": str(message.id)}))
     await session.commit()
     await session.refresh(message)
-    recipients = list((await session.scalars(select(User).where(User.id.in_(recipient_ids), User.bot_started.is_(True)))).all()) if recipient_ids else []
-    for recipient in recipients if not ticket.withdrawal_id else []:
-        background_tasks.add_task(send_bot_notification, recipient.telegram_id, "🛡 AutoFlow Support ответила по вашему обращению")
     return message
 
 

@@ -190,7 +190,7 @@ async def test_admin_opening_support_case_marks_it_in_progress_and_audits(monkey
     )
     session = AdminOpenSession(ticket)
 
-    async def output(_session, current):
+    async def output(_session, current, **kwargs):
         return current
 
     monkeypatch.setattr(routes, "support_ticket_out", output)

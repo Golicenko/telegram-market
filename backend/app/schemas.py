@@ -578,6 +578,17 @@ class SupportTicketCreate(BaseModel):
     topic: str = Field(min_length=2, max_length=64)
     message: str = Field(min_length=2, max_length=4000)
     screenshot_url: str | None = None
+    deal_id: uuid.UUID | None = None
+    client_request_id: uuid.UUID | None = None
+
+    @field_validator("topic")
+    @classmethod
+    def valid_topic(cls, value):
+        from .support_catalog import LABELS, category_key
+        key = category_key(value)
+        if key not in LABELS:
+            raise ValueError("Выберите тему обращения")
+        return key
 
 
 class DealSupportCaseCreate(BaseModel):
@@ -620,6 +631,9 @@ class SupportCaseEventOut(ORMModel):
 
 class SupportTicketOut(ORMModel):
     id: uuid.UUID
+    public_number: str = ""
+    topic_label: str = ""
+    contact_url: str | None = None
     withdrawal_id: uuid.UUID | None = None
     user_id: uuid.UUID
     author_id: uuid.UUID

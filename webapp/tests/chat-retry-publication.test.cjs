@@ -45,7 +45,7 @@ test('closing invoice leaves draft unpublished and never emits success',async()=
 });
 
 test('paid submission retains server listing identity for opening its detail after form reset',async()=>{
-  const c={api:{async request(path){if(path==='/listings')throw {status:402,detail:{code:'publication_payment_required'}};return{id:'draft'};}},payPublication:async()=>({id:'published'})};
+  const c={state:{},api:{async request(path){if(path==='/listings')throw {status:402,detail:{code:'publication_payment_required'}};return{id:'draft'};}},payPublication:async()=>({id:'published'})};
   vm.createContext(c);vm.runInContext(fn('async function publishWithQuota','function confirmPublication'),c);
   const submission={};await c.publishWithQuota({client_request_id:'request'},submission);
   assert.equal(submission.publishedPaidListingId,'published');
