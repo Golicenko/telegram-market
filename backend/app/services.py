@@ -174,7 +174,7 @@ def credit_sale_proceeds(wallet: Wallet, payout: Decimal, price: Decimal, bonus_
 
 async def create_notification(session: AsyncSession, user_id: uuid.UUID, kind: str, title: str, body: str, payload: dict | None = None) -> Notification:
     notification = Notification(user_id=user_id, notification_type=kind, title=title, body=body, payload=payload or {})
-    if kind in {"deal_created", "seller_order_accepted", "withdrawal_support_reply", "conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden", "deal_completed", "deal_cancelled", "dispute_resolved", "deal_support_case", "withdrawal_created", "withdrawal_paid", "withdrawal_rejected", "withdrawal_approved", "deal_admin_message", "deal_delivery_timeout"}:
+    if kind in {"support_ticket", "support_created", "support_reply", "support_message", "deal_created", "seller_order_accepted", "withdrawal_support_reply", "conversation_message", "seller_timeout_refund", "seller_timeout_cancelled", "seller_inactive_hidden", "deal_completed", "deal_cancelled", "dispute_resolved", "deal_support_case", "withdrawal_created", "withdrawal_paid", "withdrawal_rejected", "withdrawal_approved", "deal_admin_message", "deal_delivery_timeout"}:
         notification.delivery_status = "pending"
     session.add(notification)
     return notification
@@ -196,14 +196,20 @@ async def create_listing(
     request_id = getattr(payload, "client_request_id", None)
     try:
         async with session.begin():
-            from .models import PublicationDraft, PublicationRules
+            from .models import PublicationDraft
             publication = None
+            saved_draft = None
             if publication_id:
                 publication = await session.scalar(select(PublicationDraft).where(PublicationDraft.id == publication_id).with_for_update().execution_options(populate_existing=True))
                 if not publication or publication.user_id != seller.id or publication.status not in {"paid", "published"} or not publication.payment_id:
                     raise HTTPException(409, "Оплата публикации не подтверждена")
                 if publication.request_id != request_id or publication.payload != payload.model_dump(mode="json"):
                     raise HTTPException(409, "Оплата связана с другим черновиком")
+            elif request_id and listing_type == "regular" and seller.role != "admin":
+                # Draft -> User is also the fulfillment lock order. An unpaid draft
+                # may become free after a slot is released, but never race checkout.
+                saved_draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.user_id == seller.id,
+                    PublicationDraft.request_id == request_id).with_for_update().execution_options(populate_existing=True))
             quota_user = None
             if listing_type == "regular" and seller.role != "admin":
                 quota_user = await session.scalar(select(User).where(User.id == seller.id).with_for_update(key_share=True).execution_options(populate_existing=True))
@@ -219,14 +225,17 @@ async def create_listing(
                 if seller.is_blocked:
                     raise HTTPException(403, "Публикация заблокированного аккаунта требует проверки администратора")
                 if quota_user and request_id and not publication:
-                    saved_draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.user_id == seller.id, PublicationDraft.request_id == request_id))
                     if saved_draft:
-                        raise HTTPException(402, {"code": "publication_payment_required", "price_stars": saved_draft.price_stars, "message": "Откройте сохранённый черновик публикации"})
+                        if saved_draft.payload != payload.model_dump(mode="json"):
+                            raise HTTPException(409, "Этот запрос связан с другим сохранённым черновиком")
+                        checkout_at = saved_draft.checkout_at
+                        if checkout_at and checkout_at.tzinfo is None:
+                            checkout_at = checkout_at.replace(tzinfo=UTC)
+                        if saved_draft.status != "draft" or saved_draft.payment_id or (checkout_at and checkout_at > datetime.now(UTC) - timedelta(minutes=15)):
+                            raise HTTPException(402, {"code": "publication_payment_required", "price_stars": saved_draft.price_stars, "message": "Откройте сохранённый черновик публикации"})
                 if quota_user and not publication:
-                    rules = await session.get(PublicationRules, 1)
-                    limit = rules.free_limit if rules else 5
-                    if (rules.enabled if rules else True) and quota_user.publication_count >= limit:
-                        raise HTTPException(402, {"code": "publication_payment_required", "price_stars": rules.price_stars if rules else 5, "message": "Для публикации требуется оплата Telegram Stars"})
+                    from .publication_quota import require_free_slot
+                    await require_free_slot(session, quota_user)
                 now = datetime.now(UTC)
                 admin_pinned = seller.role == "admin" and listing_type == "unique" and pinned
                 paid_pinned = listing_type == "regular" and pinned
@@ -293,6 +302,8 @@ async def create_listing(
                     session.add(AdminAction(admin_id=seller.id, action="create_unique_listing", target_type="listing", target_id=listing.id))
                 if quota_user:
                     quota_user.publication_count += 1
+                if saved_draft:
+                    saved_draft.status, saved_draft.listing_id = "published", listing.id
             if publication:
                 if publication.status != "published":
                     session.add(Notification(user_id=seller.id, notification_type="publication_published", title="Объявление опубликовано", body="Оплата Stars подтверждена. Объявление опубликовано в AutoFlow Market.", payload={"listing_id": str(listing.id)}, delivery_status="pending"))
@@ -419,9 +430,15 @@ async def delete_listing(session: AsyncSession, actor: User, listing_id: uuid.UU
 
 async def set_listing_publication(session: AsyncSession, admin: User, listing_id: uuid.UUID, published: bool) -> Listing:
     async with session.begin():
-        listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
+        # Same seller lock as create_listing; publishing a paused row consumes a slot.
+        seller_id = await session.scalar(select(Listing.seller_id).where(Listing.id == listing_id))
+        seller = await session.scalar(select(User).where(User.id == seller_id).with_for_update(key_share=True).execution_options(populate_existing=True)) if seller_id else None
+        listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update().execution_options(populate_existing=True))
         if not listing or listing.status in {"deleted", "sold", "reserved"}:
             raise HTTPException(status_code=409, detail="Listing publication state cannot be changed")
+        if published and listing.status != "active" and listing.listing_type == "regular":
+            from .publication_quota import require_free_slot
+            await require_free_slot(session, seller)
         listing.status = "active" if published else "paused"
         if published and listing.listing_type == "unique" and listing.content_revision is None:
             listing.content_revision = await next_publication_revision(session)
@@ -2049,6 +2066,7 @@ async def create_deal_support_case(
         ticket = await session.scalar(
             select(SupportTicket).where(
                 SupportTicket.deal_id == deal.id,
+                SupportTicket.case_type == "deal",
                 SupportTicket.status.in_({"new", "open", "in_progress"}),
             ).with_for_update()
         )
@@ -2104,6 +2122,7 @@ async def create_deal_support_case(
             deal.status = "disputed"
             audit_deal(session, deal, "support_created", author.id, previous_status, {"ticket_id": str(ticket.id)})
         stop_reminders(deal)
+        from .support_catalog import ticket_notice
         administrators = list((await session.scalars(select(User).where(User.role == "admin"))).all())
         for administrator in administrators:
             await create_notification(
@@ -2111,8 +2130,8 @@ async def create_deal_support_case(
                 administrator.id,
                 "deal_support_case",
                 "Новое обращение по сделке",
-                f"{listing.brand} {listing.model}".strip(),
-                {"ticket_id": str(ticket.id), "deal_id": str(deal.id)},
+                ticket_notice(ticket, author, message),
+                {"ticket_id": str(ticket.id), "deal_id": str(deal.id), "linked_deal_id": str(deal.id), "support_user_id": str(author.id)},
             )
     return ticket, listing, buyer, seller, administrators
 
@@ -2535,7 +2554,7 @@ async def resolve_dispute(
         audit_deal(session, deal, f"admin_{outcome}", admin.id, previous_status, {"reason": reason}, request_id)
         session.add(AdminAction(admin_id=admin.id, action=f"resolve_dispute_{outcome}", target_type="deal", target_id=deal.id, reason=reason))
         if allow_active:
-            related_tickets = list((await session.scalars(select(SupportTicket).where(SupportTicket.deal_id == deal.id, SupportTicket.status.in_(("new", "open", "in_progress"))).with_for_update())).all())
+            related_tickets = list((await session.scalars(select(SupportTicket).where(SupportTicket.deal_id == deal.id, SupportTicket.case_type == "deal", SupportTicket.status.in_(("new", "open", "in_progress"))).with_for_update())).all())
             for related in related_tickets:
                 old_status = related.status
                 related.status = "resolved"

@@ -134,6 +134,8 @@ class FakeSession:
 
     async def scalar(self, _query):
         from app.models import PublicationDraft
+        if _query.column_descriptions[0].get("name") == "count":
+            return 0
         if self.quota_user is not None and _query.column_descriptions[0].get("entity") is PublicationDraft:
             return None
         if self.quota_user is not None and _query.column_descriptions[0].get("entity") is User:

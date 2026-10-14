@@ -1160,12 +1160,57 @@ function handleClick(event) {
     elements.supportForm.elements.screenshot.required = false;
     document.getElementById("supportScreenshotLabel").textContent = "Скриншот, не более одного";
     document.getElementById("supportDealContext").hidden = true;
+    elements.supportForm.reset();
+    elements.supportForm.hidden = true;
+    elements.supportForm.dataset.caseMode = "general";
     openSecondary("support");
     if (!state.serverAvailable) return;
     try {
+      await loadSupportCategories();
       state.supportTickets = await api.request("/support/tickets");
       renderSupportTickets();
     } catch (error) { notify(error.message); }
+  }
+
+  async function loadSupportCategories() {
+    const categories = await api.request("/support/categories");
+    state.supportCategories = categories;
+    const form = elements.supportForm;
+    const select = form.elements.topic;
+    select.replaceChildren(new Option("Выберите тему обращения", ""), ...categories.map(item => new Option(`${item.icon} ${item.label}`, item.key)));
+    let picker = document.getElementById("supportCategoryPicker");
+    if (!picker) { picker = document.createElement("section"); picker.id = "supportCategoryPicker"; picker.className = "support-category-picker"; form.before(picker); }
+    picker.hidden = false; picker.replaceChildren();
+    const title = document.createElement("h2"); title.textContent = "Выберите тему обращения"; picker.append(title);
+    for (const item of categories) {
+      const button = document.createElement("button"); button.type = "button"; button.textContent = `${item.icon} ${item.label}`;
+      button.onclick = () => { select.value = item.key; form.hidden = false; picker.hidden = true; void updateSupportOrderChoice(); };
+      picker.append(button);
+    }
+    select.onchange = () => void updateSupportOrderChoice();
+    let label = document.getElementById("supportOrderChoice");
+    if (!label) {
+      label = document.createElement("label"); label.id = "supportOrderChoice"; label.hidden = true; label.append(document.createTextNode("Заказ (необязательно)"));
+      const orders = document.createElement("select"); orders.name = "linked_deal_id"; label.append(orders); select.closest("label").after(label);
+    }
+    label.hidden = true;
+  }
+
+  async function updateSupportOrderChoice() {
+    const form = elements.supportForm;
+    const topic = form.elements.topic.value;
+    const related = state.supportCategories?.find(item => item.key === topic)?.deal_related;
+    const label = document.getElementById("supportOrderChoice");
+    if (!label) return;
+    label.hidden = !related;
+    const select = form.elements.linked_deal_id;
+    select.replaceChildren(new Option("Без привязки к заказу", ""));
+    if (!related) return;
+    try {
+      const orders = await api.request("/deals");
+      if (form.elements.topic.value !== topic) return;
+      for (const order of orders) select.append(new Option(`Заказ №${order.id.slice(0, 8)} · ${formatNumber(order.price_af_coins)} AF`, order.id));
+    } catch (error) { notify("Не удалось загрузить заказы. Обращение можно отправить без привязки."); }
   }
 
   async function openAdminPanel() {
@@ -1718,7 +1763,7 @@ function handleClick(event) {
       const rules = await api.request("/publication-rules");
       if (state.listingMode === "unique" || state.editingListingId) return;
       state.publicationRules = rules;
-      document.getElementById("publicationNote").textContent = rules.payment_required ? `Публикация: ${rules.price_stars} ⭐. Закрепление оплачивается отдельно в AF.` : `Бесплатная публикация${rules.enabled ? ` · Осталось бесплатно: ${rules.remaining}` : ""}`;
+      document.getElementById("publicationNote").textContent = `Активных объявлений: ${rules.active_count}${rules.active_count < rules.free_limit ? ` из ${rules.free_limit}` : ""}. ` + (rules.payment_required ? `Новая публикация: ${rules.price_stars} ⭐.` : "Публикация бесплатная.");
       const drafts = await api.request("/publication-drafts");
       let box = document.getElementById("publicationDrafts");
       if (!box) { box = document.createElement("div"); box.id = "publicationDrafts"; elements.carForm.prepend(box); }
@@ -1737,6 +1782,7 @@ function handleClick(event) {
     try { return await api.request("/listings", { method: "POST", body: JSON.stringify(payload) }); }
     catch (error) {
       if (Number(error.status) !== 402 || error.detail?.code !== "publication_payment_required") throw error;
+      state.publicationRules = await api.request("/publication-rules");
       const draft = await api.request("/publication-drafts", { method: "POST", body: JSON.stringify(payload) });
       const listing = await payPublication(draft);
       if (!listing) throw new Error("Черновик сохранён. Продолжить можно в форме публикации без повторного заполнения.");
@@ -1748,9 +1794,9 @@ function handleClick(event) {
   function confirmPublication(draft) {
     return new Promise(resolve => {
       const modal = document.createElement("dialog"); modal.className = "publication-modal";
-      const title = document.createElement("h2"); title.textContent = "Размещение объявления";
+      const title = document.createElement("h2"); title.textContent = "Лимит бесплатных объявлений";
       const price = document.createElement("strong"); price.textContent = `${draft.price_stars} ⭐`;
-      const text = document.createElement("p"); text.textContent = "После подтверждённой оплаты объявление будет опубликовано в AutoFlow Market.";
+      const text = document.createElement("p"); text.textContent = `У вас уже ${state.publicationRules?.active_count ?? state.publicationRules?.used ?? "несколько"} активных объявлений. Чтобы разместить ещё одно, удалите старое объявление или оплатите публикацию за ${draft.price_stars} ⭐.`;
       const extra = document.createElement("small"); extra.textContent = draft.payload.promote_for_24h ? "Вы также выбрали закрепление: оно оплачивается отдельно с баланса AF по действующим правилам." : "Это не пополнение AF. Реферальная комиссия не начисляется.";
       const controls = document.createElement("div"); controls.className = "publication-actions";
       const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "ghost-button"; cancel.textContent = "Отмена";
@@ -1767,6 +1813,17 @@ function handleClick(event) {
     state.publicationPayBusy = true;
     try {
       if (draft.status === "draft") {
+        const rules = await api.request("/publication-rules");
+        state.publicationRules = rules;
+        if (rules.payment_required === false) {
+          try {
+            const listing = await api.request("/listings", { method: "POST", body: JSON.stringify(draft.payload) });
+            showPurchaseSuccess("Объявление опубликовано", "Свободный слот · без оплаты Stars");
+            return listing;
+          } catch (error) {
+            if (Number(error.status) !== 402 || error.detail?.code !== "publication_payment_required") throw error;
+          }
+        }
         if (!await confirmPublication(draft)) return null;
         if (!telegram?.openInvoice) throw new Error("Откройте Mini App в Telegram для оплаты Stars.");
         draft = await api.request(`/publication-drafts/${draft.id}/invoice`, { method: "POST" });
@@ -1794,7 +1851,7 @@ function handleClick(event) {
       const [rules, drafts, extras] = await Promise.all([api.request("/publication-rules"), api.request("/admin/publication-drafts"), api.request("/admin/publication-extra-payments")]);
       panel.replaceChildren(); const title = document.createElement("h2"); title.textContent = "Публикации за Stars"; panel.append(title);
       const form = document.createElement("form");
-      for (const [key, labelText] of [["free_limit", "Бесплатных публикаций за всё время"], ["price_stars", "Стоимость последующих, Stars"]]) {
+      for (const [key, labelText] of [["free_limit", "Бесплатных активных слотов (CP1 + CP2)"], ["price_stars", "Стоимость сверх лимита, Stars"]]) {
         const label = document.createElement("label"); label.textContent = labelText; const input = document.createElement("input"); input.type = "number"; input.name = key; input.min = key === "price_stars" ? "1" : "0"; input.max = "10000"; input.required = true; input.value = rules[key]; label.append(input); form.append(label);
       }
       const label = document.createElement("label"); const toggle = document.createElement("input"); toggle.type = "checkbox"; toggle.name = "enabled"; toggle.checked = rules.enabled; label.append(toggle, document.createTextNode("Платные публикации включены")); form.append(label);
@@ -2859,6 +2916,9 @@ async function hideCurrentConversation() {
 
   function openDealSupport(dealId) {
     const form = elements.supportForm;
+    form.hidden = false; form.dataset.caseMode = "deal";
+    const picker = document.getElementById("supportCategoryPicker"); if (picker) picker.hidden = true;
+    const orderChoice = document.getElementById("supportOrderChoice"); if (orderChoice) orderChoice.hidden = true;
     const details = state.currentConversation;
     const deal = details?.deal;
     const isBuyer = deal?.buyer_id === state.me?.user.id;
@@ -2866,6 +2926,7 @@ async function hideCurrentConversation() {
     const otherName = details?.counterparty?.name || (details?.counterparty?.username ? `@${details.counterparty.username}` : "Пользователь Telegram");
     form.reset();
     form.elements.deal_id.value = dealId;
+    if (![...form.elements.topic.options].some(option => option.value === "deal")) form.elements.topic.append(new Option("Проблема со сделкой", "deal"));
     form.elements.topic.value = "deal";
     form.elements.topic.closest("label").hidden = true;
     form.elements.screenshot.required = true;
@@ -3915,37 +3976,41 @@ async function hideCurrentConversation() {
     button.disabled = true;
     try {
       const dealId = String(data.get("deal_id") || "").trim();
+      const signature = JSON.stringify([dealId, data.get("topic"), data.get("linked_deal_id"), data.get("message"), data.get("screenshot")?.name, data.get("screenshot")?.size]);
+      if (state.supportSubmission?.signature !== signature) state.supportSubmission = { signature, requestId: createRequestId() };
+      let ticket;
       if (dealId) {
         const screenshot = data.get("screenshot");
         if (!screenshot?.size) {
           throw new Error("Прикрепите хотя бы один скриншот, чтобы мы могли разобраться в ситуации.");
         }
         const screenshotUrl = (await api.upload(screenshot)).url;
-        await api.request(`/deals/${dealId}/support`, {
+        ticket = await api.request(`/deals/${dealId}/support`, {
           method: "POST",
           body: JSON.stringify({
             message: data.get("message"),
             screenshot_url: screenshotUrl,
-            client_request_id: createRequestId(),
+            client_request_id: state.supportSubmission.requestId,
           }),
         });
       } else {
         const screenshot = data.get("screenshot");
         let screenshotUrl = null;
         if (screenshot?.size) screenshotUrl = (await api.upload(screenshot)).url;
-        await api.request("/support/tickets", {
+        ticket = await api.request("/support/tickets", {
           method: "POST",
-          body: JSON.stringify({ topic: data.get("topic"), message: data.get("message"), screenshot_url: screenshotUrl }),
+          body: JSON.stringify({ topic: data.get("topic"), message: data.get("message"), screenshot_url: screenshotUrl,
+            deal_id: data.get("linked_deal_id") || null, client_request_id: state.supportSubmission.requestId }),
         });
       }
       formElement.reset();
+      state.supportSubmission = null;
       formElement.elements.topic.closest("label").hidden = false;
       formElement.elements.screenshot.required = false;
       document.getElementById("supportScreenshotLabel").textContent = "Скриншот, не более одного";
       document.getElementById("supportDealContext").hidden = true;
-      state.supportTickets = await api.request("/support/tickets");
-      renderSupportTickets();
-      notify("Обращение отправлено");
+      notify(`Ваше обращение №${ticket.public_number || ticket.id.slice(0, 8)} отправлено в поддержку`);
+      await openSupport();
     } catch (error) { notify(error.message); }
     finally { button.disabled = false; }
   }
@@ -3961,9 +4026,13 @@ async function hideCurrentConversation() {
   function createSupportTicketCard(ticket, adminMode) {
     const card = document.createElement("article"); card.className = "support-ticket";
     const head = document.createElement("div"); head.className = "support-ticket__head";
-    const title = document.createElement("strong"); title.textContent = ticket.case_type === "deal" ? `${ticket.listing_title || "Сделка"} · #${ticket.deal_id.slice(0, 8)}` : ticket.topic;
+    const title = document.createElement("strong"); title.textContent = `№${ticket.public_number || ticket.id.slice(0, 8)} · ${ticket.topic_label || ticket.topic}`;
     const status = document.createElement("small"); status.textContent = supportStatusLabel(ticket.status);
     head.append(title, status); card.append(head);
+    const meta = document.createElement("p"); meta.className = "support-ticket__meta";
+    meta.textContent = `${ticket.author?.username ? `@${ticket.author.username}` : "Username отсутствует"}${ticket.author?.first_name ? ` · ${ticket.author.first_name}` : ""} · ${new Date(ticket.created_at).toLocaleString("ru-RU")}`;
+    card.append(meta);
+    if (ticket.deal_id) { const order = document.createElement("p"); order.textContent = `Заказ №${ticket.deal_id.slice(0, 8)}${ticket.listing_title ? ` · ${ticket.listing_title}` : ""}`; card.append(order); }
     if (adminMode && ticket.conversation_messages?.length) {
       const history = document.createElement("details"); history.className = "support-conversation-history";
       const summary = document.createElement("summary"); summary.textContent = `История buyer/seller · ${ticket.conversation_messages.length}`; history.append(summary);
@@ -3979,9 +4048,13 @@ async function hideCurrentConversation() {
     });
     const actions = document.createElement("div"); actions.className = "support-ticket__actions";
     if (ticket.status !== "closed") {
-      const reply = document.createElement("button"); reply.type = "button"; reply.dataset.supportReply = ticket.id; reply.dataset.adminReply = String(adminMode); reply.textContent = "Ответить"; actions.append(reply);
+      const reply = document.createElement("button"); reply.type = "button"; reply.dataset.supportReply = ticket.id; reply.dataset.adminReply = String(adminMode); reply.textContent = adminMode ? "Связаться через бота" : "Ответить"; actions.append(reply);
     }
     if (adminMode) {
+      if (ticket.contact_url && /^(https:\/\/t\.me\/[A-Za-z][A-Za-z0-9_]{4,31}|tg:\/\/user\?id=\d+)$/.test(ticket.contact_url)) {
+        const contact = document.createElement("a"); contact.href = ticket.contact_url; contact.textContent = "Написать пользователю"; contact.target = "_blank"; contact.rel = "noopener noreferrer"; actions.append(contact);
+      }
+      if (ticket.deal_id && state.me?.user.role === "admin") { const order = document.createElement("button"); order.type = "button"; order.textContent = "Открыть заказ"; order.onclick = () => void openAdminDealControl(ticket.deal_id); actions.append(order); }
       if (ticket.case_type === "deal" && !["resolved", "closed"].includes(ticket.status) && state.me?.user.role === "admin") {
         [["complete", "Передать средства продавцу"], ["refund", "Вернуть средства покупателю"]].forEach(([outcome, label]) => { const button = document.createElement("button"); button.type = "button"; button.dataset.supportResolution = outcome; button.dataset.ticketId = ticket.id; button.textContent = label; actions.append(button); });
       } else {
@@ -4705,10 +4778,11 @@ async function hideCurrentConversation() {
     const ticketId = new URLSearchParams(window.location.search).get("support_case");
     if (!ticketId || !state.me) return;
     try {
-      if (state.me.user.role === "admin") {
+      if (adminTabs().includes("support")) {
         await openAdminPanel(); switchAdminTab("support");
         const ticket = await api.request(`/admin/support/tickets/${ticketId}`);
         elements.adminSupportTickets.replaceChildren(createSupportTicketCard(ticket, true));
+        if (new URLSearchParams(window.location.search).get("contact") === "1") await replySupportTicket(ticket.id, true);
       } else {
         const ticket = await api.request(`/support/tickets/${ticketId}`);
         await openSupport(); state.supportTickets = [ticket]; renderSupportTickets();

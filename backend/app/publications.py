@@ -26,11 +26,8 @@ def output(draft):
 
 
 async def rules_out(session, user):
-    rules = await session.get(PublicationRules, 1)
-    limit, price, enabled = (rules.free_limit, rules.price_stars, rules.enabled) if rules else (5, 5, True)
-    return {"free_limit": limit, "price_stars": price, "enabled": enabled, "used": user.publication_count,
-            "remaining": max(0, limit - user.publication_count),
-            "payment_required": enabled and user.role != "admin" and user.publication_count >= limit}
+    from .publication_quota import publication_rules
+    return await publication_rules(session, user)
 
 
 @router.get("/publication-rules")
@@ -176,7 +173,7 @@ async def receive_payment(session, telegram_id, payment):
                               xtr_amount=draft.price_stars, af_coin_amount=0, status="publication", raw_payload=payment, processed_at=datetime.now(UTC))
         session.add(receipt)
         await session.flush()
-        if draft.payment_id:
+        if draft.payment_id or draft.status == "published":
             # Extremely delayed second Telegram charge is retained for admin refund,
             # never discarded or converted to AF and never creates a second listing.
             receipt.status = "publication_review"

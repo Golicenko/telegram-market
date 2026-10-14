@@ -137,8 +137,14 @@ async def claim_delivery(session, user_id, now):
             target_user = await session.get(User, uuid.UUID(latest.payload["withdrawal_user_id"]))
             if target_user:
                 contact_url = profile_url(target_user)
+        if latest.notification_type in {"support_ticket", "deal_support_case"} and latest.payload.get("support_user_id"):
+            from .withdrawal_support import profile_url
+            target_user = await session.get(User, uuid.UUID(latest.payload["support_user_id"]))
+            if target_user:
+                contact_url = profile_url(target_user)
         return {"ids": [notice.id for notice in eligible], "telegram_id": user.telegram_id, "text": text,
                 "params": params, "contact_url": contact_url,
+                "linked_deal_id": latest.payload.get("linked_deal_id") if user.role == "admin" else None,
                 "notification_type": latest.notification_type, "photo_url": photo_url}
 
 
@@ -209,6 +215,15 @@ async def send_delivery(job):
              {"text": "Открыть заявку", "web_app": {"url": target}}],
             [{"text": "Связаться через бота", "web_app": {"url": target + "&contact=1"}}],
         ]
+    if job.get("notification_type") in {"support_ticket", "deal_support_case"}:
+        rows = [[{"text": "Открыть обращение", "web_app": {"url": target}}]]
+        if job.get("contact_url"):
+            rows.append([{"text": "Написать пользователю", "url": job["contact_url"]}])
+        rows.append([{"text": "Связаться через бота", "web_app": {"url": target + "&contact=1"}}])
+        if job.get("linked_deal_id"):
+            deal_target = versioned_webapp_url(f"{base.rstrip('/')}/?{urlencode({'admin_deal_id': job['linked_deal_id']})}")
+            rows.append([{"text": "Открыть заказ", "web_app": {"url": deal_target}}])
+        payload["reply_markup"]["inline_keyboard"] = rows
     photo_error = None
     async with httpx.AsyncClient(timeout=15) as client:
         if is_purchase:

@@ -32,8 +32,15 @@ def payment(draft, charge=None):
     return {"currency": "XTR", "total_amount": draft["price_stars"], "invoice_payload": publications.PREFIX + draft["id"], "telegram_payment_charge_id": charge or str(uuid.uuid4())}
 
 
+async def seed_slots(session, user, count):
+    (await session.get(User, user.id)).publication_count = count
+    for n in range(count):
+        payload = listing_payload(n)
+        session.add(Listing(seller_id=user.id, listing_type="regular", status="active", **payload.model_dump(exclude={"image_urls", "promote_for_24h"})))
+
+
 @pytest.mark.asyncio
-async def test_five_lifetime_shared_slots_sixth_seventh_stars_no_af_or_referrals(monkeypatch):
+async def test_five_active_shared_slots_sixth_seventh_stars_no_af_or_referrals(monkeypatch):
     async with isolated_pg() as (_, sessions):
         user = await signed_login(sessions, 88101)
         other = await signed_login(sessions, 88102)
@@ -51,9 +58,6 @@ async def test_five_lifetime_shared_slots_sixth_seventh_stars_no_af_or_referrals
                 assert response.status_code == 201, response.text
                 ids.append(response.json()["id"])
                 assert (await client.post("/api/listings", headers=headers(user), json=payload)).json()["id"] == ids[-1]
-            async with sessions() as session, session.begin():
-                first = await session.get(Listing, uuid.UUID(ids[0]))
-                first.status, first.deleted_at = "deleted", datetime.now(UTC)
             rules = (await client.get("/api/publication-rules", headers=headers(user))).json()
             assert rules["used"] == 5 and rules["remaining"] == 0
             for n in (6, 7):
@@ -96,7 +100,7 @@ async def test_last_free_slot_race_and_failed_pin_does_not_consume_slot():
     async with isolated_pg() as (_, sessions):
         user = await signed_login(sessions, 88201)
         async with sessions() as session, session.begin():
-            (await session.get(User, user.id)).publication_count = 4
+            await seed_slots(session, user, 4)
         async def publish():
             async with sessions() as session:
                 try:
@@ -121,7 +125,7 @@ async def test_real_webhook_route_secret_owner_frozen_amount_and_admin_settings(
         user = await signed_login(sessions, 88701)
         admin = await signed_login(sessions, 88702)
         async with sessions() as session, session.begin():
-            (await session.get(User, user.id)).publication_count = 5
+            await seed_slots(session, user, 5)
         application = app(sessions)
         settings = Settings(bot_token="referral-test-token", admin_id=admin.telegram_id, debug=False)
         application.dependency_overrides[get_settings] = lambda: settings
@@ -155,7 +159,7 @@ async def test_price_snapshot_paid_recovery_and_admin_refund(monkeypatch):
         user = await signed_login(sessions, 88301)
         admin = await signed_login(sessions, 88302)
         async with sessions() as session, session.begin():
-            (await session.get(User, user.id)).publication_count = 5
+            await seed_slots(session, user, 5)
             (await session.scalar(select(Wallet).where(Wallet.user_id == user.id))).purchased_balance = 5
         payload = listing_payload()
         payload.promote_for_24h = True
@@ -232,7 +236,7 @@ async def test_paid_draft_cannot_bypass_refund_lock_or_reuse_extra_charge(monkey
         user = await signed_login(sessions, 88601)
         admin = await signed_login(sessions, 88602)
         async with sessions() as session, session.begin():
-            (await session.get(User, user.id)).publication_count = 5
+            await seed_slots(session, user, 5)
         payload = listing_payload()
         async with sessions() as session:
             draft = await publications.create_draft(payload, user, session)
@@ -261,7 +265,8 @@ async def test_paid_draft_cannot_bypass_refund_lock_or_reuse_extra_charge(monkey
         async with sessions() as session:
             receipt = await session.scalar(select(StarPayment).where(StarPayment.telegram_payment_charge_id == extra["telegram_payment_charge_id"]))
             assert receipt.status == "publication_review" and receipt.af_coin_amount == 0
-            assert await session.scalar(select(func.count()).select_from(Listing)) == 0
+            assert await session.scalar(select(func.count()).select_from(Listing)) == 5
+            assert await session.scalar(select(func.count()).select_from(Listing).where(Listing.client_request_id == payload.client_request_id)) == 0
         calls = []
         async def refund(method, params):
             calls.append(params)

@@ -118,7 +118,7 @@ async def admin_nonfinancial_action(session, admin, deal_id, action, reason, req
         elif action == "resume":
             if previous != "disputed": raise HTTPException(409, "Возобновить можно только незавершённый спор")
             from .models import SupportTicket
-            active_ticket = await session.scalar(select(SupportTicket.id).where(SupportTicket.deal_id == deal.id, SupportTicket.status.in_(("new", "open", "in_progress"))).limit(1))
+            active_ticket = await session.scalar(select(SupportTicket.id).where(SupportTicket.deal_id == deal.id, SupportTicket.case_type == "deal", SupportTicket.status.in_(("new", "open", "in_progress"))).limit(1))
             if active_ticket: raise HTTPException(409, "Сначала закройте обращение поддержки с объяснением решения")
             deal.status = "transfer_in_progress" if deal.transfer_started_at else "seller_contacted"
             deal.needs_admin_review_at = None

@@ -35,7 +35,7 @@ const server = http.createServer((req,res) => {
         else if(endpoint==='/profile') body={user,wallet,active_listings:[],sold_listings:[],purchases:[],active_deals:[],deals:[],deal_threads:[],conversations:[],wallet_transactions:[],withdrawals:[]};
         else if(endpoint==='/content/unseen') body={unique:{unseen_count:0},training:{unseen_count:0}};
         else if(endpoint==='/conversations/unread-summary') body={total_unread:0,conversations:[]};
-        else if(endpoint==='/publication-rules') body={free_limit:5,price_stars:5,enabled:true,used:5,remaining:0,payment_required:true};
+        else if(endpoint==='/publication-rules') body={free_limit:5,price_stars:5,enabled:true,active_count:12,used:12,remaining:0,payment_required:true};
         else if(endpoint==='/uploads') body={url:'/test.png'};
         else if(endpoint==='/listings' && method==='POST') return route.fulfill({status:402,contentType:'application/json',body:JSON.stringify({detail:{code:'publication_payment_required',message:'Требуется оплата публикации'}})});
         else if(endpoint==='/publication-drafts') {
@@ -61,6 +61,8 @@ const server = http.createServer((req,res) => {
       await page.locator('#carPhotos').setInputFiles({name:'car.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=','base64')});
       await page.locator('#carForm button[type=submit]').click();
       const modal = page.locator('.publication-modal'); await modal.waitFor();
+      assert.match(await modal.innerText(), /У вас уже 12 активных объявлений/);
+      assert.match(await page.locator('#publicationNote').innerText(), /Активных объявлений: 12/);
       const box = await modal.boundingBox(); assert(box.x>=0 && box.x+box.width<=width+1);
       assert.equal(await modal.getByRole('button',{name:'Оплатить 5 ⭐',exact:true}).count(),1);
       await modal.getByRole('button',{name:'Отмена',exact:true}).click();
