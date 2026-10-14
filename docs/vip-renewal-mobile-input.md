@@ -67,4 +67,4 @@ The renewal dialog reuses `purchaseModal`, native dialog/backdrop, existing toas
 5. Monitor pending/paid/restored promotion orders and pending/unknown/blocked notification delivery states. Never label a payment complete from a frontend animation alone.
 6. Emergency stop for new expiry notifications is the config flag. For application rollback, retain schema and all financial evidence, drain or preserve a compatible worker for paid/pending renewal orders and queued renewal notifications. Do not downgrade/drop the offer table or restore a stale DB snapshot over real transactions. Old code lacks the renewal link handler, so rolling it back with outstanding invitations requires keeping the compatible route/outbox or explicitly coordinating the queue first.
 
-Final CI result: pending final follow-up run.
+Latest CI results: https://github.com/Golicenko/telegram-market/pull/72/checks . The PR description records the final tested commit/run; an earlier green run is not treated as proof for later untested changes.

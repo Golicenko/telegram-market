@@ -20,7 +20,6 @@ from app.schemas import ListingCreate
 from app.services import (
     charge_listing_promotion,
     create_star_payment_intent,
-    create_withdrawal,
     create_listing,
     hold_for_purchase,
     process_successful_payment,
@@ -392,7 +391,6 @@ async def test_successful_star_payment_is_credited_once():
 
 @pytest.mark.asyncio
 async def test_purchased_af_coins_cannot_be_withdrawn(monkeypatch):
-    from types import SimpleNamespace
     from app.gift_withdrawals import preview_withdrawal
     async def catalog(): return [{"id": "test-only", "star_count": 15}]
     monkeypatch.setattr("app.gift_withdrawals.available_gifts", catalog)
