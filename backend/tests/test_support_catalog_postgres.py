@@ -1,4 +1,5 @@
 import asyncio
+import json
 import uuid
 
 import httpx
@@ -7,15 +8,17 @@ from sqlalchemy import func, select
 
 from app.config import Settings, get_settings
 from app.models import Deal, Notification, SupportMessage, SupportTicket, User, Wallet
+from app import message_notifications
 from test_catalog_and_acceptance_postgres import client_app, headers
 from test_core_workflows import signed_init_data
 from test_referral_bonus_postgres import isolated_pg, signed_login
 from test_seller_orders_postgres import paid_order
+from test_purchase_photo_notifications import transport
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("username", [None, "example"])
-async def test_support_create_retry_access_reply_linked_order_and_legacy(username):
+async def test_support_create_retry_access_reply_linked_order_and_legacy(username, monkeypatch):
     async with isolated_pg() as (_, sessions):
         buyer, seller, listing, deal = await paid_order(sessions)
         admin = await signed_login(sessions, 89101)
@@ -64,3 +67,19 @@ async def test_support_create_retry_access_reply_linked_order_and_legacy(usernam
             assert "Проблема со сделкой" in next(n.body for n in notices if n.notification_type == "support_ticket")
             assert (await session.get(Deal, deal.id)).status == "paid"  # Linking is not a financial dispute.
             assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).frozen_balance == 100
+        sent = []
+        def telegram(request):
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": len(sent)}})
+        transport(monkeypatch, telegram)
+        monkeypatch.setattr(message_notifications, "SessionLocal", sessions)
+        for _ in range(5):
+            await message_notifications.recover_message_notifications()
+        async with sessions() as session:
+            notices = (await session.scalars(select(Notification).where(Notification.notification_type.in_(("support_ticket", "support_created", "support_reply"))))).all()
+            assert len(notices) == 3 and all(n.delivery_status == "sent" for n in notices)
+        admin_sent = [data for data in sent if data["chat_id"] == admin.telegram_id]
+        assert len(admin_sent) == 1
+        assert "Проблема со сделкой" in admin_sent[0]["text"]
+        assert ("@example" if username else "Username отсутствует") in admin_sent[0]["text"]
+        assert len([data for data in sent if data["chat_id"] == buyer.telegram_id]) == 2

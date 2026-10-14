@@ -144,7 +144,7 @@ async def claim_delivery(session, user_id, now):
                 contact_url = profile_url(target_user)
         return {"ids": [notice.id for notice in eligible], "telegram_id": user.telegram_id, "text": text,
                 "params": params, "contact_url": contact_url,
-                "linked_deal_id": latest.payload.get("linked_deal_id"),
+                "linked_deal_id": latest.payload.get("linked_deal_id") if user.role == "admin" else None,
                 "notification_type": latest.notification_type, "photo_url": photo_url}
 
 
