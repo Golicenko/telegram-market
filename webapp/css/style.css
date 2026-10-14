@@ -756,7 +756,7 @@ main{padding-left:max(10px,env(safe-area-inset-left),var(--app-safe-left,0px));p
 /* Focus does not trigger iOS small-input zoom; user zoom remains available. */
 #chatInput{font-size:16px!important;line-height:1.4;min-height:44px;max-height:112px;overflow-y:auto;caret-color:#ffb531;color:#f4f7fb;resize:none}
 .chat-form{flex-shrink:0;align-items:flex-end}.chat-form button{min-width:44px;min-height:44px;flex-shrink:0}
-.messages{overscroll-behavior:contain;overflow-anchor:none;touch-action:pan-y}.message{white-space:pre-wrap;overflow-wrap:anywhere;max-width:86%;user-select:text;-webkit-user-select:text}.message-meta{user-select:none}.message-meta button{min-height:44px;color:#ffbe54;background:transparent;border:0}
+.messages{overscroll-behavior:contain;overflow-anchor:none;touch-action:pan-y pinch-zoom}.message{white-space:pre-wrap;overflow-wrap:anywhere;max-width:86%;user-select:text;-webkit-user-select:text}.message-meta{user-select:none}.message-meta button{min-height:44px;color:#ffbe54;background:transparent;border:0}
 #chatConnection{display:block;padding:4px 0;color:#e0bc76;font-size:12px}#chatConnection[hidden],#chatJumpLatest[hidden]{display:none}
 #chatJumpLatest,.chat-history-button{min-height:44px;border:1px solid #31506e;border-radius:16px;color:#ddecff;background:#14283d;padding:8px 14px;align-self:center}
 #chatCopyMenu{position:fixed;z-index:10000;min-width:130px;min-height:44px;border:1px solid #4a607b;border-radius:12px;background:#142337;color:#fff;box-shadow:0 6px 22px #0008;animation:publication-in .16s ease-out}

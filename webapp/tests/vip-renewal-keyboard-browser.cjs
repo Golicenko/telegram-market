@@ -88,6 +88,7 @@ const server = http.createServer((req,res) => {
       for(const height of [340,760,360,760]){await page.evaluate(h=>window.keyboard(h),height);assert.equal(await chat.inputValue(),'Длинный черновик '.repeat(30));}
       const small=await page.locator('input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=hidden]):not([type=submit]),textarea,select').evaluateAll(nodes=>nodes.filter(el=>parseFloat(getComputedStyle(el).fontSize)<16).map(el=>el.id||el.name));
       assert.deepEqual(small,[]);
+      assert.match(await page.locator('#dealMessages').evaluate(el=>getComputedStyle(el).touchAction),/pinch-zoom/);
       assert(!await page.locator('meta[name=viewport]').getAttribute('content').then(v=>/user-scalable=no|maximum-scale=1/.test(v)));
       await page.goto(base+'/?vip_renewal=expiry');
       await page.getByRole('heading',{name:'Продление VIP',exact:true}).waitFor();
