@@ -363,6 +363,7 @@
     bind(elements.syncRetry, "click", () => void retryFailedOptional(), "syncRetry");
     bind(elements.floatingChatButton, "click", openFloatingChat, "floatingChatButton");
     bind(elements.purchaseModalAction, "click", runPurchaseFlowAction, "purchaseModalAction");
+    bind(elements.purchaseModal, "cancel", (event) => { event.preventDefault(); void closePurchaseFlow(); }, "purchaseModal");
   }
 
   function bootstrap(options = {}) {
@@ -808,6 +809,7 @@ function handleClick(event) {
     if (window.AutoFlowDealConfirmation.dismiss()) return;
     const publicationModal = document.querySelector("dialog.publication-modal[open]");
     if (publicationModal) { publicationModal.dispatchEvent(new Event("cancel", { cancelable: true })); return; }
+    if (elements.purchaseModal?.open) { await closePurchaseFlow(); return; }
     if (primaryViews.has(state.currentView) || Date.now() < state.backBlockedUntil) return;
     state.backBlockedUntil = Date.now() + 450;
     const entry = state.navigationStack.pop();
@@ -1793,7 +1795,7 @@ function handleClick(event) {
       const title = document.createElement("h2"); title.textContent = "Лимит бесплатных объявлений";
       const price = document.createElement("strong"); price.textContent = `${draft.price_stars} ⭐`;
       const text = document.createElement("p"); text.textContent = `У вас уже ${state.publicationRules?.active_count ?? state.publicationRules?.used ?? "несколько"} активных объявлений. Чтобы разместить ещё одно, удалите старое объявление или оплатите публикацию за ${draft.price_stars} ⭐.`;
-      const extra = document.createElement("small"); extra.textContent = draft.payload.promote_for_24h ? "Вы также выбрали закрепление: оно оплачивается отдельно с баланса AF по действующим правилам." : "Это не пополнение AF. Реферальная комиссия не начисляется.";
+      const extra = document.createElement("small"); extra.textContent = draft.payload.promote_for_24h ? "VIP оплачивается отдельно: AF с баланса и, при нехватке, доплата Stars. Объявление появится после оплаты публикации и VIP. Если передумаете, возврат невыполненной публикации доступен через поддержку." : "Это не пополнение AF. Реферальная комиссия не начисляется.";
       const controls = document.createElement("div"); controls.className = "publication-actions";
       const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "ghost-button"; cancel.textContent = "Отмена";
       const pay = document.createElement("button"); pay.type = "button"; pay.className = "publish-button"; pay.textContent = `Оплатить ${draft.price_stars} ⭐`;
@@ -1832,11 +1834,8 @@ function handleClick(event) {
         draft = await api.request(`/publication-drafts/${draft.id}${attempt === 0 ? "/retry" : ""}`, attempt === 0 ? { method: "POST" } : {});
         if (draft.status === "published" && draft.listing_id) { showPurchaseSuccess("Объявление опубликовано", "Публикация подтверждена сервером"); return await api.request(`/listings/${draft.listing_id}`); }
         if (["paid", "review"].includes(draft.status) && draft.payload.promote_for_24h) {
-          const quote = await api.request("/vip/quote");
-          if (quote.stars > 0) {
-            await openListingPromotionTopup({ payload: draft.payload, targetView: "market" }, null);
-            return null;
-          }
+          await openListingPromotionTopup({ payload: draft.payload, targetView: "market" }, null);
+          return null;
         }
         if (["review", "refunded", "refund_pending"].includes(draft.status)) break;
         await new Promise(resolve => setTimeout(resolve, 2000));

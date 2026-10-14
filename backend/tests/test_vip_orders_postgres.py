@@ -200,6 +200,13 @@ async def test_new_publication_and_pin_commit_together():
             image_urls=["https://example.com/car.jpg"], promote_for_24h=True)
         async with sessions() as session:
             order = await promotions.start_order(session, seller, promotions.Start(request_id=uuid.uuid4(), listing_payload=payload))
+        async with sessions() as session:
+            await promotions.cancel(order.id, seller, session)
+        async with sessions() as session:
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))).available_balance == 2
+            assert await session.scalar(select(func.count()).select_from(StarPayment)) == 0
+        async with sessions() as session:
+            order = await promotions.start_order(session, seller, promotions.Start(request_id=uuid.uuid4(), listing_payload=payload))
         await receive(sessions, seller, order)
         await fulfill(sessions, order)
         await fulfill(sessions, order)
@@ -298,6 +305,13 @@ async def test_paid_publication_plus_separate_vip_stars_is_not_charged_twice():
             await publications.receive_payment(session, seller.telegram_id, publication_payment(draft))
         async with sessions() as session:
             await publications.fulfill(session, uuid.UUID(draft["id"]))
+        async with sessions() as session:
+            order = await promotions.start_order(session, seller, promotions.Start(request_id=uuid.uuid4(), listing_payload=payload))
+        async with sessions() as session:
+            await promotions.cancel(order.id, seller, session)
+        async with sessions() as session:
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))).available_balance == 2
+            assert await session.scalar(select(func.count()).select_from(StarPayment)) == 1
         async with sessions() as session:
             order = await promotions.start_order(session, seller, promotions.Start(request_id=uuid.uuid4(), listing_payload=payload))
         await receive(sessions, seller, order)
