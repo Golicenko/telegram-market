@@ -5093,6 +5093,11 @@ async function hideCurrentConversation() {
         if (item.gift_plan?.length) {
           const progress = document.createElement("p"); progress.textContent = `Отправлено подарков стоимостью ${item.gift_delivered_stars || 0} Stars; осталось ${item.gift_remaining_stars ?? item.payout_stars} Stars. AF в резерве до завершения всей заявки.`;
           technical.append(progress);
+          if (!item.gift_deliveries?.length) {
+            const reconcile = document.createElement("small");
+            reconcile.textContent = "Если подарки отправлялись раньше, сначала запишите их здесь. До сверки ручных отправок не отклоняйте заявку.";
+            technical.append(reconcile);
+          }
           for (const gift of item.gift_plan) {
             const sent = (item.gift_deliveries || []).filter(row => row.gift_id === gift.gift_id).reduce((sum, row) => sum + row.quantity, 0);
             const left = gift.quantity - sent;

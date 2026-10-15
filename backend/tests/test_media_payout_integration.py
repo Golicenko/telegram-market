@@ -9,7 +9,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select, func, text
 
-from app.models import Deal, Wallet, WalletTransaction, WithdrawalRequest, User
+from app.config import Settings, get_settings
+from app.models import Deal, Wallet, WalletTransaction, WithdrawalRequest, User, Notification, AdminAction
 from app.gift_withdrawals import preview_withdrawal, reserve_gift_withdrawal, record_gift_delivery
 from app.schemas import GiftDeliveryCreate
 from app.services import save_deal_delivery_details, set_deal_status, complete_deal, decide_withdrawal
@@ -66,10 +67,19 @@ async def test_paid_sale_to_manual_partial_gifts_one_settlement_no_double_fee(mo
                     await decide_withdrawal(session, admin, request_id, action, "test")
                 assert error.value.status_code == 409
         second = GiftDeliveryCreate(request_id=uuid.uuid4(), gift_id="15", quantity=1, reference="test-second-gift")
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client_app(sessions)), base_url="http://test") as client:
+        app = client_app(sessions)
+        # Real auth re-evaluates roles from the server allowlist on every login;
+        # changing User.role alone must NOT grant HTTP administrator permissions.
+        app.dependency_overrides[get_settings] = lambda: Settings(
+            bot_token="referral-test-token", debug=False, admin_telegram_ids={admin.telegram_id})
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             endpoint = f"/api/admin/withdrawals/{request_id}/gifts/delivered"
             assert (await client.post(endpoint, json=second.model_dump(mode="json"), headers=headers(seller))).status_code == 403
-            assert (await client.post(endpoint, json=second.model_dump(mode="json"), headers=headers(admin))).status_code == 200
+            for _ in range(2):
+                response = await client.post(endpoint, json=second.model_dump(mode="json"), headers=headers(admin))
+                assert response.status_code == 200, response.text
+                assert response.json()["gift_remaining_stars"] == 0
+                assert "gift_deliveries" not in response.json()  # Actor/proof remain admin-only.
         async def settle():
             async with sessions() as session:
                 return await decide_withdrawal(session, admin, request_id, "paid", None)
@@ -82,6 +92,8 @@ async def test_paid_sale_to_manual_partial_gifts_one_settlement_no_double_fee(mo
             assert wallet.earned_balance == Decimal("57.14") and wallet.earned_frozen_balance == 0
             for kind in ("withdrawal_paid", "withdrawal_reserved", "sale_income"):
                 assert await session.scalar(select(func.count()).select_from(WalletTransaction).where(WalletTransaction.transaction_type == kind)) == 1
+            assert await session.scalar(select(func.count()).select_from(Notification).where(Notification.notification_type == "withdrawal_paid")) == 1
+            assert await session.scalar(select(func.count()).select_from(AdminAction).where(AdminAction.action == "withdrawal_gift_delivered")) == 2
 
 
 @pytest.mark.asyncio
