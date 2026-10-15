@@ -252,7 +252,7 @@ test("50 MB source is optimized before the smaller wire limit, with bounded qual
   const header=Buffer.alloc(24);header.set([137,80,78,71,13,10,26,10]);header.writeUInt32BE(4000,16);header.writeUInt32BE(3000,20);
   const file=new File([header,Buffer.alloc(50*1024*1024)],"large.png",{type:"image/png"});
   const {api}=loadApi(async(_url,options)=>{uploaded=options.body.get('file');assert.equal(options.headers['Content-Type'],undefined);return jsonResponse({url:'/api/media/saved'});},'',{globals:{
-    File, createImageBitmap:async(_file,options)=>{assert.equal(options.resizeWidth,2560);return {width:2560,height:1920,close(){bitmapClosed=true;}};},
+    File, createImageBitmap:async(_file,options)=>{assert.equal(options.resizeWidth,2560);assert.equal(options.resizeHeight,undefined,'preserve EXIF-rotated aspect ratio');return {width:2560,height:1920,close(){bitmapClosed=true;}};},
     document:{baseURI:'https://autoflow.example/',createElement:()=>canvas={getContext:()=>({fillRect(){},drawImage(){}}),toBlob(done){encodes++;done(new Blob([Buffer.alloc(encodes===1?2*1024*1024:200000)],{type:'image/jpeg'}));}}},
   }});
   await api.upload(file,'/uploads',{maxBytes:1024*1024});

@@ -49,10 +49,12 @@ if (!base || new URL(base).hostname!=='127.0.0.1') throw new Error('Isolated loc
       await form.locator('[name=description]').fill('Сохраняем описание и фотографии при потере ответа');
       await form.locator('[name=price_af_coins]').fill('100');
       await form.locator('[name=promote_for_24h]').uncheck({force:true});
-      const files=(n===0?images.slice(0,1):images).map((buffer,i)=>({name:`photo-${i}.png`,mimeType:'application/octet-stream',buffer}));
+      const files=n===0 ? [{name:'iphone.jpg',mimeType:'image/jpeg',buffer:Buffer.from(process.env.PUBLICATION_EXIF_JPEG,'base64')}]
+        : images.map((buffer,i)=>({name:`photo-${i}.png`,mimeType:'application/octet-stream',buffer}));
       await form.locator('[name=photos]').setInputFiles(files);
       await page.waitForFunction(count=>[...document.querySelectorAll('.photo-preview-item img')].filter(img=>!img.hidden && img.complete && img.naturalWidth).length===count,files.length);
       assert.equal(await page.locator('.photo-preview-item img').evaluateAll(imgs=>imgs.every(img=>!img.src.startsWith('blob:') && img.naturalWidth<=480)),true);
+      if(n===0) assert.deepEqual(await page.locator('.photo-preview-item img').evaluate(img=>[img.naturalWidth,img.naturalHeight]),[40,80],'real EXIF portrait must not stretch during client + server normalization');
       const button=form.locator('[type=submit]');
       await button.evaluate(el=>{el.click();el.click();});
       if(n===0){

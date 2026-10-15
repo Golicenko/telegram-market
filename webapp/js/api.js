@@ -348,8 +348,11 @@
     let canvas = null;
     try {
       if (typeof createImageBitmap === "function") {
-        const scale = Math.min(1, 2560 / Math.max(sourceWidth, sourceHeight));
-        bitmap = await boundedBitmap(file, { resizeWidth: Math.max(1, Math.round(sourceWidth * scale)), resizeHeight: Math.max(1, Math.round(sourceHeight * scale)), resizeQuality: "high" });
+        // The decoder applies EXIF orientation first. Setting BOTH dimensions
+        // from the unrotated JPEG header would stretch a portrait phone photo.
+        // One dimension preserves aspect ratio; never upscale either orientation.
+        const resize = Math.min(sourceWidth, sourceHeight) > 2560 ? { resizeWidth: 2560, resizeQuality: "high" } : {};
+        bitmap = await boundedBitmap(file, resize);
       } else {
         objectUrl = URL.createObjectURL(file);
         bitmap = await new Promise((resolve, reject) => {

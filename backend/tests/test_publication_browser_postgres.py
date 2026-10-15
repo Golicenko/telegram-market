@@ -1,10 +1,13 @@
 """Opt-in real browser -> signed API -> isolated PostgreSQL smoke, no money."""
 import asyncio
+import base64
+from io import BytesIO
 import os
 from pathlib import Path
 import socket
 
 import pytest
+from PIL import Image
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 import uvicorn
@@ -38,7 +41,13 @@ async def test_real_publication_browser():
                     break
                 await asyncio.sleep(.02)
             assert server.started
+            with Image.new("RGB", (80, 40), "red") as image:
+                exif = Image.Exif()
+                exif[274] = 6
+                output = BytesIO()
+                image.save(output, "JPEG", exif=exif)
             env = {**os.environ, "PUBLICATION_TEST_URL": f"http://127.0.0.1:{listener.getsockname()[1]}",
+                   "PUBLICATION_EXIF_JPEG": base64.b64encode(output.getvalue()).decode("ascii"),
                    "PUBLICATION_SELLER_AUTH": init_data(seller.telegram_id), "PUBLICATION_BUYER_AUTH": init_data(buyer.telegram_id)}
             process = await asyncio.create_subprocess_exec(os.environ.get("NODE_BINARY", "node"),
                 str(root / "webapp/tests/publication-live-browser.cjs"), env=env,
