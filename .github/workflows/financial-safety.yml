@@ -44,5 +44,7 @@ jobs:
         run: node webapp/tests/vip-renewal-keyboard-browser.cjs
       - name: Photo retry, VIP frame and help flows (fixtures only)
         run: node webapp/tests/media-help-browser.cjs
+      - name: Partial manual gifts, retries and final confirmation (fixtures only)
+        run: node webapp/tests/manual-gift-withdrawal-browser.cjs
       - run: python backend/scripts/build_webapp.py
       - run: git diff --exit-code -- webapp/index.html webapp/build-info.json
