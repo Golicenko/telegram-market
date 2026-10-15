@@ -1035,7 +1035,7 @@ async def recover_training_background_jobs() -> None:
             )
 
 
-def normalize_image_content(content) -> tuple[bytes, str, str]:
+def normalize_image_content(content, diagnostics: dict | None = None) -> tuple[bytes, str, str]:
     """Validate a real image and normalize mobile formats to a browser-safe JPEG."""
 
     try:
@@ -1043,6 +1043,8 @@ def normalize_image_content(content) -> tuple[bytes, str, str]:
         # directly, without another 64 MB read + BytesIO copy in process memory.
         with Image.open(BytesIO(content) if isinstance(content, bytes) else content) as source:
             source_format = (source.format or "").upper()
+            if diagnostics is not None:
+                diagnostics.update(detected_format=source_format, source_width=source.width, source_height=source.height)
             if source_format not in {"JPEG", "PNG", "WEBP", "HEIF", "HEIC", "AVIF", "GIF", "BMP", "TIFF"}:
                 raise HTTPException(status_code=415, detail="Поддерживаются JPG, PNG, WebP, HEIC/HEIF, AVIF, GIF, BMP и TIFF. SVG и документы не являются фотографиями.")
             width, height = source.size
@@ -1256,6 +1258,7 @@ async def upload_image(
     stage = "backend_read"
     started_at = datetime.now(UTC)
     size = None
+    decoded = {}
     try:
         # A semaphore belongs to its application's event loop. Keeping it on
         # app.state also permits clean ASGI restart/test lifecycles.
@@ -1273,7 +1276,7 @@ async def upload_image(
                 raise HTTPException(status_code=413, detail=f"Фотография превышает допустимый размер {max_bytes // (1024 * 1024)} МБ")
             stage = "backend_decode"
             await file.seek(0)
-            normalized, content_type, _extension = await run_in_threadpool(normalize_image_content, file.file)
+            normalized, content_type, _extension = await run_in_threadpool(normalize_image_content, file.file, decoded)
             width, height = await run_in_threadpool(image_dimensions, normalized)
         stage = "database_commit"
         # Content-addressed per owner: a lost HTTP response or concurrent retry
@@ -1300,13 +1303,13 @@ async def upload_image(
                 raise
         diagnostic_logger.info(
             "image_upload_completed %s",
-            json.dumps({"error_id": error_id, "telegram_user_id": telegram_id, "stage": "completed", "file_mime": (file.content_type or "unknown")[:80], "file_size": size, "prepared_size": len(normalized), "image_width": width, "image_height": height, "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
+            json.dumps({"error_id": error_id, "telegram_user_id": telegram_id, "stage": "completed", "file_mime": (file.content_type or "unknown")[:80], "file_size": size, **decoded, "prepared_size": len(normalized), "image_width": width, "image_height": height, "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
         )
         return {"url": f"/api/media/{image_id}"}
     except Exception as exc:
         diagnostic_logger.warning(
             "image_upload_failed %s",
-            json.dumps({"error_id": error_id, "telegram_user_id": telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "file_size": size, "status": getattr(exc, "status_code", 500), "exception_class": type(exc).__name__, "decoder_exception": type(exc.__cause__).__name__ if exc.__cause__ else None, "reason": exc.detail if isinstance(exc, HTTPException) else "internal_error", "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
+            json.dumps({"error_id": error_id, "telegram_user_id": telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "file_size": size, **decoded, "status": getattr(exc, "status_code", 500), "exception_class": type(exc).__name__, "decoder_exception": type(exc.__cause__).__name__ if exc.__cause__ else None, "reason": exc.detail if isinstance(exc, HTTPException) else "internal_error", "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
         )
         raise
     finally:

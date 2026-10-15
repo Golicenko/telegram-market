@@ -16,18 +16,21 @@ from test_publication_stars_postgres import app, listing_payload, payment
 from test_referral_bonus_postgres import isolated_pg, signed_login
 
 
-async def upload(client, user, number, fmt="PNG"):
-    with Image.new("RGB", (80, 60), (number * 20, 30, 100)) as image:
+async def upload(client, user, number, fmt="PNG", large_mb=0):
+    side = int((large_mb * 1024 * 1024 / 3) ** .5) + 1 if large_mb else 0
+    with Image.new("RGB", (side, side) if side else (80, 60), (number * 20, 30, 100)) as image:
         content = BytesIO()
-        image.save(content, fmt)
+        image.save(content, "BMP" if large_mb else fmt)
+    if large_mb:
+        assert content.tell() >= large_mb * 1024 * 1024
     response = await client.post("/api/uploads", headers=headers(user), files={"file": ("wrong.bin", content.getvalue(), "application/octet-stream")})
     assert response.status_code == 201, response.text
     return response.json()["url"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("game,photo_count", [("car_parking_1", 1), ("car_parking_1", 5), ("car_parking_2", 10)])
-async def test_upload_publish_profile_edit_and_reopen(game, photo_count):
+@pytest.mark.parametrize("game,photo_count,large_mb", [("car_parking_1", 1, 0), ("car_parking_1", 5, 0), ("car_parking_2", 10, 0), ("car_parking_1", 1, 20), ("car_parking_2", 1, 30), ("car_parking_2", 1, 50)])
+async def test_upload_publish_profile_edit_and_reopen(game, photo_count, large_mb):
     async with isolated_pg() as (engine, sessions):
         seller = await signed_login(sessions, 99701)
         buyer = await signed_login(sessions, 99702)
@@ -35,7 +38,7 @@ async def test_upload_publish_profile_edit_and_reopen(game, photo_count):
         application.add_middleware(ImageUploadGuard)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
             formats = ["JPEG", "PNG", "WEBP", "HEIF", "AVIF", "GIF", "BMP", "TIFF", "JPEG", "PNG"]
-            urls = [await upload(client, seller, n, formats[n]) for n in range(photo_count)]
+            urls = [await upload(client, seller, n, formats[n], large_mb) for n in range(photo_count)]
             payload = {**listing_payload().model_dump(mode="json"), "game_version": game, "image_urls": urls}
             responses = await asyncio.gather(*[client.post("/api/listings", headers=headers(seller), json=payload) for _ in range(2)])
             assert all(r.status_code == 201 for r in responses), [r.text for r in responses]

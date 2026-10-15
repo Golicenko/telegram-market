@@ -62,6 +62,19 @@ API: расширен `GET /api/uploads/policy`; `POST /api/uploads` тепер�
 
 Не проверены: живой Stars checkout, production-логи и настройки, реальные исходники ошибки AF-2Q1P4Q3U, физические устройства и медленная мобильная сеть; чисел production не выдумывали.
 
+## Файлы
+
+- `webapp/js/api.js`, `webapp/js/app.js`, `webapp/index.html`: подготовка фото, очередь/превью/retry, поля и VIP; обновлён штатный build fingerprint.
+- `backend/app/routes.py`, `upload_guard.py`, `listing_media.py`, `schemas.py`, `config.py`, `main.py`: загрузка, лимиты, данные и проверки.
+- `backend/app/services.py`, `publications.py`, `promotions.py`: только вызов проверки фото в существующих транзакциях.
+- `backend/.env.example`: согласованный пример транспортного лимита.
+- `backend/tests/test_listing_images.py`, `test_image_upload_guard.py`, `test_publication_validation.py`, `test_publication_pipeline_postgres.py`, `test_publication_browser_postgres.py`: новая регрессия.
+- `backend/tests/test_core_workflows.py`, `test_listing_game_version.py`: старые fixtures с невалидным `/api/media/not-a-uuid` заменены на legacy URL; новые реальные DB-media проверки отдельные, защита не ослаблялась.
+- `webapp/tests/api.test.cjs`, `media-help-browser.cjs`, `listing-game-version-browser.cjs`, `publication-live-browser.cjs`: browser/API regression.
+- `.github/workflows/financial-safety.yml`, `.gitignore`, этот отчёт: отдельный настоящий browser/DB gate и артефакты проверки.
+
+TypeScript/typecheck и отдельного ESLint-конфига в проекте нет; не выдаём отсутствующие команды за пройденные. Используются Node syntax/tests, Python compile/Ruff и штатный production build.
+
 ## Релиз и rollback
 
 1. Review PR; зелёный CI с PostgreSQL и browser gate.

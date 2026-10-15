@@ -141,7 +141,7 @@ async def test_oversized_upload_returns_413_before_image_processing(monkeypatch)
 
 def test_upload_normalization_runs_outside_the_async_event_loop():
     source = (Path(__file__).parents[1] / "app" / "routes.py").read_text(encoding="utf-8")
-    assert "await run_in_threadpool(normalize_image_content, file.file)" in source
+    assert "await run_in_threadpool(normalize_image_content, file.file, decoded)" in source
 
 
 @pytest.mark.parametrize("megabytes", [20, 30, 50])
@@ -191,3 +191,9 @@ async def test_rejected_upload_closes_temporary_spool():
     with pytest.raises(HTTPException):
         await upload_image(upload_request(), UploadFile(filename="bad.jpg", file=source), User(id=uuid.uuid4(), telegram_id=99), FakeImageSession())
     assert source.closed
+
+
+def test_decoder_diagnostics_use_actual_format_not_claimed_mime():
+    metadata = {}
+    normalize_image_content(make_image("HEIF"), metadata)
+    assert metadata == {"detected_format": "HEIF", "source_width": 32, "source_height": 24}
