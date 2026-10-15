@@ -67,7 +67,7 @@ if (!base || new URL(base).hostname!=='127.0.0.1') throw new Error('Isolated loc
     }
     assert.equal(postCount,3);assert.equal(uploadCount,11);
     await page.locator('.bottom-nav [data-nav-target=profile]').click();
-    await page.locator(`[data-edit-listing="${saved[1]}"]`).click();
+    await page.locator(`#profileActiveCars [data-edit-listing="${saved[1]}"]`).click();
     const form=page.locator('#carForm');
     assert.equal(await form.locator('[name=promote_for_24h]').isChecked(),false);
     await form.locator('[name=description]').fill('Отредактировано без оплаты и замены фото');
