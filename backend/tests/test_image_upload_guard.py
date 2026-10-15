@@ -52,3 +52,28 @@ async def test_chunked_overflow_is_413_and_closes_parser_spools(monkeypatch):
         assert response.status_code == 413, response.text
         assert opened and all(file.closed for file in opened)
         assert (await client.post("/api/uploads", files={"file": ("photo.jpg", b"small")})).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_mobile_disconnect_closes_partial_spool(monkeypatch):
+    from starlette import formparsers
+    original = formparsers.SpooledTemporaryFile
+    opened = []
+    def capture(*args, **kwargs):
+        file = original(*args, **kwargs)
+        opened.append(file)
+        return file
+    monkeypatch.setattr(formparsers, "SpooledTemporaryFile", capture)
+    messages = iter([
+        {"type": "http.request", "body": b'--test\r\nContent-Disposition: form-data; name="file"; filename="phone.jpg"\r\n\r\npartial', "more_body": True},
+        {"type": "http.disconnect"},
+    ])
+    sent = []
+    async def receive():
+        return next(messages)
+    async def send(message):
+        sent.append(message)
+    await guarded_app()({"type": "http", "method": "POST", "path": "/api/uploads",
+                         "headers": [(b"content-type", b"multipart/form-data; boundary=test")]}, receive, send)
+    assert sent[0]["status"] == 400
+    assert opened and all(file.closed for file in opened)

@@ -51,6 +51,12 @@ class ImageUploadGuard:
                 status, detail = 408, "Загрузка фотографии заняла слишком много времени. Повторите попытку."
                 # Starlette closes every spool when the parser raises this type.
                 raise MultiPartException(detail)
+            if message.get("type") == "http.disconnect":
+                # ClientDisconnect is not caught by this Starlette multipart
+                # parser. Translate it so a dropped mobile connection closes
+                # partially written spools immediately, not only during GC.
+                status, detail = 400, "Соединение прервано во время загрузки фотографии"
+                raise MultiPartException(detail)
             received += len(message.get("body", b""))
             if received > limit:
                 status, detail = 413, "Размер загрузки превышает лимит сервера"
