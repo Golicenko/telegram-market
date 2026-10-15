@@ -1251,16 +1251,23 @@ async def upload_image(
     session: AsyncSession = Depends(get_session),
 ):
     max_bytes = get_settings().upload_max_bytes
+    owner_id, telegram_id = user.id, user.telegram_id
     error_id = request.headers.get("X-AutoFlow-Error-ID", "")[:16] or None
     stage = "backend_read"
     started_at = datetime.now(UTC)
     size = None
     try:
-        async with IMAGE_PROCESSING_SLOTS:
+        # A semaphore belongs to its application's event loop. Keeping it on
+        # app.state also permits clean ASGI restart/test lifecycles.
+        application = request.scope.get("app")
+        if application is not None and not hasattr(application.state, "image_processing_slots"):
+            application.state.image_processing_slots = asyncio.Semaphore(1)
+        slots = application.state.image_processing_slots if application is not None else IMAGE_PROCESSING_SLOTS
+        async with slots:
             size = await run_in_threadpool(spooled_file_size, file)
             diagnostic_logger.info(
                 "image_upload_stage %s",
-                json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "file_size": size}, ensure_ascii=False),
+                json.dumps({"error_id": error_id, "telegram_user_id": telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "file_size": size}, ensure_ascii=False),
             )
             if size > max_bytes:
                 raise HTTPException(status_code=413, detail=f"Фотография превышает допустимый размер {max_bytes // (1024 * 1024)} МБ")
@@ -1272,13 +1279,13 @@ async def upload_image(
         # Content-addressed per owner: a lost HTTP response or concurrent retry
         # cannot create another stored copy. The existing UUID PK is the atomic
         # uniqueness constraint; no schema or financial migration is required.
-        image_id = uuid.uuid5(user.id, hashlib.sha256(normalized).hexdigest())
+        image_id = uuid.uuid5(owner_id, hashlib.sha256(normalized).hexdigest())
         existing = await session.get(UploadedImage, image_id)
         if existing:
             return {"url": f"/api/media/{existing.id}"}
         image = UploadedImage(
             id=image_id,
-            owner_id=user.id,
+            owner_id=owner_id,
             content_type=content_type,
             data=normalized,
             size_bytes=len(normalized),
@@ -1293,13 +1300,13 @@ async def upload_image(
                 raise
         diagnostic_logger.info(
             "image_upload_completed %s",
-            json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": "completed", "file_mime": (file.content_type or "unknown")[:80], "file_size": size, "prepared_size": len(normalized), "image_width": width, "image_height": height, "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
+            json.dumps({"error_id": error_id, "telegram_user_id": telegram_id, "stage": "completed", "file_mime": (file.content_type or "unknown")[:80], "file_size": size, "prepared_size": len(normalized), "image_width": width, "image_height": height, "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
         )
         return {"url": f"/api/media/{image_id}"}
     except Exception as exc:
         diagnostic_logger.warning(
             "image_upload_failed %s",
-            json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "file_size": size, "status": getattr(exc, "status_code", 500), "exception_class": type(exc).__name__, "decoder_exception": type(exc.__cause__).__name__ if exc.__cause__ else None, "reason": exc.detail if isinstance(exc, HTTPException) else "internal_error", "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
+            json.dumps({"error_id": error_id, "telegram_user_id": telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "file_size": size, "status": getattr(exc, "status_code", 500), "exception_class": type(exc).__name__, "decoder_exception": type(exc.__cause__).__name__ if exc.__cause__ else None, "reason": exc.detail if isinstance(exc, HTTPException) else "internal_error", "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
         )
         raise
     finally:
