@@ -199,3 +199,47 @@ def test_sale_policy_migration_retains_historical_or_already_settled_rows(monkey
         values = list(connection.execute(text("SELECT id,seller_payout,platform_commission FROM deals ORDER BY id")))
         assert values == [(1,100,0),(2,100,0),(3,70,30),(4,70,30),(5,70,30),(6,70,30)]
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_partial_gifts_block_refund_and_premature_completion_and_preserve_fee(db):
+    from types import SimpleNamespace
+    from app.gift_withdrawals import record_gift_delivery
+    from app.schemas import GiftDeliveryCreate
+    bridge, user, admin = db
+    quote = await preview_withdrawal(bridge, user, Decimal("42.86"))
+    request = await reserve_gift_withdrawal(bridge, user, uuid.UUID(quote["quote_id"]), "")
+    request_id = request.id
+    admin = SimpleNamespace(id=admin.id, role="admin", is_blocked=False)
+    user = SimpleNamespace(id=user.id, role="user", is_blocked=False)
+    await decide_withdrawal(bridge, admin, request.id, "approve", None)
+    command = GiftDeliveryCreate(request_id=uuid.uuid4(), gift_id="15", quantity=1, reference="manual-receipt-one")
+    for _ in range(2):
+        result = await record_gift_delivery(bridge, admin, request.id, command)
+        assert result.gift_delivered_stars == 15 and result.gift_remaining_stars == 15
+    for action in ("reject", "paid"):
+        with pytest.raises(HTTPException) as error:
+            await decide_withdrawal(bridge, admin, request_id, action, "reason")
+        assert error.value.status_code == 409
+    with bridge.session.begin():
+        wallet = bridge.session.scalar(select(Wallet).where(Wallet.user_id == user.id))
+        assert wallet.earned_balance == Decimal("57.14") and wallet.earned_frozen_balance == Decimal("42.86")
+    with pytest.raises(HTTPException):
+        await record_gift_delivery(bridge, user, request_id, command)
+    for invalid in (
+        command.model_copy(update={"quantity": 2}),  # Same key, different payload.
+        command.model_copy(update={"request_id": uuid.uuid4()}),  # Same receipt, different key.
+        GiftDeliveryCreate(request_id=uuid.uuid4(), gift_id="25", quantity=1, reference="wrong-gift"),
+        GiftDeliveryCreate(request_id=uuid.uuid4(), gift_id="15", quantity=2, reference="too-many"),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await record_gift_delivery(bridge, admin, request_id, invalid)
+        assert error.value.status_code == 409
+    await record_gift_delivery(bridge, admin, request_id, GiftDeliveryCreate(request_id=uuid.uuid4(), gift_id="15", quantity=1, reference="manual-receipt-two"))
+    for _ in range(2):
+        result = await decide_withdrawal(bridge, admin, request_id, "paid", None)
+        assert result.gift_remaining_stars == 0 and result.fee_af == Decimal("12.86")
+    with bridge.session.begin():
+        wallet = bridge.session.scalar(select(Wallet).where(Wallet.user_id == user.id))
+        assert wallet.earned_frozen_balance == 0 and wallet.earned_balance == Decimal("57.14")
+        assert bridge.session.scalar(select(func.count()).select_from(WalletTransaction).where(WalletTransaction.transaction_type == "withdrawal_paid")) == 1

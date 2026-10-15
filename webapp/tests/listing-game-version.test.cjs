@@ -39,3 +39,15 @@ test('game is mandatory without a preselection; screenshot policy is beside uplo
   assert.match(form, /только оригинальный скриншот автомобиля из игры/);
   assert.match(form, /созданные или изменённые нейросетью/);
 });
+
+test('VIP uses one existing outer border and never overrides the photo layout', () => {
+  const css=fs.readFileSync(path.join(__dirname, '../css/style.css'), 'utf8');
+  const rule=css.match(/\.car-card\.is-pinned\s*\{([^}]+)\}/)[1];
+  assert.match(rule,/padding-box/);
+  assert.match(rule,/border-box/);
+  assert.doesNotMatch(rule,/inset|url\(|padding:|border-width:/);
+  assert.doesNotMatch(css,/\.car-card\.is-pinned\s+\.car-card__media/);
+  assert.doesNotMatch(css,/\.car-card(?:\.is-pinned)?\s*::(?:before|after)/);
+  assert.doesNotMatch(css,/vip-leaf-frame|vip-edge-sheen/);
+  assert.equal(fs.existsSync(path.join(__dirname, '../images/vip-leaf-frame.png')),false);
+});

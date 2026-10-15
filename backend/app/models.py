@@ -860,6 +860,7 @@ class WithdrawalRequest(Base, TimestampMixin):
     fee_af: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
     payout_stars: Mapped[int | None] = mapped_column(Integer)
     gift_plan: Mapped[list | None] = mapped_column(JSONB)
+    gift_deliveries: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     payout_method: Mapped[str] = mapped_column(String(64), nullable=False)
     details: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
@@ -874,6 +875,16 @@ class WithdrawalRequest(Base, TimestampMixin):
     @property
     def public_id(self) -> str:
         return f"#{self.public_number:06d}"
+
+    @property
+    def gift_delivered_stars(self) -> int:
+        if self.status == "paid":
+            return self.payout_stars or 0  # Historical manual completion remains authoritative.
+        return sum(item["quantity"] * item["star_count"] for item in (self.gift_deliveries or []))
+
+    @property
+    def gift_remaining_stars(self) -> int:
+        return max(0, (self.payout_stars or 0) - self.gift_delivered_stars)
 
 
 class AdminBalanceAdjustment(Base):

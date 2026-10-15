@@ -22,12 +22,76 @@ def upload_request() -> Request:
     return Request({"type": "http", "method": "POST", "path": "/api/uploads", "headers": [(b"x-autoflow-error-id", b"AF-TEST01")]})
 
 
-@pytest.mark.parametrize("image_format,mode", [("JPEG", "RGB"), ("PNG", "RGBA"), ("WEBP", "RGB"), ("HEIF", "RGB")])
+@pytest.mark.parametrize("image_format,mode", [("JPEG", "RGB"), ("PNG", "RGBA"), ("WEBP", "RGB"), ("HEIF", "RGB"), ("AVIF", "RGB"), ("GIF", "RGB"), ("BMP", "RGB"), ("TIFF", "RGB")])
 def test_mobile_web_images_are_normalized_to_browser_safe_jpeg(image_format, mode):
     content, content_type, extension = normalize_image_content(make_image(image_format, mode=mode))
     assert content.startswith(b"\xff\xd8\xff")
     assert content_type == "image/jpeg"
     assert extension == ".jpg"
+
+
+@pytest.mark.parametrize("image_format,mime,name", [("HEIF", "application/octet-stream", "phone.heic"), ("HEIF", "", "phone.heif"), ("AVIF", "image/jpeg", "edited.jpg"), ("PNG", "text/plain", "screenshot.bin")])
+@pytest.mark.asyncio
+async def test_contents_not_mime_or_extension_and_saved_media_is_readable(image_format, mime, name):
+    session = FakeImageSession()
+    upload = UploadFile(filename=name, file=BytesIO(make_image(image_format)), headers={"content-type": mime})
+    await upload_image(upload_request(), upload, User(id=uuid.uuid4(), telegram_id=99), session)
+    response = await uploaded_image(session.image.id, session)
+    with Image.open(BytesIO(response.body)) as image:
+        image.load()
+        assert image.format == "JPEG" and image.size == (32, 24)
+
+
+def test_exif_orientation_and_private_metadata_are_removed():
+    original = Image.new("RGB", (80, 40), "red")
+    exif = Image.Exif()
+    exif[274] = 6
+    exif[315] = "private author"
+    output = BytesIO()
+    original.save(output, "JPEG", exif=exif)
+    content, _, _ = normalize_image_content(output.getvalue())
+    with Image.open(BytesIO(content)) as image:
+        assert image.size == (40, 80)
+        assert not image.getexif()
+
+
+def test_palette_transparency_becomes_white_not_black():
+    original = Image.new("P", (20, 20), 0)
+    output = BytesIO()
+    original.save(output, "PNG", transparency=0)
+    content, _, _ = normalize_image_content(output.getvalue())
+    with Image.open(BytesIO(content)) as image:
+        assert min(image.getpixel((10, 10))) > 245
+
+
+def test_48mp_phone_jpeg_is_bounded_and_resized():
+    image = Image.new("RGB", (8000, 6000), "blue")
+    output = BytesIO()
+    image.save(output, "JPEG")
+    image.close()
+    content, _, _ = normalize_image_content(output.getvalue())
+    with Image.open(BytesIO(content)) as result:
+        assert result.size == (2560, 1920)
+
+
+@pytest.mark.parametrize("content", [b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>', b'%PDF-1.7', b'<html>not a photo</html>', b'\xff\xd8\xffbroken', b''])
+def test_non_raster_or_corrupt_files_are_never_served(content):
+    with pytest.raises(HTTPException) as error:
+        normalize_image_content(content)
+    assert error.value.status_code in {415, 422}
+
+
+def test_decoded_pixel_limit_is_checked_before_load(monkeypatch):
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
+    with pytest.raises(HTTPException) as error:
+        normalize_image_content(make_image("PNG"))
+    assert error.value.status_code == 413
+
+
+def test_truncated_jpeg_has_actionable_decode_error():
+    with pytest.raises(HTTPException) as error:
+        normalize_image_content(make_image("JPEG")[:-30])
+    assert error.value.status_code in {415, 422}
 
 
 def test_fake_image_is_rejected_from_server_validation():

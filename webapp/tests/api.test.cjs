@@ -35,6 +35,7 @@ function loadApi(fetchImpl, initData = "", options = {}) {
     Error,
   };
   if (options.abortController !== false) context.AbortController = AbortController;
+  Object.assign(context, options.globals || {});
   vm.runInNewContext(source, context, { filename: "api.js" });
   return { api: window.AutoFlowApi, warnings };
 }
@@ -215,4 +216,30 @@ test("training upload reports real transport progress and keeps the backend resp
   assert.deepEqual(progress, [50, 100]);
   assert.equal(response.delivery_reference, "telegram-file-id");
   assert.equal(response.material_type, "video");
+});
+
+test("upload preserves a specific safe backend decode/size reason", async () => {
+  for (const status of [413, 415, 422]) {
+    const detail = "Фотография повреждена: повторите экспорт из галереи";
+    const { api } = loadApi(async () => jsonResponse({ detail }, status));
+    await assert.rejects(api.upload(new Blob(["bad"], {type:"image/jpeg"})), error => error.status === status && error.message === detail);
+  }
+});
+
+test("small AVIF with generic MIME is normalized; SVG never enters canvas", async () => {
+  let decodes = 0, uploaded;
+  const globals = {
+    File,
+    createImageBitmap: async () => { decodes++; return {width:32,height:24,close(){}}; },
+    document: {baseURI:"https://autoflow.example/", createElement: () => ({
+      getContext: () => ({fillRect(){},drawImage(){}}),
+      toBlob: done => done(new Blob(["normalized-jpeg"], {type:"image/jpeg"})),
+    })},
+  };
+  const {api} = loadApi(async (_url, options) => {uploaded=options.body.get("file");return jsonResponse({url:"/api/media/test"},201);}, "", {globals});
+  await api.upload(new File([new Uint8Array([0,0,0,24]),"ftypavif",new Uint8Array(20)],"mobile.bin",{type:"application/octet-stream"}));
+  assert.equal(decodes,1);assert.equal(uploaded.type,"image/jpeg");assert.equal(uploaded.name,"mobile.jpg");
+  await api.upload(new File(["<svg>not a raster photo</svg>"],"fake.jpg",{type:"image/jpeg"}));
+  assert.equal(decodes,1,"SVG cannot be laundered into a permitted raster via canvas");
+  assert.equal(await uploaded.text(),"<svg>not a raster photo</svg>");
 });

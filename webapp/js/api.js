@@ -212,6 +212,11 @@
     if (error?.errorType === "network") return new ApiError(0, "Не удалось установить соединение с сервером. Проверьте интернет.", details);
     if (error?.errorType === "aborted") return new ApiError(0, "Загрузка фотографии была отменена.", details);
     if (error?.errorType === "client_request") return new ApiError(0, "Не удалось подготовить фотографию к отправке.", details);
+    // Preserve safe, actionable server validation details instead of hiding all
+    // decode/size failures behind the same "format unsupported" message.
+    if ([413, 415, 422].includes(error?.status) && typeof error?.detail === "string" && error.detail.trim()) {
+      return new ApiError(error.status, error.detail, details);
+    }
     const messages = {
       401: "Сессия Telegram истекла. Откройте Market заново.",
       413: "Фотография слишком большая.",
@@ -272,7 +277,17 @@
 
   async function prepareImage(file, diagnosticMetadata) {
     diagnosticMetadata.upload_stage = "client_inspect";
-    if (!file || file.size <= 8 * 1024 * 1024 || !/^image\/(jpeg|png|webp)$/i.test(file.type || "")) return file;
+    if (!file?.slice) return file;
+    // Content signatures, not MIME/extension: never rasterize an SVG/document.
+    // HEIC/HEIF and less common formats are decoded by the bounded server path
+    // when a WebView lacks a decoder. Browser conversion is an optimization.
+    const signature = new Uint8Array(await file.slice(0, 64).arrayBuffer());
+    const ascii = String.fromCharCode(...signature);
+    const raster = (signature[0] === 255 && signature[1] === 216)
+      || ascii.startsWith("\x89PNG") || ascii.startsWith("GIF8") || ascii.startsWith("BM")
+      || (ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP")
+      || (ascii.slice(4, 8) === "ftyp" && /avif|avis|heic|heix|hevc|hevx|mif1|msf1/.test(ascii));
+    if (!raster) return file;
     let bitmap = null;
     let objectUrl = null;
     try {
@@ -291,7 +306,7 @@
       const height = Number(bitmap.height || bitmap.naturalHeight || 0);
       diagnosticMetadata.image_width = width || null;
       diagnosticMetadata.image_height = height || null;
-      if (!width || !height) return file;
+      if (!width || !height || width * height > 64000000) return file;
       diagnosticMetadata.upload_stage = "client_compress";
       const scale = Math.min(1, 2560 / Math.max(width, height));
       const canvas = document.createElement("canvas");
@@ -299,9 +314,11 @@
       canvas.height = Math.max(1, Math.round(height * scale));
       const context = canvas.getContext("2d", { alpha: false });
       if (!context) return file;
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
       context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
       const blob = await canvasBlob(canvas, "image/jpeg", 0.86);
-      if (!blob || blob.size >= file.size) return file;
+      if (!blob) return file;
       const safeName = String(file.name || "photo").replace(/\.[^.]+$/, "") || "photo";
       if (typeof File === "function") {
         return new File([blob], `${safeName}.jpg`, { type: "image/jpeg", lastModified: file.lastModified || Date.now() });

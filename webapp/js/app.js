@@ -50,6 +50,10 @@
     withdrawalBusy: false,
     catalog: { brands: [] },
     photoFiles: [],
+    photoUploads: new WeakMap(),
+    photoErrors: new WeakMap(),
+    photoPreviewUrls: [],
+    imagePolicy: null,
     pinnedCardTimer: null,
     currentConversation: null,
     selectedListing: null,
@@ -564,6 +568,7 @@
 
 function handleClick(event) {
   const target = event.target;
+  if (target.closest("[data-reload-help]")) return void loadHelpRules();
   const adminDealOpen = target.closest("[data-admin-deal-open]");
   if (adminDealOpen) return void openAdminDealControl(adminDealOpen.dataset.adminDealOpen);
   const adminDealAction = target.closest("[data-admin-deal-action]");
@@ -571,6 +576,8 @@ function handleClick(event) {
   const helpAnchor = target.closest("[data-help-anchor]");
   if (helpAnchor) {
     event.preventDefault();
+    const article = document.getElementById(helpAnchor.dataset.helpAnchor);
+    if (article) article.open = true;
     document.getElementById(helpAnchor.dataset.helpAnchor)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
     return;
   }
@@ -853,6 +860,7 @@ function handleClick(event) {
       });
     }
     state.currentView = viewName;
+    if (viewName === "help") void loadHelpRules();
     const viewEvent = { market: "market_viewed", training: "training_list_view", topup: "topup_screen_opened", support: "support_opened" }[viewName];
     if (viewEvent) track(viewEvent);
     syncReferralsPage(viewName);
@@ -1117,11 +1125,12 @@ function handleClick(event) {
     state.photoFiles = [];
     elements.carForm.reset();
     renderListingGameSelection();
-    elements.photoPreview.replaceChildren();
+    renderPhotoPreviews();
     document.getElementById("listingType").value = mode;
     document.getElementById("addTitle").textContent = mode === "unique" ? "Добавить уникальную машину" : "Добавить автомобиль";
     document.getElementById("publicationNote").textContent = mode === "unique" ? "Уникальная машина публикуется администратором бесплатно." : "Загружаем условия публикации…";
     configurePromotionOption(mode === "unique");
+    void loadImagePolicy();
     elements.carForm.elements.promote_for_24h.checked = true;
     openSecondary("add");
   }
@@ -1409,7 +1418,7 @@ function handleClick(event) {
     media.append(game);
     const vip = document.createElement("span");
     vip.className = "car-vip-badge";
-    vip.textContent = "VIP";
+    vip.textContent = "👑 VIP";
     media.append(vip);
     const title = document.createElement("h3");
     title.textContent = listingTitle(listing);
@@ -1900,6 +1909,7 @@ function handleClick(event) {
     const originalButtonText = button.textContent;
     let listingSubmission = null;
     button.disabled = true;
+    form.elements.photos.disabled = true;
     try {
       const payload = {
         game_version: String(formData.get("game_version") || ""),
@@ -1931,11 +1941,11 @@ function handleClick(event) {
       for (const [index, file] of state.photoFiles.entries()) {
         button.textContent = `Загрузка фото ${index + 1} из ${state.photoFiles.length}…`;
         try {
-          const uploaded = await api.upload(file);
-          imageUrls.push(uploaded.url);
+          imageUrls.push(await uploadListingPhoto(file));
         } catch (error) {
           error.message = `Не удалось загрузить фотографию ${index + 1}: ${error.message}`;
           error.photoIndex = index + 1;
+          renderPhotoPreviews();
           throw error;
         }
       }
@@ -1979,13 +1989,13 @@ function handleClick(event) {
       const errorId = error?.photoIndex ? reportClientError("listing_photo_upload", error) : null;
       notify(`${error.message}${errorId ? ` Код: ${errorId}` : ""}`);
     }
-    finally { button.disabled = false; button.textContent = originalButtonText; }
+    finally { button.disabled = false; form.elements.photos.disabled = false; button.textContent = originalButtonText; }
   }
 
   async function finishListingSubmission(submission, promotionError = null) {
     elements.carForm.reset();
-    elements.photoPreview.replaceChildren();
     state.photoFiles = [];
+    renderPhotoPreviews();
     state.editingListingId = null;
     state.pendingListingRequestId = null;
     await refreshMarketplace();
@@ -2111,7 +2121,8 @@ function handleClick(event) {
     state.editingListingId = id;
     state.pendingListingRequestId = null;
     state.photoFiles = [];
-    elements.carForm.reset(); elements.photoPreview.replaceChildren();
+    elements.carForm.reset(); renderPhotoPreviews();
+    void loadImagePolicy();
     elements.carForm.elements.game_version.value = listing.game_version || "";
     renderListingGameSelection();
     elements.brandInput.value = listing.brand;
@@ -2146,33 +2157,85 @@ function handleClick(event) {
 
   function previewPhotos(event) {
     const files = Array.from(event.target.files || []);
-    if (!files.length) { state.photoFiles = []; elements.photoPreview.replaceChildren(); return; }
-    if (files.length > 10) {
-      event.target.value = "";
-      state.photoFiles = [];
+    event.target.value = ""; // Re-selecting the same failed file must fire change.
+    if (elements.carForm.querySelector('[type="submit"]').disabled) return;
+    if (!files.length) return; // Cancelling the picker never destroys the draft.
+    if (files.length + state.photoFiles.length > 10) {
       return notify("Можно добавить не более 10 фотографий");
     }
-    const supportedExtension = /\.(jpe?g|png|webp|heic|heif)$/i;
+    const supportedExtension = /\.(jpe?g|png|webp|heic|heif|avif|gif|bmp|tiff?)$/i;
     const unsupported = files.find((file) => !(file.type || "").startsWith("image/") && !supportedExtension.test(file.name || ""));
     if (unsupported) {
-      event.target.value = "";
-      state.photoFiles = [];
       return notify(`Файл «${unsupported.name}» не является поддерживаемой фотографией`);
     }
-    const oversized = files.find((file) => file.size > 30 * 1024 * 1024);
+    const maxBytes = state.imagePolicy?.max_bytes || 30 * 1024 * 1024;
+    const oversized = files.find((file) => file.size > maxBytes);
     if (oversized) {
-      event.target.value = "";
-      state.photoFiles = [];
-      return notify(`Фотография «${oversized.name}» превышает 30 МБ`);
+      return notify(`Фотография «${oversized.name}» превышает ${Math.floor(maxBytes / 1024 / 1024)} МБ`);
     }
-    state.photoFiles = files;
+    state.photoFiles.push(...files);
+    renderPhotoPreviews();
+  }
+
+  async function loadImagePolicy() {
+    try {
+      state.imagePolicy = await api.request("/uploads/policy");
+      const hint = document.querySelector(".photo-upload small");
+      if (hint && state.imagePolicy.max_bytes) hint.textContent = `До 10 фотографий, каждая до ${Math.floor(state.imagePolicy.max_bytes / 1024 / 1024)} МБ. Можно добавлять по одной.`;
+    } catch (_error) { /* Server validation remains authoritative offline. */ }
+  }
+
+  async function uploadListingPhoto(file) {
+    try {
+      let url = state.photoUploads.get(file);
+      if (!url) {
+        url = (await api.upload(file, "/uploads", { maxBytes: state.imagePolicy?.max_bytes })).url;
+        if (!url) throw new Error("Сервер не вернул адрес фотографии. Попробуйте снова.");
+        state.photoUploads.set(file, url);
+      }
+      // Verify the persisted media through the same public route used by cards.
+      // Keep its URL on a network failure: retry does not upload it again.
+      await new Promise((resolve, reject) => {
+        const image = new Image();
+        const timer = setTimeout(() => { image.onload = image.onerror = null; reject(new Error("Не удалось проверить сохранённую фотографию. Проверьте интернет и повторите.")); }, 15000);
+        image.onload = () => { clearTimeout(timer); resolve(); };
+        image.onerror = () => { clearTimeout(timer); reject(new Error("Сохранённая фотография пока недоступна. Повторите проверку.")); };
+        image.src = absoluteMediaUrl(url);
+      });
+      state.photoErrors.delete(file);
+      return url;
+    } catch (error) { state.photoErrors.set(file, error.message); throw error; }
+  }
+
+  function renderPhotoPreviews() {
+    state.photoPreviewUrls.forEach(url => URL.revokeObjectURL(url));
+    state.photoPreviewUrls = [];
     elements.photoPreview.replaceChildren(...state.photoFiles.map((file, index) => {
+      const tile = document.createElement("div"); tile.className = "photo-preview-item";
       const image = document.createElement("img");
       image.src = URL.createObjectURL(file);
+      state.photoPreviewUrls.push(image.src);
       image.alt = `Фотография ${index + 1}`;
-      image.addEventListener("load", () => URL.revokeObjectURL(image.src), { once: true });
-      image.addEventListener("error", () => URL.revokeObjectURL(image.src), { once: true });
-      return image;
+      const label = document.createElement("small"); label.textContent = file.name;
+      image.onerror = () => { image.hidden = true; label.textContent = `${file.name} · превью недоступно, обработаем на сервере`; };
+      const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Убрать"; remove.setAttribute("aria-label", `Убрать фотографию ${index + 1}`);
+      remove.onclick = () => { if (elements.carForm.querySelector('[type="submit"]').disabled) return; state.photoFiles.splice(index, 1); renderPhotoPreviews(); };
+      tile.append(image, label, remove);
+      if (state.photoErrors.has(file)) {
+        const error = document.createElement("small"); error.className = "photo-preview-error"; error.textContent = state.photoErrors.get(file);
+        const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Повторить загрузку";
+        retry.onclick = async () => {
+          const submit = elements.carForm.querySelector('[type="submit"]');
+          if (submit.disabled) return;
+          submit.disabled = retry.disabled = true;
+          elements.carForm.elements.photos.disabled = true;
+          try { await uploadListingPhoto(file); notify("Фотография сохранена"); }
+          catch (failure) { notify(`${failure.message} Код: ${reportClientError("listing_photo_upload", failure)}`); }
+          finally { submit.disabled = false; elements.carForm.elements.photos.disabled = false; renderPhotoPreviews(); }
+        };
+        tile.append(error, retry);
+      }
+      return tile;
     }));
   }
 
@@ -2367,7 +2430,7 @@ function handleClick(event) {
       const copy = document.createElement("div");
       const title = document.createElement("strong"); title.textContent = `${item.public_id} · ${formatNumber(item.amount)} AF Coins · ${withdrawalStatusLabel(item.status)}`;
       const date = document.createElement("span"); date.textContent = formatDate(item.created_at); copy.append(title, date);
-      if (item.gift_plan) { const gifts = document.createElement("small"); gifts.textContent = `Подарки: ${item.gift_plan.map(gift => `${gift.quantity} × ${gift.star_count} Stars`).join(" + ")}. Комиссия: ${formatNumber(item.fee_af)} AF. ${item.rejection_reason || ""}`; copy.append(gifts); }
+      if (item.gift_plan) { const gifts = document.createElement("small"); gifts.textContent = `Подарки: ${item.gift_plan.map(gift => `${gift.quantity} × ${gift.star_count} Stars`).join(" + ")}. Комиссия: ${formatNumber(item.fee_af)} AF. Отправлено подарков стоимостью: ${item.gift_delivered_stars || 0} Stars; осталось: ${item.gift_remaining_stars ?? item.payout_stars} Stars. ${item.rejection_reason || ""}`; copy.append(gifts); }
       row.append(copy);
       const support = document.createElement("button"); support.textContent = "Помощь по заявке";
       support.addEventListener("click", () => openWithdrawalSupport(item.id, false)); row.append(support);
@@ -3431,37 +3494,45 @@ async function hideCurrentConversation() {
     finally { button.disabled = false; }
   }
 
+  async function loadHelpRules() {
+    try {
+      const rules = await api.request("/help/rules");
+      if (!rules?.publication) throw new Error("Условия временно недоступны");
+      state.helpRules = rules;
+      renderHelpCenter();
+    } catch (_error) {
+      document.getElementById("helpRulesStatus").textContent = "Точные тарифы сейчас недоступны. Повторите загрузку или проверьте расчёт перед оплатой.";
+    }
+  }
+
   function renderHelpCenter() {
-    // Optional screenshot: { src: "images/help/…webp", alt: "…", width: 390, height: 600 }.
-    // Only repository-owned, optimized assets; never private account screenshots.
-    const articles = [
-      { id: "buy", title: "Как купить машину", steps: ["Откройте Market и выберите автомобиль.", "Изучите описание и характеристики. Нажмите «Купить».", "Подтвердите цену. После покупки укажите игровой ID, сервер и время по МСК."], warning: "Подтверждайте получение только после фактической передачи машины.", action: "Market", view: "market" },
-      { id: "sell", title: "Как продать машину", steps: ["Создайте объявление с фотографиями и честным описанием.", "Отвечайте на предложения и сообщения покупателя.", "После оплаты откройте сделку, передайте автомобиль и отметьте передачу."], warning: "После завершения продажи автомобиля продавец получает 100% цены в AF Coins. Комиссия 30% применяется только при выводе подарками.", action: "Выставить автомобиль", add: true },
-      { id: "publish", title: "Как выставить объявление", steps: ["Нажмите «+» в Market.", "Добавьте фотографии, название, характеристики, описание и цену.", "Проверьте остаток бесплатных публикаций и цену Stars в форме. Подтвердите оплату, если бесплатный лимит исчерпан."], warning: "Закрепление оплачивается отдельно в AF на 24 часа и требует подтверждения. Оплата публикации не пополняет баланс AF.", action: "Добавить автомобиль", add: true },
-      { id: "offer", title: "Как предложить свою цену", steps: ["Откройте автомобиль и нажмите «Предложить свою цену».", "Укажите сумму от 1 AF и отправьте предложение.", "Дождитесь принятия или отказа. Принятую цену можно использовать при покупке."], warning: "Доступного баланса должно хватать на предложение. Само предложение не списывает средства. Без решения продавца за 24 часа предложение отменяется.", action: "Выбрать автомобиль", view: "market" },
-      { id: "deal", title: "Как проходит безопасная сделка", steps: ["Купите автомобиль: сервер резервирует средства и создаёт чат сделки.", "Отправьте продавцу игровой ID, сервер и время по МСК.", "Продавец передаёт автомобиль в игре и подтверждает это отдельной кнопкой в сделке.", "Проверьте полученный автомобиль. Если всё хорошо — подтвердите получение. Только тогда продавцу начисляются средства.", "Если есть проблема — создайте обращение через кнопку «Есть проблема» в этой сделке."], warning: "До подтверждения средства остаются под защитой. Напоминания приходят сразу, через 2 и 6 часов, затем раз в 12 часов. После 48 часов ожидания подключается администратор; автоматической выплаты нет.", action: "Мои сделки", profile: "deals" },
-      { id: "topup", title: "Как пополнить AF Coins", steps: ["Выберите пакет или введите сумму.", "Оплатите счёт в окне Telegram Stars.", "Дождитесь подтверждения сервера. Новый баланс и операция появятся без перезапуска."], warning: "1 Telegram Star = 1 AF Coin. AF Coins — внутренний баланс сервиса, не личный Stars-баланс. Если проверка задержалась, нажмите «Проверить снова», а не платите повторно.", action: "Пополнить", topup: true },
-      { id: "training", title: "Как купить обучение", steps: ["Откройте «Обучение» и прочитайте подробности продукта.", "Подтвердите оплату AF Coins.", "Откройте «Мои покупки» в разделе обучения. Материалы доступны через бота; персональное обучение проводится в личном Telegram-чате преподавателя."], warning: "Повторно покупать курс для получения материалов не нужно. Используйте отдельную кнопку повторной выдачи.", action: "Обучение", view: "training" },
-      { id: "message", title: "Как написать продавцу", steps: ["Откройте страницу автомобиля.", "Нажмите «Написать продавцу» и отправьте сообщение.", "Продолжить переписку можно из «Диалогов» в профиле."], warning: "Обычный диалог не создаёт покупку или финансовую сделку.", action: "Диалоги", profile: "chats" },
-      { id: "inactive", title: "Если продавец не отвечает", steps: ["Проверьте, что отправили данные передачи или сообщение в оплаченной сделке.", "Срок ответа хранится на сервере — закрывать приложение можно.", "Если продавец не принял заказ и не отвечает 24 часа, подходящая активная сделка отменяется с полным возвратом, его активные объявления снимаются с продажи."], warning: "Принятые, спорные, уже переданные и завершённые сделки не отменяются этим таймером автоматически. Если принятый заказ не передан в срок, он направляется администратору с удержанием средств.", action: "Поддержка", support: true },
-      { id: "refund", title: "Отмена сделки и возврат", steps: ["До принятия заказа продавцом покупатель или продавец может отменить сделку с отдельным подтверждением.", "Сервер возвращает покупателю весь резерв, закрывает чат и уведомляет обе стороны.", "После принятия заказа самостоятельная отмена недоступна: при проблеме создайте обращение. Если принятый заказ не передан за 24 часа, он направляется администратору, а средства остаются под защитой.", "После передачи подтвердите получение только если машина действительно получена."], warning: "Возврат AF Coins внутри сервиса не означает автоматический возврат Telegram Stars. Купленные AF Coins не доступны для вывода; вывод заработанных средств согласуется отдельно.", action: "История операций", profile: "history" },
-      { id: "support", title: "Есть проблема — поддержка сделки", steps: ["В нужной сделке нажмите «Есть проблема»: номер сделки и участники прикрепляются автоматически.", "Опишите проблему, приложите скриншот и отправьте обращение.", "Только после сохранения обращения сделка переходит на проверку поддержки, напоминания о подтверждении прекращаются. Простое открытие формы ничего не меняет.", "Средства остаются зарезервированы до решения. Ответы доступны в разделе поддержки."], warning: "Не подтверждайте получение, если товар не получен или не соответствует договорённости. Не отправляйте пароли, коды входа или доступ к Telegram.", action: "Открыть поддержку", support: true },
-    ];
-    document.getElementById("helpArticles").replaceChildren(...articles.map((article) => {
-      const section = document.createElement("article"); section.id = `help-${article.id}`; section.className = "help-article";
-      const title = document.createElement("h2"); title.textContent = article.title;
-      const steps = document.createElement("ol"); article.steps.forEach((text) => { const step = document.createElement("li"); step.textContent = text; steps.append(step); });
-      section.append(title, steps);
-      if (article.image) { const image = document.createElement("img"); Object.assign(image, article.image, { loading: "lazy", decoding: "async" }); section.append(image); }
+    const openIds = new Set([...document.querySelectorAll(".help-article[open]")].map(item => item.id));
+    const articles = window.AutoFlowHelp.articles(state.helpRules);
+    document.getElementById("helpArticles").replaceChildren(...articles.map((article, index) => {
+      const section = document.createElement("details"); section.id = `help-${article.id}`; section.className = "help-article";
+      section.open = openIds.has(section.id) || (!openIds.size && index === 0);
+      const title = document.createElement("summary"); title.textContent = article.title;
+      const content = document.createElement("div"); content.className = "help-article__content";
+      const steps = document.createElement("ol"); article.steps.forEach(text => { const step = document.createElement("li"); step.textContent = text; steps.append(step); });
+      content.append(steps);
+      if (article.diagram) {
+        const illustration = document.createElement("figure"); illustration.className = "help-diagram";
+        const caption = document.createElement("figcaption"); caption.textContent = "Схема действий · интерфейс 2026-10-15";
+        const route = document.createElement("ol");
+        for (const label of article.diagram) { const item = document.createElement("li"); item.textContent = label; route.append(item); }
+        illustration.append(caption, route); content.append(illustration);
+      }
       const warning = document.createElement("p"); warning.className = "help-warning"; warning.textContent = article.warning;
       const action = document.createElement("button"); action.type = "button"; action.textContent = article.action;
       if (article.view) action.dataset.navTarget = article.view;
       else if (article.profile) action.addEventListener("click", () => { void navigate("profile"); switchProfileTab(article.profile); });
       else if (article.add) action.dataset.openAdd = "";
       else if (article.topup) action.dataset.openTopup = "";
+      else if (article.withdraw) action.dataset.openWithdraw = "";
       else action.dataset.openSupport = "";
-      section.append(warning, action); return section;
+      content.append(warning, action); section.append(title, content); return section;
     }));
+    document.getElementById("helpRulesStatus").textContent = state.helpRules ? "Тарифы и лимиты получены с сервера. Итог операции всегда проверяйте перед подтверждением." : "Актуальные тарифы загружаются при открытии раздела.";
   }
 
   async function openTrainingProduct(id) {
@@ -5015,10 +5086,53 @@ async function hideCurrentConversation() {
       }
 
       if (item.status === "approved") {
-        actions.append(
-          adminActionButton(item.id, "paid", "Подарки отправлены"),
-          adminActionButton(item.id, "reject", "Отклонить")
-        );
+        const done = adminActionButton(item.id, "paid", "Подарки отправлены");
+        done.disabled = Boolean(item.gift_deliveries?.length && item.gift_remaining_stars);
+        actions.append(done);
+        if (!item.gift_deliveries?.length) actions.append(adminActionButton(item.id, "reject", "Отклонить"));
+        if (item.gift_plan?.length) {
+          const progress = document.createElement("p"); progress.textContent = `Отправлено подарков стоимостью ${item.gift_delivered_stars || 0} Stars; осталось ${item.gift_remaining_stars ?? item.payout_stars} Stars. AF в резерве до завершения всей заявки.`;
+          technical.append(progress);
+          if (!item.gift_deliveries?.length) {
+            const reconcile = document.createElement("small");
+            reconcile.textContent = "Если подарки отправлялись раньше, сначала запишите их здесь. До сверки ручных отправок не отклоняйте заявку.";
+            technical.append(reconcile);
+          }
+          for (const gift of item.gift_plan) {
+            const sent = (item.gift_deliveries || []).filter(row => row.gift_id === gift.gift_id).reduce((sum, row) => sum + row.quantity, 0);
+            const left = gift.quantity - sent;
+            if (!left) continue;
+            const form = document.createElement("form"); form.className = "gift-delivery-form";
+            const quantityLabel = document.createElement("label"); quantityLabel.textContent = `Подарок ${gift.star_count} Stars · осталось ${left}`;
+            const quantity = document.createElement("input"); quantity.type = "number"; quantity.min = "1"; quantity.max = String(left); quantity.value = "1"; quantity.required = true;
+            quantityLabel.append(quantity);
+            const proofLabel = document.createElement("label"); proofLabel.textContent = "Подтверждение отправки (ссылка или уникальная пометка)";
+            const proof = document.createElement("input"); proof.required = true; proof.minLength = 3; proof.maxLength = 200; proofLabel.append(proof);
+            const save = document.createElement("button"); save.type = "submit"; save.textContent = "Записать отправленные подарки";
+            let command = null;
+            form.onsubmit = async event => {
+              event.preventDefault(); if (save.disabled) return; save.disabled = true;
+              try {
+                if (!command) {
+                  if (!(await confirmCriticalAction(`Уже отправили ${quantity.value} подарков по ${gift.star_count} Stars нужному пользователю? Эта кнопка только записывает отправку, не отправляет подарок.`, "Да, отправлены"))) return;
+                  command = { request_id: createRequestId(), gift_id: gift.gift_id, quantity: Number(quantity.value), reference: proof.value.trim() };
+                }
+                quantity.disabled = proof.disabled = true;
+                await api.request(`/admin/withdrawals/${item.id}/gifts/delivered`, { method: "POST", body: JSON.stringify(command) });
+                await loadAdminWithdrawals();
+              } catch (error) {
+                // A validation rejection did not commit. An uncertain network result
+                // must keep the original idempotency key and immutable payload.
+                if ([400, 422].includes(Number(error.status))) {
+                  command = null; quantity.disabled = proof.disabled = false;
+                }
+                notify(error.message);
+              }
+              finally { save.disabled = false; }
+            };
+            form.append(quantityLabel, proofLabel, save); technical.append(form);
+          }
+        }
       }
 
       const history = document.createElement("button");
