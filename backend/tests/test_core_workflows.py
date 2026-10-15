@@ -170,7 +170,7 @@ async def test_creating_multiple_regular_listings_is_free():
         max_speed_kph=300,
         description="Описание",
         price_af_coins=100,
-        image_urls=["/api/media/one", "/api/media/two"],
+        image_urls=["/uploads/one.jpg", "/uploads/two.jpg"],
     )
     session = FakeSession(quota_user=seller)
     first = await create_listing(session, seller, payload, listing_type="regular")
@@ -192,7 +192,7 @@ async def test_listing_creation_retry_returns_the_original_listing():
         max_speed_kph=200,
         description="Описание",
         price_af_coins=1,
-        image_urls=["/api/media/one"],
+        image_urls=["/uploads/one.jpg"],
     )
     first_session = FakeSession([None], quota_user=seller)
     first = await create_listing(first_session, seller, payload, listing_type="regular")
@@ -241,7 +241,7 @@ async def test_regular_listing_creation_and_five_af_pin_are_atomic_and_idempoten
     payload = ListingCreate(
         game_version="car_parking_1",
         client_request_id=request_id, brand="Pinned car", power_hp=100, max_speed_kph=200,
-        description="Описание", price_af_coins=10, image_urls=["/api/media/car"],
+        description="Описание", price_af_coins=10, image_urls=["/uploads/car.jpg"],
         promote_for_24h=True,
     )
     first_session = FakeSession([None, wallet], quota_user=seller)
@@ -274,7 +274,7 @@ async def test_regular_listing_pin_shortfall_does_not_publish_or_debit():
     payload = ListingCreate(
         game_version="car_parking_1",
         client_request_id=uuid.uuid4(), brand="Car", power_hp=100, max_speed_kph=200,
-        description="Описание", price_af_coins=10, image_urls=["/api/media/car"],
+        description="Описание", price_af_coins=10, image_urls=["/uploads/car.jpg"],
         promote_for_24h=True,
     )
     session = FakeSession([None, wallet], quota_user=seller)

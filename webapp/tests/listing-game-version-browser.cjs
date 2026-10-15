@@ -100,6 +100,7 @@ const server = http.createServer((req, res) => {
       await form.locator('#promoteRow').click();
       assert.equal(await form.locator('[name="promote_for_24h"]').isChecked(), false);
       await form.locator('#carPhotos').setInputFiles({ name: 'game-screenshot.png', mimeType: 'image/png', buffer: photo });
+      await page.waitForFunction(()=>document.querySelector('.photo-preview-item img')?.naturalWidth>0);
       assert.equal(await form.evaluate(n => n.checkValidity()), false);
       const requestCount = posts, uploadCount = uploads;
       await form.locator('button[type="submit"]').click();
@@ -119,7 +120,7 @@ const server = http.createServer((req, res) => {
       await form.locator('button[type="submit"]').click();
       await page.locator('[data-view="market"]').waitFor({ state: 'visible' });
       assert.equal(listings.at(-1).game_version, game);
-      assert.equal(uploads, uploadCount + 1);
+      assert.equal(uploads, uploadCount, 'Publication reuses the photo already saved for preview');
     }
     await page.reload();
     await page.locator('#marketCars [data-listing-card="new-2"]').waitFor();
@@ -129,7 +130,6 @@ const server = http.createServer((req, res) => {
     await own.waitFor(); assert.match(await own.textContent(), /Car Parking 2/);
     await own.locator('[data-edit-listing]').click();
     assert.equal(await page.locator('#carForm [name="game_version"]:checked').inputValue(), 'car_parking_2');
-    await page.locator('#carForm #promoteRow').click();
     assert.equal(await page.locator('#carForm [name="promote_for_24h"]').isChecked(), false);
     await page.locator('#carForm [name="description"]').fill('Сохранение без потери игры');
     await page.locator('#carForm button[type="submit"]').click();

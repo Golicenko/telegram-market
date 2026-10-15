@@ -42,6 +42,18 @@ jobs:
           npx playwright install --with-deps chromium
       - name: VIP renewal and mobile keyboard regression (fixtures only)
         run: node webapp/tests/vip-renewal-keyboard-browser.cjs
+      - name: Real publication UI, signed API and isolated PostgreSQL (no payments)
+        run: python -m pytest -q -s tests/test_publication_browser_postgres.py
+        working-directory: backend
+        env:
+          RUN_PUBLICATION_BROWSER: '1'
+      - name: Publication browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publication-browser-evidence
+          path: webapp/tests/evidence/
+          if-no-files-found: ignore
       - name: Photo retry, VIP frame and help flows (fixtures only)
         run: node webapp/tests/media-help-browser.cjs
       - name: Single VIP card outline and identical photo rendering (fixtures only)

@@ -273,6 +273,8 @@ async def create_listing(
                             },
                         )
                     promotion_before = wallet_snapshot(promotion_wallet)
+                from .listing_media import validate_listing_media
+                await validate_listing_media(session, payload.image_urls, seller.id)
                 listing = Listing(
                     seller_id=seller.id,
                     game_version=payload.game_version,
@@ -422,6 +424,8 @@ async def update_listing(session: AsyncSession, actor: User, listing_id: uuid.UU
                 value = ""
             setattr(listing, field, value)
         if payload.image_urls is not None:
+            from .listing_media import validate_listing_media
+            await validate_listing_media(session, payload.image_urls, actor.id)
             await session.execute(delete(ListingImage).where(ListingImage.listing_id == listing.id))
             for position, url in enumerate(payload.image_urls):
                 session.add(ListingImage(listing_id=listing.id, url=url, position=position))

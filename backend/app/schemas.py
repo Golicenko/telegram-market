@@ -77,10 +77,10 @@ class ListingCreate(BaseModel):
     client_request_id: uuid.UUID | None = None
     brand: str = Field(min_length=1)
     model: str | None = Field(default=None, min_length=1)
-    power_hp: int = Field(gt=0)
-    max_speed_kph: int = Field(gt=0)
+    power_hp: int = Field(gt=0, le=9007199254740991)
+    max_speed_kph: int = Field(gt=0, le=9007199254740991)
     description: str = Field(min_length=1)
-    price_af_coins: Decimal = Field(ge=1, decimal_places=2)
+    price_af_coins: Decimal = Field(ge=1, decimal_places=2, max_digits=18)
     delivery_time_estimate: str = Field(
         default="up_to_1h",
         pattern="^(up_to_15m|up_to_30m|up_to_1h|up_to_3h|up_to_6h|up_to_12h|up_to_24h)$",
@@ -88,10 +88,10 @@ class ListingCreate(BaseModel):
     image_urls: list[str] = Field(min_length=1, max_length=10)
     promote_for_24h: bool = False
 
-    @field_validator("brand")
+    @field_validator("brand", "description", mode="before")
     @classmethod
     def strip_text(cls, value: str) -> str:
-        return value.strip()
+        return value.strip() if isinstance(value, str) else value
 
     @field_validator("model")
     @classmethod
@@ -107,15 +107,24 @@ class ListingUpdate(BaseModel):
     game_version: GameVersion | None = None
     brand: str | None = Field(default=None, min_length=1)
     model: str | None = Field(default=None, min_length=1)
-    power_hp: int | None = Field(default=None, gt=0)
-    max_speed_kph: int | None = Field(default=None, gt=0)
+    power_hp: int | None = Field(default=None, gt=0, le=9007199254740991)
+    max_speed_kph: int | None = Field(default=None, gt=0, le=9007199254740991)
     description: str | None = Field(default=None, min_length=1)
-    price_af_coins: Decimal | None = Field(default=None, ge=1, decimal_places=2)
+    price_af_coins: Decimal | None = Field(default=None, ge=1, decimal_places=2, max_digits=18)
     delivery_time_estimate: str | None = Field(
         default=None,
         pattern="^(up_to_15m|up_to_30m|up_to_1h|up_to_3h|up_to_6h|up_to_12h|up_to_24h)$",
     )
     image_urls: list[str] | None = Field(default=None, min_length=1, max_length=10)
+
+    @field_validator("brand", "description", "power_hp", "max_speed_kph", "price_af_coins", "delivery_time_estimate", "image_urls", mode="before")
+    @classmethod
+    def supplied_fields_cannot_be_cleared(cls, value):
+        # Missing PATCH fields preserve stored values; null must not reach a
+        # NOT NULL database column and turn a validation error into HTTP 500.
+        if value is None:
+            raise ValueError("Поле нельзя очистить")
+        return value.strip() if isinstance(value, str) else value
 
     @field_validator("game_version")
     @classmethod

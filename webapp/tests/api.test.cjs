@@ -226,7 +226,7 @@ test("upload preserves a specific safe backend decode/size reason", async () => 
   }
 });
 
-test("small AVIF with generic MIME is normalized; SVG never enters canvas", async () => {
+test("known-size PNG with generic MIME is normalized; SVG/AVIF never decoded without a pixel bound", async () => {
   let decodes = 0, uploaded;
   const globals = {
     File,
@@ -237,9 +237,41 @@ test("small AVIF with generic MIME is normalized; SVG never enters canvas", asyn
     })},
   };
   const {api} = loadApi(async (_url, options) => {uploaded=options.body.get("file");return jsonResponse({url:"/api/media/test"},201);}, "", {globals});
-  await api.upload(new File([new Uint8Array([0,0,0,24]),"ftypavif",new Uint8Array(20)],"mobile.bin",{type:"application/octet-stream"}));
+  const header=Buffer.alloc(24);header.set([137,80,78,71,13,10,26,10]);header.writeUInt32BE(32,16);header.writeUInt32BE(24,20);
+  await api.upload(new File([header],"mobile.bin",{type:"application/octet-stream"}));
   assert.equal(decodes,1);assert.equal(uploaded.type,"image/jpeg");assert.equal(uploaded.name,"mobile.jpg");
   await api.upload(new File(["<svg>not a raster photo</svg>"],"fake.jpg",{type:"image/jpeg"}));
   assert.equal(decodes,1,"SVG cannot be laundered into a permitted raster via canvas");
   assert.equal(await uploaded.text(),"<svg>not a raster photo</svg>");
+  await api.upload(new File([new Uint8Array([0,0,0,24]),"ftypavif",new Uint8Array(20)],"mobile.avif"));
+  assert.equal(decodes,1,"AVIF safely falls back to server decoder instead of full WebView decode");
+});
+
+test("50 MB source is optimized before the smaller wire limit, with bounded quality retries", async () => {
+  let uploaded, encodes=0, bitmapClosed=false, canvas;
+  const header=Buffer.alloc(24);header.set([137,80,78,71,13,10,26,10]);header.writeUInt32BE(4000,16);header.writeUInt32BE(3000,20);
+  const file=new File([header,Buffer.alloc(50*1024*1024)],"large.png",{type:"image/png"});
+  const {api}=loadApi(async(_url,options)=>{uploaded=options.body.get('file');assert.equal(options.headers['Content-Type'],undefined);return jsonResponse({url:'/api/media/saved'});},'',{globals:{
+    File, createImageBitmap:async(_file,options)=>{assert.equal(options.resizeWidth,2560);return {width:2560,height:1920,close(){bitmapClosed=true;}};},
+    document:{baseURI:'https://autoflow.example/',createElement:()=>canvas={getContext:()=>({fillRect(){},drawImage(){}}),toBlob(done){encodes++;done(new Blob([Buffer.alloc(encodes===1?2*1024*1024:200000)],{type:'image/jpeg'}));}}},
+  }});
+  await api.upload(file,'/uploads',{maxBytes:1024*1024});
+  assert.equal(encodes,2);assert.equal(uploaded.size,200000);assert.equal(uploaded.name,'large.jpg');assert.equal(uploaded.type,'image/jpeg');
+  assert(bitmapClosed);assert.equal(canvas.width,0);assert.equal(canvas.height,0);
+});
+
+test("48 MP JPEG is never decoded in WebView and goes to server as original", async () => {
+  let uploaded;
+  const bytes=Buffer.from([255,216,255,192,0,8,8,23,112,31,64,1,0]);
+  const {api}=loadApi(async(_url,options)=>{uploaded=options.body.get('file');return jsonResponse({url:'/api/media/server'});},'',{globals:{createImageBitmap(){throw new Error('must not decode');}}});
+  await api.upload(new File([bytes],'48mp.jpg',{type:'image/jpeg'}));
+  assert.equal(uploaded.size,bytes.length);
+});
+
+test("source and prepared size limits are distinct, enforced before transport", async () => {
+  let calls=0;
+  const {api}=loadApi(async()=>{calls++;return jsonResponse({});});
+  await assert.rejects(api.upload(new Blob(['12345']),'/uploads',{sourceMaxBytes:4}),e=>e.status===413);
+  await assert.rejects(api.upload(new Blob(['12345']),'/uploads',{maxBytes:4,sourceMaxBytes:8}),e=>e.status===413 && e.prepared_size===5);
+  assert.equal(calls,0);
 });

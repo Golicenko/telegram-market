@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import hashlib
 import json
 import logging
 import re
@@ -1034,11 +1035,13 @@ async def recover_training_background_jobs() -> None:
             )
 
 
-def normalize_image_content(content: bytes) -> tuple[bytes, str, str]:
+def normalize_image_content(content) -> tuple[bytes, str, str]:
     """Validate a real image and normalize mobile formats to a browser-safe JPEG."""
 
     try:
-        with Image.open(BytesIO(content)) as source:
+        # UploadFile is already spooled by Starlette. Decode its seekable file
+        # directly, without another 64 MB read + BytesIO copy in process memory.
+        with Image.open(BytesIO(content) if isinstance(content, bytes) else content) as source:
             source_format = (source.format or "").upper()
             if source_format not in {"JPEG", "PNG", "WEBP", "HEIF", "HEIC", "AVIF", "GIF", "BMP", "TIFF"}:
                 raise HTTPException(status_code=415, detail="Поддерживаются JPG, PNG, WebP, HEIC/HEIF, AVIF, GIF, BMP и TIFF. SVG и документы не являются фотографиями.")
@@ -1059,8 +1062,17 @@ def normalize_image_content(content: bytes) -> tuple[bytes, str, str]:
                 image = background
             elif image.mode != "RGB":
                 image = image.convert("RGB")
-            output = BytesIO()
-            image.save(output, format="JPEG", quality=88, optimize=True, progressive=True)
+            for attempt in range(3):
+                for quality in (88, 78, 68):
+                    output = BytesIO()
+                    # Strip EXIF/GPS, ICC and other user metadata from publication.
+                    image.save(output, format="JPEG", quality=quality, optimize=True, progressive=True)
+                    if output.tell() <= 1024 * 1024:
+                        break
+                if output.tell() <= 1024 * 1024:
+                    break
+                image.thumbnail((int(image.width * .75), int(image.height * .75)), Image.Resampling.LANCZOS)
+            image.close()
     except HTTPException:
         raise
     except Image.DecompressionBombError as exc:
@@ -1072,6 +1084,8 @@ def normalize_image_content(content: bytes) -> tuple[bytes, str, str]:
     normalized = output.getvalue()
     if not normalized:
         raise HTTPException(status_code=415, detail="Не удалось подготовить фотографию")
+    if len(normalized) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=422, detail="Не удалось оптимизировать фотографию. Выберите другой снимок.")
     return normalized, "image/jpeg", ".jpg"
 
 
@@ -1207,6 +1221,8 @@ async def me(user: User = Depends(get_current_user), session: AsyncSession = Dep
 @router.get("/uploads/policy")
 async def image_upload_policy(user: User = Depends(get_current_user)):
     return {"max_bytes": get_settings().upload_max_bytes, "max_pixels": Image.MAX_IMAGE_PIXELS,
+            "source_max_bytes": 64 * 1024 * 1024, "stored_max_bytes": 2 * 1024 * 1024,
+            "max_side": 2560, "client_decode_max_pixels": 16000000,
             "max_files": 10, "formats": ["jpeg", "png", "webp", "heic", "heif", "avif", "gif", "bmp", "tiff"]}
 
 
@@ -1238,20 +1254,30 @@ async def upload_image(
     error_id = request.headers.get("X-AutoFlow-Error-ID", "")[:16] or None
     stage = "backend_read"
     started_at = datetime.now(UTC)
+    size = None
     try:
         async with IMAGE_PROCESSING_SLOTS:
-            content = await file.read(max_bytes + 1)
+            size = await run_in_threadpool(spooled_file_size, file)
             diagnostic_logger.info(
                 "image_upload_stage %s",
-                json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "file_size": len(content)}, ensure_ascii=False),
+                json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "file_size": size}, ensure_ascii=False),
             )
-            if len(content) > max_bytes:
+            if size > max_bytes:
                 raise HTTPException(status_code=413, detail=f"Фотография превышает допустимый размер {max_bytes // (1024 * 1024)} МБ")
             stage = "backend_decode"
-            normalized, content_type, _extension = await run_in_threadpool(normalize_image_content, content)
+            await file.seek(0)
+            normalized, content_type, _extension = await run_in_threadpool(normalize_image_content, file.file)
             width, height = await run_in_threadpool(image_dimensions, normalized)
         stage = "database_commit"
+        # Content-addressed per owner: a lost HTTP response or concurrent retry
+        # cannot create another stored copy. The existing UUID PK is the atomic
+        # uniqueness constraint; no schema or financial migration is required.
+        image_id = uuid.uuid5(user.id, hashlib.sha256(normalized).hexdigest())
+        existing = await session.get(UploadedImage, image_id)
+        if existing:
+            return {"url": f"/api/media/{existing.id}"}
         image = UploadedImage(
+            id=image_id,
             owner_id=user.id,
             content_type=content_type,
             data=normalized,
@@ -1259,27 +1285,43 @@ async def upload_image(
             original_filename=(Path(file.filename or "photo").name[:255] or None),
         )
         session.add(image)
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            if not await session.get(UploadedImage, image_id):
+                raise
         diagnostic_logger.info(
             "image_upload_completed %s",
-            json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": "completed", "file_mime": (file.content_type or "unknown")[:80], "file_size": len(content), "prepared_size": len(normalized), "image_width": width, "image_height": height, "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
+            json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": "completed", "file_mime": (file.content_type or "unknown")[:80], "file_size": size, "prepared_size": len(normalized), "image_width": width, "image_height": height, "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
         )
-        return {"url": f"/api/media/{image.id}"}
+        return {"url": f"/api/media/{image_id}"}
     except Exception as exc:
         diagnostic_logger.warning(
             "image_upload_failed %s",
-            json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "status": getattr(exc, "status_code", 500), "exception_class": type(exc).__name__, "decoder_exception": type(exc.__cause__).__name__ if exc.__cause__ else None, "reason": exc.detail if isinstance(exc, HTTPException) else "internal_error", "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
+            json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "file_size": size, "status": getattr(exc, "status_code", 500), "exception_class": type(exc).__name__, "decoder_exception": type(exc.__cause__).__name__ if exc.__cause__ else None, "reason": exc.detail if isinstance(exc, HTTPException) else "internal_error", "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
         )
         raise
+    finally:
+        # Includes rejected/corrupt uploads: never leave multipart temp files.
+        await file.close()
+
+
+def image_preview(content: bytes) -> bytes:
+    with Image.open(BytesIO(content)) as image:
+        image.thumbnail((480, 480), Image.Resampling.LANCZOS)
+        output = BytesIO()
+        image.save(output, "JPEG", quality=80)
+        return output.getvalue()
 
 
 @router.get("/media/{image_id}", response_class=Response)
-async def uploaded_image(image_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
+async def uploaded_image(image_id: uuid.UUID, session: AsyncSession = Depends(get_session), preview: bool = False):
     image = await session.get(UploadedImage, image_id)
     if not image:
         raise HTTPException(status_code=404, detail="Фотография не найдена")
     return Response(
-        content=image.data,
+        content=await run_in_threadpool(image_preview, image.data) if preview else image.data,
         media_type=image.content_type,
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )

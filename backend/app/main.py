@@ -24,6 +24,7 @@ from .referrals import backfill_referral_codes
 from .publications import router as publication_router, run_publication_worker
 from .promotions import router as promotion_router, run_worker as run_promotion_worker
 from .training_analytics import router as training_analytics_router
+from .upload_guard import ImageUploadGuard
 
 
 settings = get_settings()
@@ -129,6 +130,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(ImageUploadGuard)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.include_router(router)
 app.include_router(referral_router)

@@ -50,9 +50,13 @@
         if (type === "missing") message = "поле обязательно";
         else if (type === "greater_than") message = `значение должно быть больше ${item?.ctx?.gt ?? 0}`;
         else if (type === "greater_than_equal") message = `значение должно быть не меньше ${item?.ctx?.ge ?? 0}`;
-        else if (type === "int_parsing") message = "введите целое число";
+        else if (type === "less_than_equal") message = "значение превышает допустимый размер";
+        else if (type === "int_parsing" || type === "int_from_float") message = "введите целое число";
         else if (type === "decimal_parsing" || type === "float_parsing") message = "введите корректное число";
-        else if (type === "too_short") message = "поле не должно быть пустым";
+        else if (type === "decimal_max_places") message = "допустимо не более двух знаков после запятой";
+        else if (type === "decimal_max_digits" || type === "decimal_whole_digits") message = "слишком большая сумма";
+        else if (type === "finite_number") message = "введите конечное число";
+        else if (type === "too_short" || type === "string_too_short") message = "поле не должно быть пустым";
         return `${field}: ${message}`;
       }).filter(Boolean);
       if (messages.length) return messages.join("; ");
@@ -233,7 +237,37 @@
 
   function canvasBlob(canvas, type, quality) {
     if (typeof canvas.toBlob !== "function") return Promise.resolve(null);
-    return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => resolve(null), 10000);
+      canvas.toBlob(blob => { window.clearTimeout(timer); resolve(blob); }, type, quality);
+    });
+  }
+
+  // Read dimensions BEFORE decoding. Unknown/very large rasters are sent to the
+  // bounded server decoder, never opened in an <img> just to discover their size.
+  function rasterDimensions(bytes) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes.length >= 24 && bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71) {
+      return [view.getUint32(16), view.getUint32(20)];
+    }
+    if (bytes[0] === 255 && bytes[1] === 216) {
+      let offset = 2;
+      while (offset + 8 < bytes.length) {
+        if (bytes[offset++] !== 255) break;
+        while (bytes[offset] === 255) offset++;
+        const marker = bytes[offset++];
+        if (marker === 217 || marker === 218) break;
+        if (marker === 1 || (marker >= 208 && marker <= 215)) continue;
+        if (offset + 2 > bytes.length) break;
+        const length = view.getUint16(offset);
+        if (length < 2 || offset + length > bytes.length) break;
+        if ([192, 193, 194, 195, 197, 198, 199, 201, 202, 203, 205, 206, 207].includes(marker) && length >= 7) {
+          return [view.getUint16(offset + 5), view.getUint16(offset + 3)];
+        }
+        offset += length;
+      }
+    }
+    return null;
   }
 
   function uploadWithProgress(path, body, options, metadata) {
@@ -275,30 +309,33 @@
     });
   }
 
-  async function prepareImage(file, diagnosticMetadata) {
+  async function prepareImage(file, diagnosticMetadata, maxBytes) {
     diagnosticMetadata.upload_stage = "client_inspect";
     if (!file?.slice) return file;
     // Content signatures, not MIME/extension: never rasterize an SVG/document.
     // HEIC/HEIF and less common formats are decoded by the bounded server path
     // when a WebView lacks a decoder. Browser conversion is an optimization.
-    const signature = new Uint8Array(await file.slice(0, 64).arrayBuffer());
-    const ascii = String.fromCharCode(...signature);
-    const raster = (signature[0] === 255 && signature[1] === 216)
-      || ascii.startsWith("\x89PNG") || ascii.startsWith("GIF8") || ascii.startsWith("BM")
-      || (ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP")
-      || (ascii.slice(4, 8) === "ftyp" && /avif|avis|heic|heix|hevc|hevx|mif1|msf1/.test(ascii));
-    if (!raster) return file;
+    const signature = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer());
+    const dimensions = rasterDimensions(signature);
+    if (!dimensions) return file;
+    const [sourceWidth, sourceHeight] = dimensions;
+    diagnosticMetadata.image_width = sourceWidth;
+    diagnosticMetadata.image_height = sourceHeight;
+    if (!sourceWidth || !sourceHeight || sourceWidth * sourceHeight > 16000000) return file;
     let bitmap = null;
     let objectUrl = null;
+    let canvas = null;
     try {
       if (typeof createImageBitmap === "function") {
-        bitmap = await createImageBitmap(file);
+        const scale = Math.min(1, 2560 / Math.max(sourceWidth, sourceHeight));
+        bitmap = await createImageBitmap(file, { resizeWidth: Math.max(1, Math.round(sourceWidth * scale)), resizeHeight: Math.max(1, Math.round(sourceHeight * scale)), resizeQuality: "high" });
       } else {
         objectUrl = URL.createObjectURL(file);
         bitmap = await new Promise((resolve, reject) => {
           const image = new Image();
-          image.onload = () => resolve(image);
-          image.onerror = () => reject(new Error("image_decode_failed"));
+          const timer = window.setTimeout(() => { image.src = ""; reject(new Error("image_decode_timeout")); }, 10000);
+          image.onload = () => { window.clearTimeout(timer); resolve(image); };
+          image.onerror = () => { window.clearTimeout(timer); reject(new Error("image_decode_failed")); };
           image.src = objectUrl;
         });
       }
@@ -309,7 +346,7 @@
       if (!width || !height || width * height > 64000000) return file;
       diagnosticMetadata.upload_stage = "client_compress";
       const scale = Math.min(1, 2560 / Math.max(width, height));
-      const canvas = document.createElement("canvas");
+      canvas = document.createElement("canvas");
       canvas.width = Math.max(1, Math.round(width * scale));
       canvas.height = Math.max(1, Math.round(height * scale));
       const context = canvas.getContext("2d", { alpha: false });
@@ -317,8 +354,23 @@
       context.fillStyle = "#fff";
       context.fillRect(0, 0, canvas.width, canvas.height);
       context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-      const blob = await canvasBlob(canvas, "image/jpeg", 0.86);
-      if (!blob) return file;
+      const targetBytes = Math.min(maxBytes, 1024 * 1024);
+      let blob = null;
+      // Bounded iterations: quality first, then resolution; never allocate a
+      // full-resolution phone canvas. Yield to the WebView between encodes.
+      for (let pass = 0; pass < 3; pass++) {
+        for (const quality of [0.86, 0.76, 0.66]) {
+          blob = await canvasBlob(canvas, "image/jpeg", quality);
+          if (!blob || blob.size <= targetBytes) break;
+        }
+        if (!blob || blob.size <= targetBytes || pass === 2) break;
+        canvas.width = Math.max(1, Math.round(canvas.width * 0.75));
+        canvas.height = Math.max(1, Math.round(canvas.height * 0.75));
+        context.fillStyle = "#fff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      }
+      if (!blob || blob.type !== "image/jpeg" || blob.size > maxBytes) return file;
       const safeName = String(file.name || "photo").replace(/\.[^.]+$/, "") || "photo";
       if (typeof File === "function") {
         return new File([blob], `${safeName}.jpg`, { type: "image/jpeg", lastModified: file.lastModified || Date.now() });
@@ -331,12 +383,14 @@
     } finally {
       bitmap?.close?.();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (canvas) { canvas.width = 0; canvas.height = 0; }
     }
   }
 
   async function upload(file, path = "/uploads", options = {}) {
     const kind = options.kind || "image";
-    const maxBytes = Number(options.maxBytes || 30 * 1024 * 1024);
+    const maxBytes = Number(options.maxBytes || (kind === "training" ? 30 : 64) * 1024 * 1024);
+    const sourceMaxBytes = kind === "training" ? maxBytes : Number(options.sourceMaxBytes || 64 * 1024 * 1024);
     const metadata = {
       endpoint: `/api${path.split("?")[0]}`,
       upload_stage: "client_validate",
@@ -346,11 +400,12 @@
       image_height: null,
     };
     if (!file?.size) throw uploadError(new ApiError(422, kind === "training" ? "Файл пуст." : "Не удалось обработать фотографию.", { errorType: "upload" }), metadata, kind);
-    if (file.size > maxBytes) throw uploadError(new ApiError(413, kind === "training" ? `Файл слишком большой для загрузки. Максимум: ${Math.floor(maxBytes / 1024 / 1024)} МБ.` : "Фотография слишком большая.", { errorType: "upload" }), metadata, kind);
+    if (file.size > sourceMaxBytes) throw uploadError(new ApiError(413, `Исходный файл превышает ${Math.floor(sourceMaxBytes / 1024 / 1024)} МБ.`, { errorType: "upload" }), metadata, kind);
     try {
-      const preparedFile = options.prepareImage === false ? file : await prepareImage(file, metadata);
+      const preparedFile = options.prepareImage === false ? file : await prepareImage(file, metadata, maxBytes);
       metadata.prepared_mime = String(preparedFile?.type || "unknown").slice(0, 80);
       metadata.prepared_size = Number(preparedFile?.size || 0);
+      if (preparedFile.size > maxBytes) throw new ApiError(413, `Не удалось уменьшить фото до серверного лимита ${Math.floor(maxBytes / 1024 / 1024)} МБ. Выберите меньший файл или повторите после обновления лимита сервера.`);
       metadata.upload_stage = "formdata";
       const body = new FormData();
       body.append("file", preparedFile, preparedFile.name || "photo.jpg");

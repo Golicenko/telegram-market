@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     training_seller_payout_percent: int = Field(default=70, ge=1, le=100)
     star_topup_min: int = Field(default=10, ge=1)
     star_topup_max: int = Field(default=1000, ge=1)
-    upload_max_bytes: int = Field(default=30 * 1024 * 1024, ge=1024)
+    upload_max_bytes: int = Field(default=64 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024)
     # Direct uploads still pass through the cloud Bot API (50 MB). Large videos
     # use the Telegram inbox/file_id flow and never transit Railway.
     training_file_upload_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)

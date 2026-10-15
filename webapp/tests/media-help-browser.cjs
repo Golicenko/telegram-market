@@ -75,13 +75,13 @@ const server = http.createServer((req, res) => {
       await form.locator('[name=description]').fill('Описание не должно пропасть при сетевой ошибке');await form.locator('[name=price_af_coins]').fill('100');
       await form.locator('[name=promote_for_24h]').uncheck({force:true});
       await form.locator('[name=photos]').setInputFiles([{name:'one.png',mimeType:'application/octet-stream',buffer:png},{name:'two.png',mimeType:'image/png',buffer:png}]);
-      const submit=form.locator('[type=submit]');await submit.click();
+      const submit=form.locator('[type=submit]');
       await page.getByRole('button',{name:'Повторить загрузку',exact:true}).waitFor();
       assert.equal(publishes,0,'failed photo cannot initiate publication/payment');
       assert.equal(await form.locator('[name=description]').inputValue(),'Описание не должно пропасть при сетевой ошибке');
       assert.equal(await page.locator('.photo-preview-item').count(),2);
-      // Invalid additional selection must preserve the two original photos.
-      await form.locator('[name=photos]').setInputFiles({name:'bad.txt',mimeType:'text/plain',buffer:Buffer.from('not a photo')});
+      // Cancelling the picker must preserve the two original photos.
+      await form.locator('[name=photos]').setInputFiles([]);
       assert.equal(await page.locator('.photo-preview-item').count(),2);
       failPhoto=false;await page.getByRole('button',{name:'Повторить загрузку',exact:true}).click();
       await page.getByRole('button',{name:'Повторить загрузку',exact:true}).waitFor({state:'detached'});
