@@ -15,7 +15,7 @@ const server = http.createServer((req, res) => {
 
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const browser = await chromium.launch({ channel: 'msedge', headless: true });
+  const browser = await chromium.launch({ ...(process.env.CI ? {} : {channel:'msedge'}), headless: true });
   try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     await context.route(/^https:/, route => route.fulfill({ status: 200, body: '' }));
@@ -72,9 +72,14 @@ const server = http.createServer((req, res) => {
       return card && !card.classList.contains('is-pinned');
     });
     assert.equal(await pinned.evaluate(n => n.classList.contains('is-pinned')), false, 'Frame expires without backend refresh');
-    const after = await pinned.boundingBox();
+    // Resolve the current node and measure in one browser task: the authoritative
+    // reload may otherwise detach the element between locator resolution and measurement.
+    const after = await page.evaluate(() => {
+      const box=document.querySelector('#marketCars [data-listing-card="old-cp1"]').getBoundingClientRect();
+      return {width:box.width,height:box.height};
+    });
     assert.equal(after.width, before.width, 'Frame does not resize card width');
-    assert(after.height <= before.height, 'Expired VIP returns to the ordinary photo layout');
+    assert.equal(after.height, before.height, 'VIP expiry must not resize the photo or card');
     assert((await pinned.locator('img').getAttribute('src')).endsWith('/test-photo.png'), 'Expiry preserves the original photo');
     await ordinary.locator('h3').click();
     await page.locator('[data-view="listing-detail"]').waitFor({ state: 'visible' });

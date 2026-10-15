@@ -103,15 +103,16 @@ input::placeholder, textarea::placeholder { color:#677381; }
 .car-card { position:relative; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:linear-gradient(180deg,#111b26,#0b121b); box-shadow:0 10px 26px rgba(0,0,0,.24); }
 .car-card.is-unique { border-color:rgba(255,180,20,.76); background:linear-gradient(180deg,#21170d,#0d131b 65%); box-shadow:0 0 0 1px rgba(255,143,0,.12),0 0 18px rgba(255,151,0,.16); }
 .unique-label { position:absolute; z-index:2; left:7px; bottom:7px; padding:4px 6px; border:1px solid rgba(255,221,107,.55); border-radius:6px; color:#251603; background:linear-gradient(135deg,#ffd83c,#ff8d00); font-size:9px; font-weight:900; text-transform:uppercase; }
-.car-card.is-pinned{border-color:#b99a4a;background:linear-gradient(150deg,#18202b,#0b121b 65%);box-shadow:inset 0 1px 0 #f3d77a55,0 -2px 12px #d4af3714,0 10px 26px #0004}
-.car-card.is-pinned .car-card__media{aspect-ratio:1;background:#0b121b}
-.car-card.is-pinned .car-card__media::after{content:"";position:absolute;inset:0;z-index:2;background:url("../images/vip-leaf-frame.png") center/contain no-repeat;pointer-events:none}
-.car-card.is-pinned .car-card__media>img{position:absolute;left:19%;top:15%;width:63%;height:69%;object-fit:contain}
-.car-vip-badge{display:none;position:absolute;z-index:3;top:8px;left:8px;padding:4px 7px;border:1px solid #d4af3799;border-radius:6px;color:#f3d77a;background:#121921e6;font-size:10px;font-weight:800;letter-spacing:.08em;pointer-events:none}
+/* One outer border, using the existing 1px box. VIP never changes the photo layout. */
+.car-card.is-pinned {
+  border-color: transparent;
+  background: linear-gradient(180deg,#111b26,#0b121b) padding-box,
+    linear-gradient(145deg,#f5da92,#b78a38 32%,#735321 56%,#e7c979 78%,#a77c32) border-box;
+  box-shadow: 0 0 12px rgba(212,175,55,.12),0 10px 26px rgba(0,0,0,.24);
+}
+.car-vip-badge{display:none;position:absolute;z-index:3;top:8px;left:8px;padding:4px 7px;border-radius:6px;color:#f3d77a;background:#121921e6;font-size:10px;font-weight:800;line-height:1.2;letter-spacing:.06em;pointer-events:none}
 .car-card.is-pinned .car-vip-badge{display:block}
 .car-card.is-pinned .listing-game-badge{top:36px}
-@keyframes vip-edge-sheen{0%,70%,100%{opacity:0;transform:translateX(-100%)}75%{opacity:.65}92%{opacity:0;transform:translateX(360%)}}
-@media(prefers-reduced-motion:reduce){.car-card.is-pinned::after{animation:none}}
 .listing-game-badge{position:absolute;z-index:3;top:7px;left:7px;max-width:calc(100% - 14px);padding:4px 7px;border:1px solid rgba(255,211,133,.5);border-radius:7px;background:rgba(102,65,24,.76);color:#fff0cb;text-shadow:0 1px 2px rgba(40,24,4,.6);font-size:10px;font-weight:700;line-height:1.2;white-space:nowrap;pointer-events:none}
 .listing-game-badge[data-game="car_parking_2"]{background:rgba(34,73,112,.78);border-color:rgba(142,208,255,.5);color:#e3f4ff}
 .seller-delivery-deadline{display:grid;gap:5px;margin-bottom:9px;padding:9px;border:1px solid rgba(255,194,74,.55);border-radius:9px;background:rgba(181,115,20,.14)}

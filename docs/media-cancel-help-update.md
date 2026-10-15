@@ -49,11 +49,17 @@
 
 ## VIP-рамка
 
-`webapp/images/vip-leaf-frame.png` — прозрачная рамка, полученная встроенным ImageGen из предоставленного JPEG (удалён нарисованный клетчатый фон). Сохранены прямоугольная форма и расположение золотых ветвей. Не используется как фотография автомобиля.
+Исправлено по замечанию владельца: прежний декоративный слой с ветвями был ошибочно наложен на область фотографии, а фото уменьшалось внутри квадратной рамки. Удалены PNG-рамка, `::after` у фото, квадратный aspect-ratio, особые размеры/позиция `<img>`, внутренняя тень и неиспользуемая анимация.
 
-CSS добавляет отдельный `pointer-events:none` слой вокруг исходного `<img>`. Рамка масштабируется пропорционально в квадратной области; фото показывает `object-fit:contain`, без растягивания и изменения файла. Оформление автоматически включается у активного VIP по существующим полям и исчезает по истечению. Сроки, цены, покупки и продление 72 ч./10 Stars не изменены. Файл ~1.1 MB, общий для всех карточек, без постоянной анимации.
+Теперь существующий `.car-card.is-pinned` использует **одну внешнюю обводку 1 px**: фон карточки ограничен `padding-box`, золотой градиент — `border-box`. Скругление общее, слабая тень снаружи, без дополнительных контуров и декоративных изображений. Небольшая метка `👑 VIP` не имеет отдельной обводки и не перехватывает клики. Плашки VIP и CP1/CP2 не пересекаются.
 
-Prompt инструмента: “Extract ONLY the existing gold rectangular frame and its metallic gold leafy branches onto a genuinely transparent PNG alpha background. Remove ALL grey and white checkerboard squares, both inside and outside the frame, including spaces between leaves. Preserve the original precise gold shape, proportions, rectangular inner aperture, branch positions at top-left and bottom-right, fine leaf veins, metallic shading and edges. Do not redesign, add ornaments, text, car, shadow background, or enlarge branches. Keep the complete frame and every leaf visible with the same square canvas and original placement.”
+Фото во всех карточках снова использует одинаковые `aspect-ratio:4/3`, `width/height:100%`, `object-fit:cover`; файлы пользователей не изменяются. При истечении VIP сохраняются размеры фото и всей карточки. Та же обводка применяется к активным VIP в Уникальных, заменяя их старую внешнюю тень-кольцо, а не добавляя второй контур. Цены, сроки, закрепление, порядок выдачи и финансовая логика не менялись в этой корректировке. Новых API, миграций и env для неё нет.
+
+`vip-card-outline-browser.cjs` проверяет настоящий компонент в 8 конфигурациях: Telegram platform ios/android × 320/360/390/430 px; CP1/CP2, одинаковые источник/размер/обрезку фото, точное совпадение пикселей изображения при переключении VIP-класса (ниже маленьких меток), отсутствие внутренних border/pseudo-elements, переход по карточке, reduced-motion и истечение без сдвига layout. `vip-outline-{ios,android}-{320,360,390,430}.png` показывают обычную карточку слева и VIP справа. Данные изолированы; изображение — явно подписанная тестовая иллюстрация автомобиля, не реальное объявление. Физические iPhone/Android Telegram не проверялись.
+
+Rollback только этой правки: вернуть CSS и текст метки предыдущей версии либо отключить правило оформления; состояние VIP и деньги не затрагиваются. Старый файл рамки доступен в Git-истории, но больше не загружается приложением.
+
+Повторная локальная проверка корректировки: 108 Node tests; 484 backend tests passed, 123 PostgreSQL-теста пропущены из-за отсутствия локальной тестовой БД; 8/8 новых визуальных конфигураций; существующие upload/help и VIP renewal/keyboard сценарии — по 4 ширины. JS syntax, `git diff --check` и production frontend build прошли. Старые результаты CI ниже относятся к предыдущей ревизии; свежий CI запускается при обновлении PR.
 
 ## Информация и UI
 
@@ -72,7 +78,7 @@ Prompt инструмента: “Extract ONLY the existing gold rectangular fra
 - Выводы дополнились `gift_delivered_stars`, `gift_remaining_stars`; только admin видит подробные записи.
 - Миграция `0052_gift_delivery_progress`: добавляет JSONB `withdrawal_requests.gift_deliveries`, default `[]`. Не создаёт фиктивные записи старых выплат, не меняет деньги/статусы/номера.
 - Backend: `routes.py`, `gift_withdrawals.py`, `services.py`, `models.py`, `schemas.py`; сборка `scripts/build_webapp.py`.
-- Frontend: `index.html`, `js/api.js`, `js/app.js`, новый `js/help.js`, `css/style.css`, рамка.
+- Frontend: `index.html`, `js/api.js`, `js/app.js`, новый `js/help.js`, `css/style.css`; ошибочная декоративная рамка удалена последующей корректировкой.
 - Тесты: `test_listing_images.py`, `test_manual_gift_withdrawals.py`, новый `test_media_payout_integration.py`, обновлённые проверки build/help; `media-help-browser.cjs`, регрессионные Node tests; workflow Financial safety.
 
 ## Проверки

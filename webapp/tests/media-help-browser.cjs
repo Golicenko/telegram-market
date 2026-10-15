@@ -30,7 +30,7 @@ const server = http.createServer((req, res) => {
       const wallet={available_balance:100,earned_balance:100,purchased_balance:0,bonus_balance:0,frozen_balance:0};
       const profile={user,wallet,active_listings:[],sold_listings:[],deals:[],conversations:[],wallet_transactions:[],withdrawals:[]};
       const rules={publication:{enabled:true,free_limit:5,remaining:5,price_stars:7},af_per_star:1,car_seller_percent:100,withdrawal_fee_percent:30,withdrawal_hours:24,seller_response_hours:24,vip_cost_af:15,vip_hours:24,renewal_stars:10,renewal_hours:72};
-      const listings=[1,2].map((game)=>({id:`car${game}`,seller_id:'other',brand:`Тестовая машина CP${game}`,model:'',description:'Тестовое объявление',power_hp:300,max_speed_kph:240,price_af_coins:100,game_version:`car_parking_${game}`,listing_type:'regular',status:'active',images:['/api/media/photo'],pinned:true,pinned_until:new Date(Date.now()+86400000).toISOString(),created_at:new Date().toISOString()}));
+      const listings=[1,2].map((game)=>({id:`car${game}`,seller_id:'other',brand:`Тестовая машина CP${game}`,model:'',description:'Тестовое объявление',power_hp:300,max_speed_kph:240,price_af_coins:100,game_version:`car_parking_${game}`,listing_type:'regular',status:'active',images:['/api/media/photo'],pinned:game===2,pinned_until:game===2?new Date(Date.now()+86400000).toISOString():null,created_at:new Date().toISOString()}));
       let uploads=0,publishes=0,failPhoto=true,lastPayload;
       await context.route('**/api/**',async route=>{
         const req=route.request(),url=new URL(req.url()),endpoint=url.pathname.slice(4);
@@ -65,7 +65,7 @@ const server = http.createServer((req, res) => {
       await page.locator('#marketCars .is-pinned').first().waitFor();
       await page.locator('#marketCars img').first().evaluate(img=>img.decode());
       const media=page.locator('#marketCars .car-card__media').first();
-      assert((await media.evaluate(el=>getComputedStyle(el,'::after').backgroundImage)).includes('vip-leaf-frame.png'));
+      assert.equal(await media.evaluate(el=>getComputedStyle(el,'::after').content),'none');
       assert.equal(new URL(await media.locator('img').getAttribute('src')).pathname,'/api/media/photo','real photo URL is not replaced by frame');
       await page.screenshot({path:path.join(__dirname,`media-help-market-${width}.png`),animations:'disabled'});
       await page.locator('.catalog-add[data-open-add]').click();

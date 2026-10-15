@@ -1418,7 +1418,7 @@ function handleClick(event) {
     media.append(game);
     const vip = document.createElement("span");
     vip.className = "car-vip-badge";
-    vip.textContent = "VIP";
+    vip.textContent = "👑 VIP";
     media.append(vip);
     const title = document.createElement("h3");
     title.textContent = listingTitle(listing);
