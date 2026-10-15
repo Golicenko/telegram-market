@@ -14,7 +14,7 @@ function loadApi(fetchImpl, initData = "", options = {}) {
     Telegram: { WebApp: { initData, platform: "android" } },
     AutoFlowStartupStage: "auth_started",
     navigator: { userAgent: "Telegram Android WebView" },
-    setTimeout,
+    setTimeout: options.setTimeout || setTimeout,
     clearTimeout,
     dispatchEvent() {},
   };
@@ -274,4 +274,17 @@ test("source and prepared size limits are distinct, enforced before transport", 
   await assert.rejects(api.upload(new Blob(['12345']),'/uploads',{sourceMaxBytes:4}),e=>e.status===413);
   await assert.rejects(api.upload(new Blob(['12345']),'/uploads',{maxBytes:4,sourceMaxBytes:8}),e=>e.status===413 && e.prepared_size===5);
   assert.equal(calls,0);
+});
+
+test("hanging WebView decode falls back to server; a late bitmap is closed", async () => {
+  let finish, closed=false, uploaded;
+  const header=Buffer.alloc(24);header.set([137,80,78,71,13,10,26,10]);header.writeUInt32BE(32,16);header.writeUInt32BE(24,20);
+  const {api}=loadApi(async(_url,options)=>{uploaded=options.body.get('file');return jsonResponse({url:'/api/media/fallback'});},'',{
+    setTimeout:(fn,ms)=>setTimeout(fn,ms===10000?5:ms),
+    globals:{createImageBitmap:()=>new Promise(resolve=>{finish=resolve;})},
+  });
+  await api.upload(new File([header],'phone.png',{type:'image/png'}));
+  assert.equal(uploaded.size,header.length);assert.equal(uploaded.type,'image/png');
+  finish({close(){closed=true;}});
+  await new Promise(resolve=>setTimeout(resolve,0));assert(closed);
 });

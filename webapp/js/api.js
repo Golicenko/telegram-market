@@ -243,6 +243,27 @@
     });
   }
 
+  function boundedBitmap(file, options) {
+    return new Promise((resolve, reject) => {
+      let finished = false;
+      const timer = window.setTimeout(() => {
+        finished = true;
+        reject(new Error("image_decode_timeout"));
+      }, 10000);
+      Promise.resolve().then(() => createImageBitmap(file, options)).then(bitmap => {
+        if (finished) return bitmap?.close?.();
+        finished = true;
+        window.clearTimeout(timer);
+        resolve(bitmap);
+      }, error => {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(timer);
+        reject(error);
+      });
+    });
+  }
+
   // Read dimensions BEFORE decoding. Unknown/very large rasters are sent to the
   // bounded server decoder, never opened in an <img> just to discover their size.
   function rasterDimensions(bytes) {
@@ -328,7 +349,7 @@
     try {
       if (typeof createImageBitmap === "function") {
         const scale = Math.min(1, 2560 / Math.max(sourceWidth, sourceHeight));
-        bitmap = await createImageBitmap(file, { resizeWidth: Math.max(1, Math.round(sourceWidth * scale)), resizeHeight: Math.max(1, Math.round(sourceHeight * scale)), resizeQuality: "high" });
+        bitmap = await boundedBitmap(file, { resizeWidth: Math.max(1, Math.round(sourceWidth * scale)), resizeHeight: Math.max(1, Math.round(sourceHeight * scale)), resizeQuality: "high" });
       } else {
         objectUrl = URL.createObjectURL(file);
         bitmap = await new Promise((resolve, reject) => {
