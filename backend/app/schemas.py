@@ -495,6 +495,13 @@ class WithdrawalDecision(BaseModel):
     payout_reference: str | None = Field(default=None, max_length=200)
 
 
+class GiftDeliveryCreate(BaseModel):
+    request_id: uuid.UUID
+    gift_id: str = Field(min_length=1, max_length=200)
+    quantity: int = Field(gt=0, le=1000)
+    reference: str = Field(min_length=3, max_length=200)
+
+
 class WithdrawalOut(ORMModel):
     id: uuid.UUID
     public_number: int
@@ -504,6 +511,8 @@ class WithdrawalOut(ORMModel):
     fee_af: Decimal | None = None
     payout_stars: int | None = None
     gift_plan: list[dict] | None = None
+    gift_delivered_stars: int = 0
+    gift_remaining_stars: int = 0
     payout_method: str
     details: str
     status: str
@@ -516,6 +525,7 @@ class WithdrawalOut(ORMModel):
 
 
 class AdminWithdrawalOut(WithdrawalOut):
+    gift_deliveries: list[dict] = Field(default_factory=list)
     user_telegram_id: int
     user_name: str
     user_username: str | None = None

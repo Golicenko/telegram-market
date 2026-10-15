@@ -64,10 +64,18 @@ const server = http.createServer((req, res) => {
     const before = await pinned.boundingBox();
     await page.screenshot({ path: path.join(os.tmpdir(), 'autoflow-game-market-390.png') });
     await page.clock.fastForward(61000);
+    // Expiry triggers an authoritative catalogue reload. Wait for its replacement
+    // card instead of reading a detached node halfway through that refresh.
+    await pinned.waitFor({ state: 'visible' });
+    await page.waitForFunction(() => {
+      const card = document.querySelector('#marketCars [data-listing-card="old-cp1"]');
+      return card && !card.classList.contains('is-pinned');
+    });
     assert.equal(await pinned.evaluate(n => n.classList.contains('is-pinned')), false, 'Frame expires without backend refresh');
     const after = await pinned.boundingBox();
     assert.equal(after.width, before.width, 'Frame does not resize card width');
-    assert.equal(after.height, before.height, 'Frame does not resize card height');
+    assert(after.height <= before.height, 'Expired VIP returns to the ordinary photo layout');
+    assert((await pinned.locator('img').getAttribute('src')).endsWith('/test-photo.png'), 'Expiry preserves the original photo');
     await ordinary.locator('h3').click();
     await page.locator('[data-view="listing-detail"]').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#listingPageGame').textContent(), 'Car Parking 2');

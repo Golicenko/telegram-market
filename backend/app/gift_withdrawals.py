@@ -2,7 +2,6 @@
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
-import uuid
 
 import httpx
 from fastapi import HTTPException
@@ -10,6 +9,9 @@ from sqlalchemy import select
 
 from .config import get_settings
 from .models import GiftWithdrawalQuote, WithdrawalRequest, Wallet, User
+
+WITHDRAWAL_FEE_PERCENT = 30
+WITHDRAWAL_NET = (Decimal(100) - WITHDRAWAL_FEE_PERCENT) / 100
 
 
 async def available_gifts():
@@ -41,7 +43,7 @@ def calculate_quote(budget, gifts):
     budget = Decimal(budget)
     # The existing product requirement limits ordinary gift payouts to 350 Stars.
     ceiling = get_settings().payout_nft_threshold_stars
-    limit = min(int((budget * Decimal("0.70")).to_integral_value(rounding=ROUND_FLOOR)), ceiling)
+    limit = min(int((budget * WITHDRAWAL_NET).to_integral_value(rounding=ROUND_FLOOR)), ceiling)
     plans = [None] * (limit + 1)
     plans[0] = []
     for amount in range(1, limit + 1):
@@ -54,7 +56,7 @@ def calculate_quote(budget, gifts):
     payout = next((value for value in range(limit, 0, -1) if plans[value]), 0)
     if not payout:
         raise HTTPException(400, "Недостаточно заработанных AF Coins для доступного подарка и комиссии 30%.")
-    gross = (Decimal(payout) / Decimal("0.70")).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
+    gross = (Decimal(payout) / WITHDRAWAL_NET).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
     counts = Counter(plans[payout])
     costs = {gift["id"]: gift["star_count"] for gift in gifts}
     return {
@@ -122,4 +124,41 @@ async def reserve_gift_withdrawal(session, user, quote_id, details):
                 + (f"Username: @{username}" if username else "Username отсутствует"),
                 {"withdrawal_id": str(request.id), "admin_withdrawal_id": str(request.id),
                  "withdrawal_user_id": str(user.id)})
+    return request
+
+
+async def record_gift_delivery(session, admin, withdrawal_id, command):
+    """Record an already performed manual send. Never send gifts or move AF here.
+
+    The withdrawal lock serializes partial records, reject and final settlement.
+    The caller must explicitly confirm ALL gifts to settle the original reserve.
+    """
+    from .models import AdminAction
+    if admin.role != "admin" or admin.is_blocked:
+        raise HTTPException(403, "Доступен только администратору")
+    async with session.begin():
+        request = await session.scalar(select(WithdrawalRequest).where(WithdrawalRequest.id == withdrawal_id).with_for_update())
+        if not request:
+            raise HTTPException(404, "Заявка не найдена")
+        values = {"request_id": str(command.request_id), "gift_id": command.gift_id,
+                  "quantity": command.quantity, "reference": command.reference.strip()}
+        for previous in request.gift_deliveries or []:
+            if previous["request_id"] == values["request_id"]:
+                if any(previous[key] != value for key, value in values.items()):
+                    raise HTTPException(409, "Этот запрос уже использован для другой отправки")
+                return request
+            if previous["reference"] == values["reference"]:
+                raise HTTPException(409, "Эта отправка уже записана. Проверьте историю заявки.")
+        if request.status != "approved" or request.payout_method != "manual_gift":
+            raise HTTPException(409, "Частичную отправку можно фиксировать только в одобренной заявке на подарки")
+        plan = next((item for item in request.gift_plan or [] if item["gift_id"] == command.gift_id), None)
+        delivered = sum(item["quantity"] for item in request.gift_deliveries or [] if item["gift_id"] == command.gift_id)
+        if not plan or delivered + command.quantity > plan["quantity"]:
+            raise HTTPException(409, "Количество превышает оставшиеся подарки по расчёту заявки")
+        if len(values["reference"]) < 3:
+            raise HTTPException(422, "Укажите подтверждение ручной отправки")
+        record = {**values, "star_count": plan["star_count"], "actor_id": str(admin.id), "at": datetime.now(UTC).isoformat()}
+        request.gift_deliveries = [*(request.gift_deliveries or []), record]
+        session.add(AdminAction(admin_id=admin.id, action="withdrawal_gift_delivered", target_type="withdrawal",
+            target_id=request.id, reason=values["reference"], metadata_json=record))
     return request

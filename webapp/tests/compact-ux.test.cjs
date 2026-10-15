@@ -9,19 +9,22 @@ const app=fs.readFileSync(path.join(root,"js/app.js"),"utf8");
 
 test("profile contains only the requested primary actions",()=>{
   const profile=html.match(/<section class="view profile-view"[\s\S]*?<\/section>/)[0];
-  assert.doesNotMatch(profile,/data-refresh-account|data-nav-target="settings"|data-open-frozen|data-open-withdraw/);
+  assert.doesNotMatch(profile,/data-refresh-account|data-nav-target="settings"|data-open-frozen/);
   const menu=profile.slice(profile.indexOf('class="profile-actions'),profile.indexOf('class="profile-panel'));
-  assert.equal((menu.match(/<button /g)||[]).length,6);
-  for(const label of ["Пополнение","Мои объявления","Сделки и чаты","Поддержка","Информация","Администратор"])assert(menu.includes(label));
+  assert.equal((menu.match(/<button /g)||[]).length,7);
+  for(const label of ["Пополнение","Вывести средства","Мои объявления","Сделки и чаты","Поддержка","Информация","Администратор"])assert(menu.includes(label));
   assert.match(menu,/data-open-admin data-admin-only hidden/);
 });
 
-test("help has eleven articles, matching shortcuts and no old information modal",()=>{
-  const help=app.slice(app.indexOf("function renderHelpCenter()"),app.indexOf("async function openTrainingProduct(id)"));
-  assert.equal((help.match(/id: "/g)||[]).length,11);
+test("help has fourteen collapsible guides, matching shortcuts and labelled diagrams",()=>{
+  const help=fs.readFileSync(path.join(root,"js/help.js"),"utf8");
+  assert.equal((help.match(/id: "/g)||[]).length,14);
   for(const anchor of html.matchAll(/data-help-anchor="help-([^"]+)"/g)) assert(help.includes(`id: "${anchor[1]}"`));
   assert.doesNotMatch(html,/id="infoModal"/);
-  assert.match(help,/loading: "lazy", decoding: "async"/);
+  assert.match(app,/createElement\("details"\)/);
+  assert.match(app,/Схема действий/);
+  assert.match(app,/\/help\/rules/);
+  assert.doesNotMatch(help,/укажите игровой ID, сервер и время/);
 });
 test("topup presets keep custom amount and real server confirmation",()=>{
   assert.deepEqual([...html.matchAll(/data-topup-amount="(\d+)"/g)].map(x=>Number(x[1])),[10,15,25,50,75,90,100]);

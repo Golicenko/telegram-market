@@ -20,7 +20,7 @@ test("training save is successful before optional refresh", () => {
 
 test("deal support replaces the accidental dispute action and is idempotent", () => {
   assert.doesNotMatch(app, /Возникла проблема/);
-  assert.match(app, /Есть проблема/);
+  assert.match(fs.readFileSync(path.join(root, "js/help.js"), "utf8"), /Есть проблема/);
   assert.match(app, /`\/deals\/\$\{dealId\}\/support`/);
   assert.match(app, /Прикрепите хотя бы один скриншот/);
   assert.match(app, /screenshot_url: screenshotUrl/);

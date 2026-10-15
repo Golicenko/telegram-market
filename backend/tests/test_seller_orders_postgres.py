@@ -16,7 +16,7 @@ from app.services import (purchase_listing, set_deal_status, save_deal_delivery_
 from test_referral_bonus_postgres import isolated_pg, signed_login, apply_revisions
 
 
-async def paid_order(sessions):
+async def paid_order(sessions, game="car_parking_2"):
     buyer = await signed_login(sessions, 9701)
     seller = await signed_login(sessions, 9702)
     async with sessions() as session, session.begin():
@@ -24,7 +24,7 @@ async def paid_order(sessions):
             (await session.get(User, user.id)).bot_started = True
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))
         wallet.purchased_balance = 100
-        listing = Listing(seller_id=seller.id, game_version="car_parking_2", listing_type="regular",
+        listing = Listing(seller_id=seller.id, game_version=game, listing_type="regular",
             status="active", brand="Car", model="Test", power_hp=1, max_speed_kph=1,
             description="Isolated test", price_af_coins=100)
         session.add(listing)

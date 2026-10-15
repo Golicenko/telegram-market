@@ -6,16 +6,17 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-16c43f828ecd" />
-    <link rel="stylesheet" href="css/style.css?v=af-16c43f828ecd" />
+    <meta name="autoflow-build" content="af-0c879ad2408f" />
+    <link rel="stylesheet" href="css/style.css?v=af-0c879ad2408f" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-16c43f828ecd" defer></script>
-    <script src="js/referrals.js?v=af-16c43f828ecd" defer></script>
-    <script src="js/deal-confirmation.js?v=af-16c43f828ecd" defer></script>
-    <script src="js/admin-operations.js?v=af-16c43f828ecd" defer></script>
-    <script src="js/analytics.js?v=af-16c43f828ecd" defer></script>
-    <script src="js/training-sales.js?v=af-16c43f828ecd" defer></script>
-    <script src="js/app.js?v=af-16c43f828ecd" defer></script>
+    <script src="js/api.js?v=af-0c879ad2408f" defer></script>
+    <script src="js/referrals.js?v=af-0c879ad2408f" defer></script>
+    <script src="js/deal-confirmation.js?v=af-0c879ad2408f" defer></script>
+    <script src="js/admin-operations.js?v=af-0c879ad2408f" defer></script>
+    <script src="js/analytics.js?v=af-0c879ad2408f" defer></script>
+    <script src="js/training-sales.js?v=af-0c879ad2408f" defer></script>
+    <script src="js/help.js?v=af-0c879ad2408f" defer></script>
+    <script src="js/app.js?v=af-0c879ad2408f" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -114,6 +115,7 @@
           </div>
           <div class="profile-actions profile-main-actions" aria-label="Действия профиля">
             <button type="button" data-open-topup>Пополнение</button>
+            <button type="button" data-open-withdraw>💸 Вывести средства</button>
             <button class="is-active" type="button" data-profile-tab="listings">Мои объявления</button>
             <button type="button" data-profile-tab="deals">Сделки и чаты</button>
             <button type="button" data-open-support>Поддержка</button>
@@ -142,6 +144,7 @@
         <section class="view help-center" data-view="help" aria-labelledby="helpTitle" hidden>
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="helpTitle">Информация</h1></div>
           <output class="frontend-build-info" id="frontendBuildInfo" hidden aria-hidden="true"></output>
+          <p id="helpRulesStatus" class="help-rules-status" role="status"></p><button type="button" data-reload-help>Обновить условия</button>
           <h2>Популярные вопросы</h2><nav class="help-shortcuts" aria-label="Популярные вопросы"><a href="#help-sell" data-help-anchor="help-sell">Продать машину</a><a href="#help-buy" data-help-anchor="help-buy">Купить машину</a><a href="#help-topup" data-help-anchor="help-topup">Пополнение</a><a href="#help-deal" data-help-anchor="help-deal">Сделка</a><a href="#help-support" data-help-anchor="help-support">Поддержка</a></nav>
           <div id="helpArticles"></div>
         </section>
@@ -164,7 +167,7 @@
               <small id="listingGameSelection" role="status" aria-live="polite">Выбор игры обязателен</small>
             </fieldset>
             <div class="listing-photo-rules"><strong>Важно: загружайте только оригинальный скриншот автомобиля из игры.</strong><small>Запрещены изображения, созданные или изменённые нейросетью, а также изображения, не соответствующие реальному автомобилю в игре.</small></div>
-            <label class="photo-upload" for="carPhotos"><input id="carPhotos" name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple /><span class="camera-icon" aria-hidden="true">▣</span><span><strong>Загрузить фото</strong><small>До 10 фотографий, каждая до 30 МБ</small></span></label><div class="photo-preview" id="photoPreview"></div>
+            <label class="photo-upload" for="carPhotos"><input id="carPhotos" name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/avif,image/gif,image/bmp,image/tiff,.heic,.heif,.avif,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tif,.tiff" multiple /><span class="camera-icon" aria-hidden="true">▣</span><span><strong>Загрузить фото</strong><small>До 10 фотографий, каждая до 30 МБ. Можно добавлять по одной.</small></span></label><div class="photo-preview" id="photoPreview"></div>
             <label class="form-row"><span>Автомобиль</span><input id="brandInput" name="brand" required autocomplete="off" list="brandSuggestions" placeholder="Начните вводить автомобиль" /><datalist id="brandSuggestions"></datalist></label>
             <label class="form-row"><span>Мощность (л.с.)</span><input name="power_hp" required type="number" min="1" inputmode="numeric" placeholder="Введите мощность" /></label>
             <label class="form-row"><span>Макс. скорость</span><input name="max_speed_kph" required type="number" min="1" inputmode="numeric" placeholder="км/ч" /></label>

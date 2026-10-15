@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from typing import Awaitable, Callable
 
 from fastapi import HTTPException
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -2631,6 +2631,10 @@ async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: u
             raise HTTPException(status_code=409, detail=f"Withdrawal must be one of {sorted(expected)}")
         if action == "reject" and not reason:
             raise HTTPException(status_code=400, detail="Rejection reason is required")
+        if action == "reject" and request.gift_deliveries:
+            raise HTTPException(409, "Часть подарков уже отправлена. Отклонение с полным возвратом запрещено; требуется ручная сверка и завершение оставшейся отправки.")
+        if action == "paid" and request.gift_deliveries and request.gift_remaining_stars:
+            raise HTTPException(409, "Сначала зафиксируйте отправку всех оставшихся подарков")
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == request.user_id).with_for_update())
         if not wallet:
             raise HTTPException(status_code=409, detail="Wallet not found")

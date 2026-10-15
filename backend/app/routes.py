@@ -66,6 +66,7 @@ from .schemas import (
     DealControlAction,
     DealDeliveryDetailsCreate,
     DealOut,
+    GiftDeliveryCreate,
     ListingCreate,
     ListingEngagementOut,
     ListingOut,
@@ -170,10 +171,10 @@ logger = logging.getLogger("autoflow.training")
 diagnostic_logger = logging.getLogger("autoflow.client")
 deal_notification_logger = logging.getLogger("autoflow.deal_notifications")
 register_heif_opener()
-Image.MAX_IMAGE_PIXELS = 40_000_000
+Image.MAX_IMAGE_PIXELS = 64_000_000  # Includes 48 MP phone photos; still a strict decoded-size cap.
 UPLOAD_DIR = Path(get_settings().upload_dir) if get_settings().upload_dir else Path(__file__).resolve().parents[1] / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-IMAGE_PROCESSING_SLOTS = asyncio.Semaphore(2)
+IMAGE_PROCESSING_SLOTS = asyncio.Semaphore(1)  # Bound peak memory for large HEIC/AVIF decodes.
 
 
 def resolve_training_admin_telegram_id(seller: User | None) -> int | None:
@@ -1039,16 +1040,19 @@ def normalize_image_content(content: bytes) -> tuple[bytes, str, str]:
     try:
         with Image.open(BytesIO(content)) as source:
             source_format = (source.format or "").upper()
-            if source_format not in {"JPEG", "PNG", "WEBP", "HEIF", "HEIC"}:
-                raise HTTPException(status_code=415, detail="Разрешены фотографии JPG, PNG, WEBP, HEIC и HEIF")
+            if source_format not in {"JPEG", "PNG", "WEBP", "HEIF", "HEIC", "AVIF", "GIF", "BMP", "TIFF"}:
+                raise HTTPException(status_code=415, detail="Поддерживаются JPG, PNG, WebP, HEIC/HEIF, AVIF, GIF, BMP и TIFF. SVG и документы не являются фотографиями.")
             width, height = source.size
             if width <= 0 or height <= 0:
                 raise HTTPException(status_code=415, detail="Фотография имеет некорректный размер")
             if width * height > Image.MAX_IMAGE_PIXELS:
-                raise HTTPException(status_code=413, detail="Разрешение фотографии слишком большое")
-            source.load()
+                raise HTTPException(status_code=413, detail="Разрешение фотографии превышает 64 мегапикселя")
+            # Decode only the first frame. Downsample before exif_transpose, which
+            # otherwise duplicates a full-resolution phone photo in memory.
+            source.thumbnail((2560, 2560), Image.Resampling.LANCZOS)
             image = ImageOps.exif_transpose(source)
-            image.thumbnail((2560, 2560), Image.Resampling.LANCZOS)
+            if image.mode == "P" and "transparency" in image.info:
+                image = image.convert("RGBA")
             if "A" in image.getbands():
                 background = Image.new("RGB", image.size, "white")
                 background.paste(image, mask=image.getchannel("A"))
@@ -1059,8 +1063,12 @@ def normalize_image_content(content: bytes) -> tuple[bytes, str, str]:
             image.save(output, format="JPEG", quality=88, optimize=True, progressive=True)
     except HTTPException:
         raise
-    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
-        raise HTTPException(status_code=415, detail="Файл не удалось распознать как фотографию") from exc
+    except Image.DecompressionBombError as exc:
+        raise HTTPException(status_code=413, detail="Разрешение фотографии превышает 64 мегапикселя") from exc
+    except UnidentifiedImageError as exc:
+        raise HTTPException(status_code=415, detail="Содержимое файла не распознано как фотография: файл повреждён или формат не поддерживается") from exc
+    except (OSError, ValueError, EOFError, SyntaxError) as exc:
+        raise HTTPException(status_code=422, detail="Фотография повреждена или не полностью сохранена. Повторно выберите исходный файл из галереи.") from exc
     normalized = output.getvalue()
     if not normalized:
         raise HTTPException(status_code=415, detail="Не удалось подготовить фотографию")
@@ -1196,6 +1204,29 @@ async def me(user: User = Depends(get_current_user), session: AsyncSession = Dep
     return MeOut(user=user, wallet=wallet, admin_access=staff_access(user))
 
 
+@router.get("/uploads/policy")
+async def image_upload_policy(user: User = Depends(get_current_user)):
+    return {"max_bytes": get_settings().upload_max_bytes, "max_pixels": Image.MAX_IMAGE_PIXELS,
+            "max_files": 10, "formats": ["jpeg", "png", "webp", "heic", "heif", "avif", "gif", "bmp", "tiff"]}
+
+
+@router.get("/help/rules")
+async def help_rules(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
+    from .publication_quota import publication_rules
+    from .gift_withdrawals import WITHDRAWAL_FEE_PERCENT
+    from .services import settlement_amounts
+    from .referrals import REFERRAL_LIMIT, COMMISSION_PERCENT, MILESTONES
+    settings = get_settings()
+    return {"publication": await publication_rules(session, user), "af_per_star": 1,
+        "car_seller_percent": int(settlement_amounts(Decimal(100))[0]),
+        "withdrawal_fee_percent": WITHDRAWAL_FEE_PERCENT, "withdrawal_hours": 24,
+        "seller_response_hours": settings.seller_response_timeout_seconds / 3600,
+        "vip_cost_af": settings.listing_promotion_cost_af_coins, "vip_hours": settings.listing_promotion_hours,
+        "renewal_stars": settings.vip_renewal_price_stars, "renewal_hours": settings.vip_renewal_hours,
+        "referral_limit": REFERRAL_LIMIT, "referral_percent": COMMISSION_PERCENT,
+        "milestones": [{"count": count, "reward": reward} for count, reward in MILESTONES]}
+
+
 @router.post("/uploads", status_code=201)
 async def upload_image(
     request: Request,
@@ -1237,7 +1268,7 @@ async def upload_image(
     except Exception as exc:
         diagnostic_logger.warning(
             "image_upload_failed %s",
-            json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "status": getattr(exc, "status_code", 500), "exception_class": type(exc).__name__, "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
+            json.dumps({"error_id": error_id, "telegram_user_id": user.telegram_id, "stage": stage, "file_mime": (file.content_type or "unknown")[:80], "status": getattr(exc, "status_code", 500), "exception_class": type(exc).__name__, "decoder_exception": type(exc.__cause__).__name__ if exc.__cause__ else None, "reason": exc.detail if isinstance(exc, HTTPException) else "internal_error", "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
         )
         raise
 
@@ -3250,6 +3281,7 @@ async def admin_withdrawals(
     return [
         AdminWithdrawalOut(
             **WithdrawalOut.model_validate(withdrawal).model_dump(),
+            gift_deliveries=withdrawal.gift_deliveries or [],
             user_telegram_id=user.telegram_id,
             user_name=" ".join(
                 filter(None, [user.first_name, user.last_name])
@@ -3267,6 +3299,13 @@ async def open_withdrawal_support(withdrawal_id: uuid.UUID, user: User = Depends
     from .withdrawal_support import withdrawal_support_ticket
     ticket = await withdrawal_support_ticket(session, user, withdrawal_id)
     return await support_ticket_out(session, ticket)
+
+@router.post("/admin/withdrawals/{withdrawal_id}/gifts/delivered", response_model=WithdrawalOut)
+async def admin_record_gift_delivery(withdrawal_id: uuid.UUID, payload: GiftDeliveryCreate,
+    admin: User = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    from .gift_withdrawals import record_gift_delivery
+    return await record_gift_delivery(session, admin, withdrawal_id, payload)
+
 
 @router.post("/admin/withdrawals/{withdrawal_id}/{action}", response_model=WithdrawalOut)
 async def admin_withdrawal_action(

@@ -49,7 +49,7 @@ test('paid submission retains server listing identity for opening its detail aft
   vm.createContext(c);vm.runInContext(fn('async function publishWithQuota','function confirmPublication'),c);
   const submission={};await c.publishWithQuota({client_request_id:'request'},submission);
   assert.equal(submission.publishedPaidListingId,'published');
-  const opened=[];Object.assign(c,{elements:{carForm:{reset(){}},photoPreview:{replaceChildren(){}}},state:{},refreshMarketplace:async()=>{},navigate:async()=>{},notify(){},openListingDetails:async id=>opened.push(id)});
+  const opened=[];Object.assign(c,{elements:{carForm:{reset(){}},photoPreview:{replaceChildren(){}}},state:{},renderPhotoPreviews(){assert.deepEqual(Array.from(c.state.photoFiles),[]);},refreshMarketplace:async()=>{},navigate:async()=>{},notify(){},openListingDetails:async id=>opened.push(id)});
   vm.runInContext(fn('async function finishListingSubmission','async function openListingPromotionTopup'),c);
   await c.finishListingSubmission(submission);assert.deepEqual(opened,['published']);
 });
