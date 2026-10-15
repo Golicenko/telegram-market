@@ -50,9 +50,10 @@
     withdrawalBusy: false,
     catalog: { brands: [] },
     photoFiles: [],
+    photoTasks: new WeakMap(),
+    photoQueue: Promise.resolve(),
     photoUploads: new WeakMap(),
     photoErrors: new WeakMap(),
-    photoPreviewUrls: [],
     imagePolicy: null,
     pinnedCardTimer: null,
     currentConversation: null,
@@ -1918,7 +1919,9 @@ function handleClick(event) {
         max_speed_kph: Number(formData.get("max_speed_kph")),
         delivery_time_estimate: String(formData.get("delivery_time_estimate")),
         description: String(formData.get("description") || "").trim(),
-        price_af_coins: Number(formData.get("price_af_coins")),
+        // Preserve decimal input exactly; authoritative precision validation is
+        // on the backend, without a floating-point round trip before JSON.
+        price_af_coins: String(formData.get("price_af_coins") || "").trim(),
       };
       if (!state.editingListingId) {
         state.pendingListingRequestId ||= createRequestId();
@@ -1926,10 +1929,10 @@ function handleClick(event) {
       }
       if (!["car_parking_1", "car_parking_2"].includes(payload.game_version)) throw new Error("Выберите Car Parking 1 или Car Parking 2");
       if (!payload.brand) throw new Error("Введите название автомобиля");
-      if (!Number.isInteger(payload.power_hp) || payload.power_hp <= 0) throw new Error("Мощность должна быть положительным целым числом");
-      if (!Number.isInteger(payload.max_speed_kph) || payload.max_speed_kph <= 0) throw new Error("Максимальная скорость должна быть положительным целым числом");
+      if (!Number.isSafeInteger(payload.power_hp) || payload.power_hp <= 0) throw new Error("Мощность должна быть положительным целым числом допустимого размера");
+      if (!Number.isSafeInteger(payload.max_speed_kph) || payload.max_speed_kph <= 0) throw new Error("Максимальная скорость должна быть положительным целым числом допустимого размера");
       if (!payload.description) throw new Error("Добавьте описание автомобиля");
-      if (!Number.isFinite(payload.price_af_coins) || payload.price_af_coins < 1) throw new Error("Цена должна быть не меньше 1 AF Coin");
+      if (!Number.isFinite(Number(payload.price_af_coins)) || Number(payload.price_af_coins) < 1) throw new Error("Цена должна быть не меньше 1 AF Coin");
       if (!state.editingListingId && state.photoFiles.length < 1) throw new Error("Добавьте хотя бы одну фотографию автомобиля");
       if (state.photoFiles.length > 10) throw new Error("Можно добавить не более 10 фотографий");
       const promotionSelected = formData.get("promote_for_24h") === "on";
@@ -1943,7 +1946,7 @@ function handleClick(event) {
         try {
           imageUrls.push(await uploadListingPhoto(file));
         } catch (error) {
-          error.message = `Не удалось загрузить фотографию ${index + 1}: ${error.message}`;
+          error.message = `Фото ${index + 1} «${file.name}»: ${error.message}`;
           error.photoIndex = index + 1;
           renderPhotoPreviews();
           throw error;
@@ -1986,7 +1989,7 @@ function handleClick(event) {
       ) {
         return openListingPromotionTopup(listingSubmission, error);
       }
-      const errorId = error?.photoIndex ? reportClientError("listing_photo_upload", error) : null;
+      const errorId = error?.photoIndex || error?.status !== undefined ? reportClientError(error.photoIndex ? "listing_photo_upload" : "listing_publish", error) : null;
       notify(`${error.message}${errorId ? ` Код: ${errorId}` : ""}`);
     }
     finally { button.disabled = false; form.elements.photos.disabled = false; button.textContent = originalButtonText; }
@@ -2132,7 +2135,7 @@ function handleClick(event) {
     document.getElementById("addTitle").textContent = "Редактировать объявление";
     const freeAdminPromotion = state.me.user.role === "admin" && listing.listing_type === "unique";
     configurePromotionOption(freeAdminPromotion);
-    elements.carForm.elements.promote_for_24h.checked = !listing.pinned;
+    elements.carForm.elements.promote_for_24h.checked = false;
     openSecondary("add");
   }
 
@@ -2163,33 +2166,47 @@ function handleClick(event) {
     if (files.length + state.photoFiles.length > 10) {
       return notify("Можно добавить не более 10 фотографий");
     }
-    const supportedExtension = /\.(jpe?g|png|webp|heic|heif|avif|gif|bmp|tiff?)$/i;
-    const unsupported = files.find((file) => !(file.type || "").startsWith("image/") && !supportedExtension.test(file.name || ""));
-    if (unsupported) {
-      return notify(`Файл «${unsupported.name}» не является поддерживаемой фотографией`);
-    }
-    const maxBytes = state.imagePolicy?.max_bytes || 30 * 1024 * 1024;
+    // MIME and filename are hints, not evidence. The decoder checks contents.
+    const maxBytes = state.imagePolicy?.source_max_bytes || 64 * 1024 * 1024;
     const oversized = files.find((file) => file.size > maxBytes);
     if (oversized) {
       return notify(`Фотография «${oversized.name}» превышает ${Math.floor(maxBytes / 1024 / 1024)} МБ`);
     }
     state.photoFiles.push(...files);
     renderPhotoPreviews();
+    // Only normalized, persisted thumbnails enter <img>. Ten original phone
+    // photos must never be decoded simultaneously just for local previews.
+    files.forEach(file => { void uploadListingPhoto(file).catch(error => {
+      reportClientError("listing_photo_upload", error);
+    }); });
   }
 
   async function loadImagePolicy() {
     try {
       state.imagePolicy = await api.request("/uploads/policy");
       const hint = document.querySelector(".photo-upload small");
-      if (hint && state.imagePolicy.max_bytes) hint.textContent = `До 10 фотографий, каждая до ${Math.floor(state.imagePolicy.max_bytes / 1024 / 1024)} МБ. Можно добавлять по одной.`;
+      if (hint && state.imagePolicy.max_bytes) hint.textContent = `До 10 фотографий, исходники до ${Math.floor((state.imagePolicy.source_max_bytes || state.imagePolicy.max_bytes) / 1024 / 1024)} МБ. Автоматически уменьшим и сохраним по очереди.`;
     } catch (_error) { /* Server validation remains authoritative offline. */ }
   }
 
-  async function uploadListingPhoto(file) {
+  function uploadListingPhoto(file) {
+    if (state.photoTasks.has(file)) return state.photoTasks.get(file);
+    const task = state.photoQueue.then(() => saveListingPhoto(file));
+    state.photoTasks.set(file, task);
+    state.photoQueue = task.catch(() => {});
+    void task.finally(() => {
+      state.photoTasks.delete(file);
+      renderPhotoPreviews();
+    }).catch(() => {});
+    return task;
+  }
+
+  async function saveListingPhoto(file) {
+    if (!state.photoFiles.includes(file)) return null; // Removed before its queue turn.
     try {
       let url = state.photoUploads.get(file);
       if (!url) {
-        url = (await api.upload(file, "/uploads", { maxBytes: state.imagePolicy?.max_bytes })).url;
+        url = (await api.upload(file, "/uploads", { maxBytes: state.imagePolicy?.max_bytes, sourceMaxBytes: state.imagePolicy?.source_max_bytes })).url;
         if (!url) throw new Error("Сервер не вернул адрес фотографии. Попробуйте снова.");
         state.photoUploads.set(file, url);
       }
@@ -2200,24 +2217,27 @@ function handleClick(event) {
         const timer = setTimeout(() => { image.onload = image.onerror = null; reject(new Error("Не удалось проверить сохранённую фотографию. Проверьте интернет и повторите.")); }, 15000);
         image.onload = () => { clearTimeout(timer); resolve(); };
         image.onerror = () => { clearTimeout(timer); reject(new Error("Сохранённая фотография пока недоступна. Повторите проверку.")); };
-        image.src = absoluteMediaUrl(url);
+        image.src = photoPreviewUrl(url);
       });
       state.photoErrors.delete(file);
       return url;
     } catch (error) { state.photoErrors.set(file, error.message); throw error; }
   }
 
+  function photoPreviewUrl(url) {
+    return absoluteMediaUrl(url) + (url.includes("?") ? "&" : "?") + "preview=true";
+  }
+
   function renderPhotoPreviews() {
-    state.photoPreviewUrls.forEach(url => URL.revokeObjectURL(url));
-    state.photoPreviewUrls = [];
     elements.photoPreview.replaceChildren(...state.photoFiles.map((file, index) => {
       const tile = document.createElement("div"); tile.className = "photo-preview-item";
       const image = document.createElement("img");
-      image.src = URL.createObjectURL(file);
-      state.photoPreviewUrls.push(image.src);
+      const savedUrl = state.photoUploads.get(file);
+      if (savedUrl) image.src = photoPreviewUrl(savedUrl);
+      else image.hidden = true;
       image.alt = `Фотография ${index + 1}`;
-      const label = document.createElement("small"); label.textContent = file.name;
-      image.onerror = () => { image.hidden = true; label.textContent = `${file.name} · превью недоступно, обработаем на сервере`; };
+      const label = document.createElement("small"); label.textContent = `${file.name}${savedUrl ? " · сохранено" : state.photoErrors.has(file) ? "" : " · подготовка и загрузка…"}`;
+      image.onerror = () => { image.hidden = true; label.textContent = `${file.name} · превью временно недоступно`; };
       const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Убрать"; remove.setAttribute("aria-label", `Убрать фотографию ${index + 1}`);
       remove.onclick = () => { if (elements.carForm.querySelector('[type="submit"]').disabled) return; state.photoFiles.splice(index, 1); renderPhotoPreviews(); };
       tile.append(image, label, remove);

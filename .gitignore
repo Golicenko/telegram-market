@@ -9,3 +9,4 @@ __pycache__/
 webapp/build-info.json
 webapp/tests/admin-overview-*.png
 webapp/tests/admin-analytics-*.png
+webapp/tests/evidence/

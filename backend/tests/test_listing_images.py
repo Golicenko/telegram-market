@@ -112,7 +112,7 @@ class FakeImageSession:
         return None
 
     async def get(self, model, image_id):
-        return self.image if model is UploadedImage and self.image.id == image_id else None
+        return self.image if model is UploadedImage and self.image and self.image.id == image_id else None
 
 
 @pytest.mark.asyncio
@@ -141,4 +141,59 @@ async def test_oversized_upload_returns_413_before_image_processing(monkeypatch)
 
 def test_upload_normalization_runs_outside_the_async_event_loop():
     source = (Path(__file__).parents[1] / "app" / "routes.py").read_text(encoding="utf-8")
-    assert "await run_in_threadpool(normalize_image_content, content)" in source
+    assert "await run_in_threadpool(normalize_image_content, file.file, decoded)" in source
+
+
+@pytest.mark.parametrize("megabytes", [20, 30, 50])
+@pytest.mark.asyncio
+async def test_large_real_raster_is_optimized_without_reading_full_upload(megabytes):
+    # Uncompressed real BMP pixels, not a tiny image padded with fake bytes.
+    side = int((megabytes * 1024 * 1024 / 3) ** .5) + 1
+    source = Image.new("RGB", (side, side), "blue")
+    content = BytesIO()
+    source.save(content, "BMP")
+    source.close()
+    assert content.tell() >= megabytes * 1024 * 1024
+    content.seek(0)
+    upload = UploadFile(filename="camera.bin", file=content, headers={"content-type": "application/octet-stream"})
+    async def no_full_read(*args):
+        pytest.fail("Must decode spool directly, not duplicate 50 MB via UploadFile.read")
+    upload.read = no_full_read
+    session = FakeImageSession()
+    await upload_image(upload_request(), upload, User(id=uuid.uuid4(), telegram_id=99), session)
+    assert session.image.size_bytes <= 2 * 1024 * 1024
+    assert content.closed
+    with Image.open(BytesIO(session.image.data)) as result:
+        assert max(result.size) <= 2560
+        result.load()
+
+
+@pytest.mark.asyncio
+async def test_identical_retries_reuse_owner_scoped_image_and_thumbnail():
+    user = User(id=uuid.uuid4(), telegram_id=99)
+    session = FakeImageSession()
+    results = []
+    for _ in range(2):
+        upload = UploadFile(filename="phone.png", file=BytesIO(make_image("PNG")))
+        results.append(await upload_image(upload_request(), upload, user, session))
+    assert results[0] == results[1]
+    response = await uploaded_image(session.image.id, session, preview=True)
+    with Image.open(BytesIO(response.body)) as image:
+        assert max(image.size) <= 480
+    other = FakeImageSession()
+    upload = UploadFile(filename="phone.png", file=BytesIO(make_image("PNG")))
+    assert await upload_image(upload_request(), upload, User(id=uuid.uuid4(), telegram_id=100), other) != results[0]
+
+
+@pytest.mark.asyncio
+async def test_rejected_upload_closes_temporary_spool():
+    source = BytesIO(b"bad photo")
+    with pytest.raises(HTTPException):
+        await upload_image(upload_request(), UploadFile(filename="bad.jpg", file=source), User(id=uuid.uuid4(), telegram_id=99), FakeImageSession())
+    assert source.closed
+
+
+def test_decoder_diagnostics_use_actual_format_not_claimed_mime():
+    metadata = {}
+    normalize_image_content(make_image("HEIF"), metadata)
+    assert metadata == {"detected_format": "HEIF", "source_width": 32, "source_height": 24}

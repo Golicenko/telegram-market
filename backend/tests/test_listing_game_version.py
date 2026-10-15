@@ -25,7 +25,7 @@ from test_chat_lifecycle_db import DB
 def payload(**overrides):
     return dict(game_version="car_parking_1", brand="My car", power_hp=1000000,
                 max_speed_kph=1000000, description="Original game screenshot", price_af_coins=10,
-                image_urls=["/api/media/test-photo"], **overrides)
+                image_urls=["/uploads/test-photo.jpg"], **overrides)
 
 
 @pytest.mark.parametrize("game", [None, "", "car_parking_3", "Car Parking 2", 1, {}])

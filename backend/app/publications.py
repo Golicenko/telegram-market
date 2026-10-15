@@ -87,6 +87,8 @@ async def create_draft(payload: ListingCreate, user: User = Depends(get_current_
         # must not block saving this draft: the durable VIP order can reserve AF
         # and collect the shortfall after the publication receipt is confirmed.
         # create_listing still requires BOTH conditions before publishing a pin.
+        from .listing_media import validate_listing_media
+        await validate_listing_media(session, payload.image_urls, user.id)
         draft = PublicationDraft(user_id=user.id, request_id=payload.client_request_id, payload=payload.model_dump(mode="json"), price_stars=rules["price_stars"])
         session.add(draft)
         await session.flush()

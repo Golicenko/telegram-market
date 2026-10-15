@@ -134,6 +134,8 @@ async def start_order(session, user, payload):
                 renewal = await check_renewal(session, payload.renewal_id, user.id, listing)
         else:
             # A VIP invoice cannot bypass the separate publication Stars fee.
+            from .listing_media import validate_listing_media
+            await validate_listing_media(session, payload.listing_payload.image_urls, user.id)
             draft = await session.scalar(select(PublicationDraft).where(PublicationDraft.user_id == user.id,
                 PublicationDraft.request_id == payload.listing_payload.client_request_id))
             if draft and draft.payload != saved:
