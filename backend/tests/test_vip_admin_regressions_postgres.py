@@ -5,6 +5,7 @@ import httpx
 import pytest
 from sqlalchemy import func, select
 
+from app.config import Settings, get_settings
 from app.models import Deal, Listing, ListingPromotion, SupportTicket, User, Wallet, WalletTransaction
 from app.services import create_deal_support_case
 from test_catalog_and_acceptance_postgres import client_app, headers
@@ -47,7 +48,9 @@ async def disputed_order(sessions):
 async def test_support_resolution_response_matches_committed_finances():
     async with isolated_pg() as (_, sessions):
         buyer, seller, listing, deal, admin, ticket = await disputed_order(sessions)
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client_app(sessions), raise_app_exceptions=False), base_url="http://test") as client:
+        app = client_app(sessions)
+        app.dependency_overrides[get_settings] = lambda: Settings(bot_token="referral-test-token", debug=False, admin_id=admin.telegram_id)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test") as client:
             result = await client.post(f"/api/admin/support/tickets/{ticket.id}/resolve", headers=headers(admin), json={"outcome": "complete", "reason": "Проверено обеими сторонами", "request_id": str(uuid.uuid4())})
         async with sessions() as session:
             committed = (await session.get(Deal, deal.id)).status
