@@ -196,6 +196,7 @@ async def create_listing(
         raise HTTPException(status_code=403, detail="Only administrators can create unique listings")
 
     request_id = getattr(payload, "client_request_id", None)
+    seller_id = seller.id  # rollback expires ORM attributes, including this identity
     try:
         async with session.begin():
             from .models import PublicationDraft
@@ -314,6 +315,9 @@ async def create_listing(
                             funding=funding,
                         )
                     session.add(entry)
+                    # The promotion has a RESTRICT FK to this ledger row. Flush
+                    # it first, still in the SAME transaction (not a commit).
+                    await session.flush()
                     from .promotions import record_balance_pin
                     record_balance_pin(session, listing, promotion_wallet, promotion_cost, funding, entry)
                 if listing_type == "unique":
@@ -338,7 +342,7 @@ async def create_listing(
             raise
         listing = await session.scalar(
             select(Listing).where(
-                Listing.seller_id == seller.id,
+                Listing.seller_id == seller_id,
                 Listing.client_request_id == request_id,
             )
         )
@@ -394,6 +398,7 @@ async def charge_listing_promotion(session: AsyncSession, actor: User, listing: 
             funding=funding,
         )
     session.add(entry)
+    await session.flush()
     from .promotions import record_balance_pin
     record_balance_pin(session, listing, wallet, cost, funding, entry)
 
@@ -2516,22 +2521,28 @@ async def resolve_dispute(
         raise HTTPException(422, "Укажите причину решения")
     async with session.begin():
         deal, listing = await lock_deal_and_listing(session, deal_id)
+        if not deal:
+            raise HTTPException(404, "Сделка не найдена. Обновите список сделок.")
         if request_id and deal:
             previous_event = await session.scalar(select(DealEvent).where(DealEvent.deal_id == deal.id, DealEvent.request_id == request_id))
             if previous_event:
-                if previous_event.actor_id != admin.id or previous_event.event_type != f"admin_{outcome}" or previous_event.details.get("reason") != reason:
+                if (previous_event.actor_id != admin.id or previous_event.event_type != f"admin_{outcome}"
+                        or previous_event.details.get("reason") != reason
+                        or previous_event.details.get("support_ticket_id") != (str(support_ticket_id) if support_ticket_id else None)):
                     raise HTTPException(409, "Идентификатор запроса уже использован")
                 return deal
         allowed_states = {"paid", "seller_contacted", "transfer_in_progress", "disputed"} if allow_active else {"disputed"}
-        if not deal or deal.status not in allowed_states:
-            raise HTTPException(status_code=404, detail="Disputed deal not found")
+        if deal.status not in allowed_states:
+            raise HTTPException(409, {"code": "deal_state_changed", "status": deal.status,
+                "message": "Статус сделки изменился. Обновите информацию о сделке перед решением."})
         previous_status = deal.status
         participants = await lock_wallets(session, deal.buyer_id, deal.seller_id)
         buyer_wallet, seller_wallet = participants.get(deal.buyer_id), participants.get(deal.seller_id)
         if not listing or not buyer_wallet or not seller_wallet:
             raise HTTPException(status_code=409, detail="Settlement state is inconsistent")
         buyer_available_before, buyer_frozen_before = buyer_wallet.available_balance, buyer_wallet.frozen_balance
-        if allow_active and (listing.status != "reserved" or listing.reserved_by_deal_id != deal.id or money(deal.purchased_frozen_amount + deal.earned_frozen_amount + (deal.bonus_frozen_amount or 0)) != money(deal.frozen_amount)):
+        if (listing.status != "reserved" or listing.reserved_by_deal_id != deal.id
+                or money(deal.purchased_frozen_amount + deal.earned_frozen_amount + (deal.bonus_frozen_amount or 0)) != money(deal.frozen_amount)):
             raise HTTPException(409, "Резерв сделки не согласован. Финансовая операция остановлена")
         now = datetime.now(UTC)
         support_ticket = None
@@ -2549,7 +2560,7 @@ async def resolve_dispute(
             deal.status = "cancelled"
             deal.cancelled_at = now
             # After a reported transfer, an administrator must verify the item before resale.
-            listing.status = "paused" if allow_active and deal.transfer_started_at else "active"
+            listing.status = "paused" if deal.transfer_started_at else "active"
             deal.cancellation_reason = "admin_refund"
             listing.reserved_by_deal_id = None
             session.add(wallet_transaction(buyer_wallet, "dispute_refund", deal.frozen_amount, buyer_available_before, buyer_frozen_before, f"Возврат по спору: {reason}", deal_id=deal.id))
@@ -2576,9 +2587,10 @@ async def resolve_dispute(
             if conversation:
                 conversation.archived_at = now
         stop_reminders(deal)
-        audit_deal(session, deal, f"admin_{outcome}", admin.id, previous_status, {"reason": reason}, request_id)
+        details = {"reason": reason, **({"support_ticket_id": str(support_ticket_id)} if support_ticket_id else {})}
+        audit_deal(session, deal, f"admin_{outcome}", admin.id, previous_status, details, request_id)
         session.add(AdminAction(admin_id=admin.id, action=f"resolve_dispute_{outcome}", target_type="deal", target_id=deal.id, reason=reason))
-        if allow_active:
+        if not support_ticket:
             related_tickets = list((await session.scalars(select(SupportTicket).where(SupportTicket.deal_id == deal.id, SupportTicket.case_type == "deal", SupportTicket.status.in_(("new", "open", "in_progress"))).with_for_update())).all())
             for related in related_tickets:
                 old_status = related.status

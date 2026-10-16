@@ -86,6 +86,7 @@ def support_fixture():
         purchased_frozen_amount=Decimal("100"), earned_frozen_amount=Decimal("0"),
         seller_payout=Decimal("70"), platform_commission=Decimal("30"),
     )
+    listing.reserved_by_deal_id = deal.id
     return buyer, seller, admin, listing, deal
 
 

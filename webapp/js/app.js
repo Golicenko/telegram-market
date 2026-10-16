@@ -548,7 +548,7 @@
 
   async function refreshMarketplace() {
     if (!state.serverAvailable) return;
-    await loadOptionalData(["regular", "unique", "training", "trainingPurchases", "profile", "advertisement"], { allowRecovery: false });
+    return await loadOptionalData(["regular", "unique", "training", "trainingPurchases", "profile", "advertisement"], { allowRecovery: false });
   }
 
   function hasTelegramLaunchHint() {
@@ -1718,6 +1718,7 @@ function handleClick(event) {
           order = await api.request(`/vip/orders/${order.id}/cancel`, { method: "POST" });
           if (order.status === "cancelled") {
             flow.vipOrderId = null; flow.requestId = null;
+            state.pendingPromotionRequest = null;
             throw new Error("Оплата не завершена. Резерв AF освобождён, VIP не активирован.");
           }
         }
@@ -1728,12 +1729,26 @@ function handleClick(event) {
         await new Promise(resolve => setTimeout(resolve, 2000));
         order = await api.request(`/vip/orders/${flow.vipOrderId}`);
       }
+      if (["cancelled", "restored"].includes(order.status)) {
+        flow.vipOrderId = null; flow.requestId = null; state.pendingPromotionRequest = null;
+      }
       if (order.status !== "completed") throw new Error(order.last_error || "Оплата обрабатывается сервером. Повторно платить не нужно; можно проверить позже.");
       if (elements.purchaseModal?.open) elements.purchaseModal.close();
       state.purchaseFlow = null;
-      if (flow.submission) await finishListingSubmission(flow.submission);
-      else await refreshMarketplace();
-      notify(flow.renewalId ? `VIP успешно продлён на ${order.duration_hours === 72 ? "3 дня" : `${order.duration_hours} ч.`}` : `VIP-закрепление успешно оплачено · до ${formatDate(order.pinned_until)}`);
+      state.pendingPromotionRequest = null;
+      if (flow.submission) {
+        flow.submission.publishedPaidListingId = order.listing_id;
+        await finishListingSubmission(flow.submission);
+      } else {
+        try {
+          const refreshed = await refreshMarketplace();
+          if (refreshed?.some(item => item.status === "rejected")) throw new Error("refresh_incomplete");
+          notify(flow.renewalId ? `VIP успешно продлён на ${order.duration_hours === 72 ? "3 дня" : `${order.duration_hours} ч.`}` : `VIP-закрепление успешно оплачено · до ${formatDate(order.pinned_until)}`);
+        } catch (error) {
+          reportClientError("vip_refresh_after_commit", error);
+          notify("VIP активирован сервером, но данные не удалось обновить. Откройте раздел заново; повторно платить не нужно.");
+        }
+      }
     } catch (error) {
       elements.purchaseModalNote.textContent = error.message;
       elements.purchaseModalAction.textContent = "Повторить / проверить";
@@ -1804,7 +1819,7 @@ function handleClick(event) {
       state.publicationRules = await api.request("/publication-rules");
       const draft = await api.request("/publication-drafts", { method: "POST", body: JSON.stringify(payload) });
       const listing = await payPublication(draft);
-      if (!listing) throw new Error("Черновик сохранён. Продолжить можно в форме публикации без повторного заполнения.");
+      if (!listing) return null; // Cancelled/pending or handed off to the VIP modal, not a failed publication.
       if (submission) submission.publishedPaidListingId = listing.id;
       return listing;
     }
@@ -1853,7 +1868,12 @@ function handleClick(event) {
       }
       for (let attempt = 0; attempt < 15; attempt += 1) {
         draft = await api.request(`/publication-drafts/${draft.id}${attempt === 0 ? "/retry" : ""}`, attempt === 0 ? { method: "POST" } : {});
-        if (draft.status === "published" && draft.listing_id) { showPurchaseSuccess("Объявление опубликовано", "Публикация подтверждена сервером"); return await api.request(`/listings/${draft.listing_id}`); }
+        if (draft.status === "published" && draft.listing_id) {
+          showPurchaseSuccess("Объявление опубликовано", "Публикация подтверждена сервером");
+          // The authoritative draft is enough. A failed detail GET must not
+          // turn a committed publication into a failed payment.
+          return { id: draft.listing_id, pinned: Boolean(draft.payload?.promote_for_24h) };
+        }
         if (["paid", "review"].includes(draft.status) && draft.payload.promote_for_24h) {
           await openListingPromotionTopup({ payload: draft.payload, targetView: "market" }, null);
           return null;
@@ -1967,6 +1987,7 @@ function handleClick(event) {
       const savedListing = path === "/listings" && listingSubmission.method === "POST"
         ? await publishWithQuota(payload, listingSubmission)
         : await api.request(path, { method: listingSubmission.method, body: JSON.stringify(payload) });
+      if (!savedListing) return;
       if (shouldPromote && !savedListing.pinned && state.editingListingId && state.listingMode === "regular") {
         // Editing is free; VIP has its own server-priced confirmation, including shortfall.
         await finishListingSubmission(listingSubmission);
@@ -2001,21 +2022,30 @@ function handleClick(event) {
     renderPhotoPreviews();
     state.editingListingId = null;
     state.pendingListingRequestId = null;
-    await refreshMarketplace();
-    await navigate(submission.targetView);
-    if (promotionError) notify(`Объявление сохранено, но не закреплено: ${promotionError.message}`);
-    else notify(submission.wasEditing ? "Объявление обновлено бесплатно" : "Объявление опубликовано");
-    if (submission.publishedPaidListingId) await openListingDetails(submission.publishedPaidListingId);
+    try {
+      const refreshed = await refreshMarketplace();
+      await navigate(submission.targetView);
+      if (refreshed?.some(item => item.status === "rejected")) throw new Error("refresh_incomplete");
+      if (promotionError) notify(`Объявление сохранено, но не закреплено: ${promotionError.message}`);
+      else notify(submission.wasEditing ? "Объявление обновлено бесплатно" : "Объявление опубликовано");
+      if (submission.publishedPaidListingId) await openListingDetails(submission.publishedPaidListingId);
+    } catch (error) {
+      reportClientError("listing_refresh_after_commit", error);
+      notify(`Объявление сохранено${promotionError ? ", но не закреплено" : ""}, но данные не удалось обновить. Откройте раздел заново. Повторная публикация не нужна.`);
+    }
   }
 
   async function openListingPromotionTopup(submission, error, listingId = null, renewalId = null) {
     let quote;
     try { quote = await api.request(renewalId ? `/vip/renewals/${encodeURIComponent(renewalId)}` : "/vip/quote"); } catch (failure) { notify(failure.message); return; }
+    const signature = JSON.stringify({ payload: submission?.payload, listingId, renewalId });
+    if (state.pendingPromotionRequest?.signature !== signature) state.pendingPromotionRequest = { signature, id: createRequestId() };
     state.purchaseFlow = {
       kind: "listing-promotion-topup",
       stage: "topup",
       busy: false,
       intentId: null,
+      requestId: state.pendingPromotionRequest.id,
       missing: quote.stars,
       submission,
       listingId: quote.listing_id || listingId,
@@ -4252,10 +4282,19 @@ async function hideCurrentConversation() {
       if (reason.trim().length < 5) return notify("Укажите причину: минимум 5 символов");
       const question = `Сделка ${ticket.deal_id}\nКому: ${recipient.first_name} · Telegram ID ${recipient.telegram_id}\nСумма: ${formatNumber(amount)} AF\nРезультат: ${outcome === "complete" ? "Завершение и выплата продавцу" : "Отмена и полный возврат покупателю"}\nПричина: ${reason.trim()}`;
       if (!(await confirmCriticalAction(question, "Подтвердить финансовое решение"))) return;
-      await api.request(`/admin/support/tickets/${button.dataset.ticketId}/resolve`, { method: "POST", body: JSON.stringify({ outcome, reason: reason.trim() }) });
-      await Promise.all([loadAdminSupport(), loadAdminDeals()]);
-      notify("Решение выполнено и записано в историю");
-    } catch (error) { notify(error.message); }
+      const signature = JSON.stringify({ticket: ticket.id, outcome, reason: reason.trim()});
+      if (state.supportResolutionRequest?.signature !== signature) state.supportResolutionRequest = {signature, id: createRequestId()};
+      const decision = await sendAdminDecision(`/admin/support/tickets/${button.dataset.ticketId}/resolve`,
+        { outcome, reason: reason.trim(), request_id: state.supportResolutionRequest.id }, ticket.deal_id);
+      state.supportResolutionRequest = null;
+      // Preserve the confirmed state even if the subsequent list GET fails.
+      // A recovered event also proves the ticket change in the same transaction.
+      const resolvedTicket = decision.id === ticket.id ? decision : {...ticket, status: "resolved"};
+      await showAdminDecisionResult(outcome, async () => {
+        button.closest(".support-ticket")?.replaceWith(createSupportTicketCard(resolvedTicket, true));
+        await Promise.all([loadAdminSupport(), loadAdminDeals()]);
+      });
+    } catch (error) { notify(`${error.message}${error.autoflowErrorId ? ` Код: ${error.autoflowErrorId}` : ""}`); }
     finally { button.disabled = false; state.dealActionPending = false; }
   }
 
@@ -4619,7 +4658,7 @@ async function hideCurrentConversation() {
     } catch(error){notify(error.message);}
   }
 
-  async function openAdminDealControl(id) {
+  async function openAdminDealControl(id, quiet = false) {
     if (state.me?.user.role !== "admin") return;
     const draft = state.adminDealControl?.deal.id === id ? document.getElementById("adminDealMessage")?.value || "" : "";
     try {
@@ -4668,7 +4707,42 @@ async function hideCurrentConversation() {
         panel.append(form);
       }
       panel.scrollIntoView({block:"start"});
-    } catch(error){reportClientError("admin_deal_control",error);notify("Не удалось открыть управление сделкой. Проверьте доступ и повторите.");}
+      return true;
+    } catch(error){reportClientError("admin_deal_control",error);if(!quiet)notify("Не удалось открыть управление сделкой. Проверьте доступ и повторите.");return false;}
+  }
+
+  async function sendAdminDecision(path, command, dealId) {
+    try {
+      const result = await api.request(path, {method: "POST", body: JSON.stringify(command)});
+      const target = command.action || command.outcome;
+      const expected = path.includes("/support/") ? "resolved" : target === "complete" ? "completed" : target === "refund" ? "cancelled" : null;
+      if (!result?.id || (expected && result.status !== expected)) throw Object.assign(new Error("Некорректный ответ сервера"), {errorType: "invalid_json"});
+      return result;
+    } catch (error) {
+      if (!["timeout", "network", "aborted", "invalid_json"].includes(error.errorType) && ![500, 502, 503, 504].includes(Number(error.status))) throw error;
+      notify("Проверяем результат операции на сервере. Не повторяйте финансовое действие.");
+      try {
+        const current = await api.request(`/admin/deals/${dealId}/control`);
+        const event = current.events?.find(item => item.request_id === command.request_id
+          && item.actor_id === state.me.user.id && item.type === `admin_${command.action || command.outcome}`
+          && item.details?.reason === command.reason);
+        if (event) return current.deal; // Event and ledger share the same DB transaction.
+      } catch (readError) { reportClientError("admin_decision_reconciliation", readError); }
+      error.message = "Результат решения пока не подтверждён. Откройте сделку заново и проверьте статус и историю; не выполняйте другую выплату.";
+      throw error; // Keep request_id for a safe explicit retry, never invent success.
+    }
+  }
+
+  async function showAdminDecisionResult(action, reload) {
+    const success = action === "complete" ? "✅ Сделка успешно завершена. Средства начислены продавцу."
+      : action === "refund" ? "✅ Сделка отменена. Средства возвращены покупателю." : "Решение сохранено сервером.";
+    try {
+      if (await reload() === false) throw new Error("refresh_failed");
+      notify(success);
+    } catch (error) {
+      reportClientError("admin_refresh_after_commit", error);
+      notify(`${success} Данные не удалось обновить. Попробуйте открыть раздел заново.`);
+    }
   }
 
   async function executeAdminDealControl(button) {
@@ -4680,17 +4754,27 @@ async function hideCurrentConversation() {
     state.dealActionPending=true; button.disabled=true;
     const signature=JSON.stringify({id:data.deal.id,action,reason});
     if(state.adminDealRequest?.signature!==signature)state.adminDealRequest={signature,id:createRequestId()};
+    let settled=false;
     try{
       const financial=action==="complete"||action==="refund";
       const recipient=action==="complete"?data.seller:data.buyer;
       const amount=action==="complete"?data.seller_payout:data.reserved_af_coins;
       const message=financial?`Сделка ${data.deal.id}\nКому: ${recipient.first_name} (Telegram ID ${recipient.telegram_id})\nСумма: ${formatNumber(amount)} AF\nНовый статус: ${action==="complete"?"Завершена":"Отменена с возвратом"}\nПричина: ${reason}`:`${button.textContent}?\nСделка ${data.deal.id}\n${reason}`;
       if(!(await confirmCriticalAction(message,financial?"Подтвердить финансовое решение":"Подтвердить")))return;
-      await api.request(`/admin/deals/${data.deal.id}/control`,{method:"POST",body:JSON.stringify({action,reason,request_id:state.adminDealRequest.id})});
+      const decision=await sendAdminDecision(`/admin/deals/${data.deal.id}/control`,{action,reason,request_id:state.adminDealRequest.id},data.deal.id);
       state.adminDealRequest=null;
-      await openAdminDealControl(data.deal.id);notify("Решение сохранено сервером");
-    }catch(error){notify(error.message);}
-    finally{button.disabled=false;state.dealActionPending=false;}
+      settled=financial;
+      await showAdminDecisionResult(action, async () => {
+        if(settled){
+          state.adminDealControl.deal=decision;
+          for(const control of document.querySelectorAll("#adminDealControl [data-admin-deal-action]")){
+            if(control.dataset.adminDealAction!=="comment")control.disabled=true;
+          }
+        }
+        return await openAdminDealControl(data.deal.id, true);
+      });
+    }catch(error){notify(`${error.message}${error.autoflowErrorId ? ` Код: ${error.autoflowErrorId}` : ""}`);}
+    finally{button.disabled=settled;state.dealActionPending=false;}
   }
 
   async function loadAdminTraining(filter = "all") {

@@ -74,7 +74,7 @@ const server = http.createServer((req,res) => {
       const submit=page.getByRole('button',{name:'Отправить продавцу',exact:true});
       for(const control of [input,submit]){const b=await control.boundingBox();assert(b && b.height>=44 && b.y>=0 && b.y+b.height<=350,JSON.stringify(b));}
       await submit.click();
-      try { await page.getByText('Ошибка тестовой сети',{exact:true}).waitFor({timeout:4000}); }
+      try { await page.getByText('Ошибка сервера. Результат операции не подтверждён; проверьте его перед повтором.',{exact:true}).waitFor({timeout:4000}); }
       catch(error){console.log({idSends,errors,toast:await page.locator('#toast').textContent(),html:await input.evaluate(el=>el.form.outerHTML)});throw error;}
       await page.waitForFunction(()=>!document.querySelector('.deal-delivery__form button').disabled);
       assert.equal(await input.inputValue(),'00AB123');

@@ -3254,7 +3254,7 @@ async def admin_deal_control(deal_id: uuid.UUID, admin: User = Depends(require_a
         "actions": actions,
         "last_buyer_action_at": max([m.created_at for m in messages if m.sender_id == deal.buyer_id] + [deal.delivery_details_submitted_at or deal.created_at]),
         "last_seller_action_at": max([m.created_at for m in messages if m.sender_id == deal.seller_id] + [deal.transfer_started_at or deal.seller_responded_at or deal.created_at]),
-        "events": [{"id": e.id, "type": e.event_type, "from_status": e.from_status, "to_status": e.to_status, "details": e.details, "at": e.created_at} for e in events],
+        "events": [{"id": e.id, "request_id": e.request_id, "actor_id": e.actor_id, "type": e.event_type, "from_status": e.from_status, "to_status": e.to_status, "details": e.details, "at": e.created_at} for e in events],
         "tickets": [{"id": t.id, "status": t.status, "created_at": t.created_at} for t in tickets],
         "transactions": [{"id": t.id, "user_id": t.user_id, "type": t.transaction_type, "amount": t.amount, "description": t.description, "created_at": t.created_at, "available_before": t.available_before, "available_after": t.available_after, "frozen_before": t.frozen_before, "frozen_after": t.frozen_after} for t in transactions],
         "messages": [ConversationMessageOut.model_validate(m) for m in reversed(messages)],
@@ -3282,7 +3282,7 @@ async def admin_resolve_deal(
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    deal = await resolve_dispute(session, admin, deal_id, payload.outcome, payload.reason)
+    deal = await resolve_dispute(session, admin, deal_id, payload.outcome, payload.reason, request_id=payload.request_id)
     # Participant notifications are persisted in the transaction, not replayed here.
     return deal
 
@@ -3766,9 +3766,13 @@ async def resolve_support_ticket_financially(
         payload.outcome,
         payload.reason,
         support_ticket_id=target_ticket_id,
+        request_id=payload.request_id,
     )
     # resolve_dispute persists both notifications; do not send a second copy here.
     refreshed = await session.get(SupportTicket, target_ticket_id)
+    # UPDATE expires server-generated updated_at even with expire_on_commit=False.
+    # Pydantic cannot lazy-load it from an AsyncSession after financial commit.
+    await session.refresh(refreshed)
     return await support_ticket_out(session, refreshed)
 
 

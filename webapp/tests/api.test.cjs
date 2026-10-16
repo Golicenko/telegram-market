@@ -49,6 +49,32 @@ function jsonResponse(payload, status = 200) {
   };
 }
 
+for (const status of [400, 401, 402, 403, 404, 409, 413, 415, 422, 429, 500, 502, 503, 504]) {
+  test(`HTTP ${status} has actionable Russian text and retains diagnostic status without leaking internals`, async () => {
+    const {api} = loadApi(async () => jsonResponse({detail: 'Traceback SQLAlchemy SELECT * FROM users secret'}, status));
+    await assert.rejects(api.request('/listings', {method: 'POST', body: '{}'}), e => {
+      assert.equal(e.status, status); assert.match(e.message, /[А-Яа-я]/);
+      assert.doesNotMatch(e.message, /SQLAlchemy|SELECT|users|secret/); assert.match(e.autoflowErrorId, /^AF-/);
+      return true;
+    });
+  });
+}
+
+test('402 VIP remains machine-readable and directs user to shortfall checkout', async () => {
+  const detail = {code: 'insufficient_af_coins', purpose: 'listing_promotion', missing_af_coins: '3'};
+  const {api} = loadApi(async () => jsonResponse({detail}, 402));
+  await assert.rejects(api.request('/listings', {method: 'POST', body: '{}'}), e => {
+    assert.equal(e.detail, detail); assert.match(e.message, /VIP.*Доплатите/); return true;
+  });
+});
+
+test('state conflict is not falsely described as an already published listing', async () => {
+  const {api} = loadApi(async () => jsonResponse({detail: 'Conflict'}, 409));
+  await assert.rejects(api.request('/listings', {method: 'POST', body: '{}'}), e => {
+    assert.match(e.message, /Состояние.*изменилось/); assert.doesNotMatch(e.message, /уже опубликовано|успешно/); return true;
+  });
+});
+
 test("uses the public same-origin API and sends Telegram auth without logging initData", async () => {
   const initData = "auth_date=1&user=%7B%22id%22%3A42%7D&hash=secret";
   let captured;
