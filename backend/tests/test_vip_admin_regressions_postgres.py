@@ -4,7 +4,7 @@ import uuid
 
 import httpx
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 
 from app.config import Settings, get_settings
 from app import services, publications
@@ -102,7 +102,7 @@ async def test_paid_sixth_publication_full_balance_pin_receipt_and_retry_once():
                 await publications.fulfill(session, draft_id)
         await asyncio.gather(complete(), complete())
         async with sessions() as session:
-            stored = await session.get(PublicationDraft, draft["id"])
+            stored = await session.get(PublicationDraft, uuid.UUID(draft["id"]))
             assert stored.status == "published"
             assert (await session.get(Listing, stored.listing_id)).pinned
             assert await session.scalar(select(func.count()).select_from(Listing)) == 6
@@ -167,3 +167,50 @@ async def test_failure_before_commit_rolls_back_money_case_and_events(monkeypatc
             assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).frozen_balance == 100
             assert (await session.scalar(select(Wallet).where(Wallet.user_id == seller.id))).earned_balance == 0
             assert await session.scalar(select(func.count()).select_from(DealEvent).where(DealEvent.event_type == "admin_complete")) == 0
+
+
+@pytest.mark.asyncio
+async def test_support_updated_at_requires_explicit_async_refresh_after_commit():
+    from pydantic import ValidationError
+    from app.schemas import SupportTicketOut
+    async with isolated_pg() as (_, sessions):
+        _, _, _, deal, admin, ticket = await disputed_order(sessions)
+        admin.role = "admin"
+        async with sessions() as session:
+            attached = await session.get(SupportTicket, ticket.id)
+            await session.commit()
+            await services.resolve_dispute(session, admin, deal.id, "complete", "Проверено обеими сторонами", support_ticket_id=ticket.id)
+            assert "updated_at" in inspect(attached).expired_attributes
+            # This was the old route's response path: finance already committed,
+            # but synchronous Pydantic attribute access attempts async DB I/O.
+            with pytest.raises(ValidationError, match="MissingGreenlet"):
+                SupportTicketOut.model_validate(attached)
+            await session.refresh(attached)
+            assert SupportTicketOut.model_validate(attached).status == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_control_review_comment_resume_and_inconsistent_reserve_fail_closed():
+    async with isolated_pg() as (_, sessions):
+        buyer, _, listing, deal, admin, ticket = await disputed_order(sessions)
+        application = client_app(sessions)
+        application.dependency_overrides[get_settings] = lambda: Settings(bot_token="referral-test-token", debug=False, admin_id=admin.telegram_id)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=application), base_url="http://test") as client:
+            url = f"/api/admin/deals/{deal.id}/control"
+            command = {"action": "comment", "reason": "Уточнил передачу у сторон", "request_id": str(uuid.uuid4())}
+            assert (await client.post(url, headers=headers(admin), json=command)).status_code == 200
+            assert (await client.post(url, headers=headers(admin), json=command)).status_code == 200
+            assert (await client.post(url, headers=headers(admin), json={**command, "action": "resume", "request_id": str(uuid.uuid4())})).status_code == 409
+            # A legacy closed ticket must not allow inconsistent financial data.
+            async with sessions() as session, session.begin():
+                (await session.get(SupportTicket, ticket.id)).status = "closed"
+            assert (await client.post(url, headers=headers(admin), json={**command, "action": "resume", "request_id": str(uuid.uuid4())})).status_code == 200
+            assert (await client.post(url, headers=headers(admin), json={**command, "action": "review", "request_id": str(uuid.uuid4())})).json()["status"] == "disputed"
+            async with sessions() as session, session.begin():
+                (await session.get(Listing, listing.id)).reserved_by_deal_id = None
+            result = await client.post(f"/api/admin/deals/{deal.id}/resolve", headers=headers(admin), json={"outcome": "complete", "reason": "Проверка нарушенного резерва", "request_id": str(uuid.uuid4())})
+            assert result.status_code == 409
+        async with sessions() as session:
+            assert (await session.get(Deal, deal.id)).status == "disputed"
+            assert (await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))).frozen_balance == 100
+            assert await session.scalar(select(func.count()).select_from(WalletTransaction).where(WalletTransaction.transaction_type == "sale_income")) == 0
