@@ -4284,10 +4284,16 @@ async function hideCurrentConversation() {
       if (!(await confirmCriticalAction(question, "Подтвердить финансовое решение"))) return;
       const signature = JSON.stringify({ticket: ticket.id, outcome, reason: reason.trim()});
       if (state.supportResolutionRequest?.signature !== signature) state.supportResolutionRequest = {signature, id: createRequestId()};
-      await sendAdminDecision(`/admin/support/tickets/${button.dataset.ticketId}/resolve`,
+      const decision = await sendAdminDecision(`/admin/support/tickets/${button.dataset.ticketId}/resolve`,
         { outcome, reason: reason.trim(), request_id: state.supportResolutionRequest.id }, ticket.deal_id);
       state.supportResolutionRequest = null;
-      await showAdminDecisionResult(outcome, () => Promise.all([loadAdminSupport(), loadAdminDeals()]));
+      // Preserve the confirmed state even if the subsequent list GET fails.
+      // A recovered event also proves the ticket change in the same transaction.
+      const resolvedTicket = decision.id === ticket.id ? decision : {...ticket, status: "resolved"};
+      await showAdminDecisionResult(outcome, async () => {
+        button.closest(".support-ticket")?.replaceWith(createSupportTicketCard(resolvedTicket, true));
+        await Promise.all([loadAdminSupport(), loadAdminDeals()]);
+      });
     } catch (error) { notify(`${error.message}${error.autoflowErrorId ? ` Код: ${error.autoflowErrorId}` : ""}`); }
     finally { button.disabled = false; state.dealActionPending = false; }
   }
@@ -4748,17 +4754,27 @@ async function hideCurrentConversation() {
     state.dealActionPending=true; button.disabled=true;
     const signature=JSON.stringify({id:data.deal.id,action,reason});
     if(state.adminDealRequest?.signature!==signature)state.adminDealRequest={signature,id:createRequestId()};
+    let settled=false;
     try{
       const financial=action==="complete"||action==="refund";
       const recipient=action==="complete"?data.seller:data.buyer;
       const amount=action==="complete"?data.seller_payout:data.reserved_af_coins;
       const message=financial?`Сделка ${data.deal.id}\nКому: ${recipient.first_name} (Telegram ID ${recipient.telegram_id})\nСумма: ${formatNumber(amount)} AF\nНовый статус: ${action==="complete"?"Завершена":"Отменена с возвратом"}\nПричина: ${reason}`:`${button.textContent}?\nСделка ${data.deal.id}\n${reason}`;
       if(!(await confirmCriticalAction(message,financial?"Подтвердить финансовое решение":"Подтвердить")))return;
-      await sendAdminDecision(`/admin/deals/${data.deal.id}/control`,{action,reason,request_id:state.adminDealRequest.id},data.deal.id);
+      const decision=await sendAdminDecision(`/admin/deals/${data.deal.id}/control`,{action,reason,request_id:state.adminDealRequest.id},data.deal.id);
       state.adminDealRequest=null;
-      await showAdminDecisionResult(action, () => openAdminDealControl(data.deal.id, true));
+      settled=financial;
+      await showAdminDecisionResult(action, async () => {
+        if(settled){
+          state.adminDealControl.deal=decision;
+          for(const control of document.querySelectorAll("#adminDealControl [data-admin-deal-action]")){
+            if(control.dataset.adminDealAction!=="comment")control.disabled=true;
+          }
+        }
+        return await openAdminDealControl(data.deal.id, true);
+      });
     }catch(error){notify(`${error.message}${error.autoflowErrorId ? ` Код: ${error.autoflowErrorId}` : ""}`);}
-    finally{button.disabled=false;state.dealActionPending=false;}
+    finally{button.disabled=settled;state.dealActionPending=false;}
   }
 
   async function loadAdminTraining(filter = "all") {

@@ -67,6 +67,8 @@ if (!base || new URL(base).hostname!=='127.0.0.1') throw Error('Isolated localho
     await admin.locator('.critical-confirm .publish-button').click();
     await admin.locator('#toast').filter({hasText:'Средства начислены продавцу. Данные не удалось обновить'}).waitFor();
     assert.equal(resolutions,1);
+    assert.equal(await admin.locator('[data-support-resolution]').count(),0);
+    assert.match(await admin.locator('.support-ticket').innerText(),/Решено/);
     await admin.screenshot({path:path.join(evidence,'support-resolution-refresh-430.png'),animations:'disabled'});
     console.log('PASS real VIP/admin browser: initial VIP; refresh failure after publication; lost admin POST response reconciled; support settlement + failed refresh; no duplicate writes');
   } finally {await browser.close();}
