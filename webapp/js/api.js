@@ -19,16 +19,48 @@
 
   class ApiError extends Error {
     constructor(status, detail, metadata = {}) {
-      super(readableErrorDetail(detail));
+      super(readableErrorDetail(detail, status));
       this.name = "ApiError";
       this.status = status;
       this.detail = detail;
       Object.assign(this, metadata);
+      if (metadata.userMessage) this.message = metadata.userMessage; // trusted local UI text, never a response field
+      if (metadata.errorType === "invalid_json") this.message = "Сервер вернул некорректный ответ. Проверьте результат операции перед повтором.";
     }
   }
 
-  function readableErrorDetail(detail) {
-    if (typeof detail === "string" && detail.trim()) return detail;
+  function readableErrorDetail(detail, status = 0) {
+    const defaults = {
+      400: "Запрос не принят. Проверьте данные и повторите.",
+      401: "Сессия Telegram истекла. Откройте Market заново.",
+      402: "Требуется оплата. Проверьте условия и продолжите в окне оплаты.",
+      403: "Недостаточно прав для этого действия. Проверьте аккаунт.",
+      404: "Объект не найден или недоступен. Обновите список.",
+      409: "Состояние операции изменилось. Обновите данные перед повторным действием.",
+      413: "Файл слишком большой. Выберите файл меньшего размера.",
+      415: "Формат изображения не поддерживается. Выберите другую фотографию.",
+      422: "Проверьте заполненные поля и исправьте неверные данные.",
+      429: "Слишком много запросов. Подождите несколько секунд и повторите.",
+      500: "Ошибка сервера. Результат операции не подтверждён; проверьте его перед повтором.",
+      502: "Сервер временно недоступен. Проверьте результат операции позже; не оплачивайте повторно.",
+      503: "Сервис временно недоступен. Проверьте результат операции позже; не оплачивайте повторно.",
+      504: "Сервер долго не отвечает. Проверьте результат операции; не оплачивайте повторно.",
+    };
+    const known = {
+      "Disputed deal not found": "Спорная сделка не найдена. Обновите информацию о сделке.",
+      "Deal not found": "Сделка не найдена. Обновите список сделок.",
+      "Settlement state is inconsistent": "Данные резерва сделки не согласованы. Операция остановлена; нужна проверка администратора.",
+      "Insufficient balance": "Недостаточно средств. Проверьте баланс перед продолжением.",
+      "Administrator role required": defaults[403],
+      "User is blocked": "Действие недоступно: аккаунт заблокирован. Обратитесь в поддержку.",
+    };
+    if (typeof detail === "string" && detail.trim()) {
+      if (known[detail]) return known[detail];
+      // Only safe, user-facing localized details. Never expose a proxy's HTML,
+      // SQL, traceback or unknown internal English exception to the user.
+      if (Number(status) < 500 && /[А-Яа-яЁё]/.test(detail) && !/traceback|sqlalchemy|SELECT\s|INSERT\s|UPDATE\s|DELETE\s|<html|\.py\b/i.test(detail)) return detail;
+      return defaults[status] || "Результат операции не подтверждён. Проверьте данные или обратитесь в поддержку.";
+    }
     if (Array.isArray(detail)) {
       const fieldNames = {
         brand: "Автомобиль",
@@ -44,9 +76,9 @@
       const messages = detail.map((item) => {
         const location = Array.isArray(item?.loc) ? item.loc.filter((part) => !["body", "query", "path"].includes(String(part))) : [];
         const rawField = location.length ? location[location.length - 1] : null;
-        const field = fieldNames[rawField] || rawField || "Данные";
+        const field = fieldNames[rawField] || "Данные";
         const type = String(item?.type || "");
-        let message = item?.msg || "некорректное значение";
+        let message = "проверьте значение поля";
         if (type === "missing") message = "поле обязательно";
         else if (type === "greater_than") message = `значение должно быть больше ${item?.ctx?.gt ?? 0}`;
         else if (type === "greater_than_equal") message = `значение должно быть не меньше ${item?.ctx?.ge ?? 0}`;
@@ -62,10 +94,11 @@
       if (messages.length) return messages.join("; ");
     }
     if (detail && typeof detail === "object") {
-      if (typeof detail.message === "string") return detail.message;
-      if (typeof detail.detail === "string") return detail.detail;
+      if (detail.purpose === "listing_promotion" && detail.code === "insufficient_af_coins") return "Недостаточно средств для VIP-закрепления. Доплатите недостающую сумму, чтобы продолжить.";
+      if (typeof detail.message === "string") return readableErrorDetail(detail.message, status);
+      if (typeof detail.detail === "string") return readableErrorDetail(detail.detail, status);
     }
-    return "Сервер отклонил запрос. Проверьте заполненные поля.";
+    return defaults[status] || "Результат операции не подтверждён. Проверьте данные перед повторным действием.";
   }
 
   function authHeaders() {
@@ -232,7 +265,8 @@
       503: "Сервис загрузки временно недоступен (503). Попробуйте снова.",
       504: "Сервер не успел обработать фотографию (504). Попробуйте снова.",
     };
-    return new ApiError(error?.status || 0, messages[error?.status] || error?.message || "Не удалось загрузить фотографию.", details);
+    const message = messages[error?.status] || error?.message || "Не удалось загрузить фотографию.";
+    return new ApiError(error?.status || 0, message, { ...details, userMessage: message });
   }
 
   function canvasBlob(canvas, type, quality) {

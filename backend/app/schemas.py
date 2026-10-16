@@ -479,6 +479,7 @@ class PriceOfferOut(ORMModel):
 class DealResolution(BaseModel):
     outcome: str = Field(pattern="^(complete|refund)$")
     reason: str = Field(min_length=5, max_length=2000)
+    request_id: uuid.UUID | None = None
 
 
 class DealControlAction(BaseModel):
@@ -619,6 +620,7 @@ class DealSupportCaseCreate(BaseModel):
 class SupportCaseResolution(BaseModel):
     outcome: str = Field(pattern="^(complete|refund)$")
     reason: str = Field(min_length=5, max_length=2000)
+    request_id: uuid.UUID | None = None
 
 
 class SupportReplyCreate(BaseModel):
