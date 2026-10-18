@@ -6,17 +6,17 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-254c7cb8e270" />
-    <link rel="stylesheet" href="css/style.css?v=af-254c7cb8e270" />
+    <meta name="autoflow-build" content="af-306f07deed9c" />
+    <link rel="stylesheet" href="css/style.css?v=af-306f07deed9c" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-254c7cb8e270" defer></script>
-    <script src="js/referrals.js?v=af-254c7cb8e270" defer></script>
-    <script src="js/deal-confirmation.js?v=af-254c7cb8e270" defer></script>
-    <script src="js/admin-operations.js?v=af-254c7cb8e270" defer></script>
-    <script src="js/analytics.js?v=af-254c7cb8e270" defer></script>
-    <script src="js/training-sales.js?v=af-254c7cb8e270" defer></script>
-    <script src="js/help.js?v=af-254c7cb8e270" defer></script>
-    <script src="js/app.js?v=af-254c7cb8e270" defer></script>
+    <script src="js/api.js?v=af-306f07deed9c" defer></script>
+    <script src="js/referrals.js?v=af-306f07deed9c" defer></script>
+    <script src="js/deal-confirmation.js?v=af-306f07deed9c" defer></script>
+    <script src="js/admin-operations.js?v=af-306f07deed9c" defer></script>
+    <script src="js/analytics.js?v=af-306f07deed9c" defer></script>
+    <script src="js/training-sales.js?v=af-306f07deed9c" defer></script>
+    <script src="js/help.js?v=af-306f07deed9c" defer></script>
+    <script src="js/app.js?v=af-306f07deed9c" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -45,6 +45,7 @@
 
           <div class="market-tools">
             <div class="filters" aria-label="Фильтры Market">
+              <label class="filter-select filter-select--game"><select id="marketGameFilter" aria-label="Игра в Market"><option value="">КП</option><option value="car_parking_1">КП 1</option><option value="car_parking_2">КП 2</option></select></label>
               <label class="filter-select"><span aria-hidden="true">◆</span><select id="brandFilter" aria-label="Автомобиль"><option value="">Автомобиль</option></select></label>
               <label class="filter-price"><span>От</span><input id="priceMinFilter" aria-label="Цена от" type="number" min="0" step="0.01" inputmode="decimal" enterkeyhint="done" placeholder="От" /></label>
               <label class="filter-price"><span>До</span><input id="priceMaxFilter" aria-label="Цена до" type="number" min="0" step="0.01" inputmode="decimal" enterkeyhint="done" placeholder="До" /></label>
@@ -60,6 +61,7 @@
 
         <section class="view" data-view="unique" aria-labelledby="uniqueTitle" hidden>
           <div class="compact-page-title admin-title-row"><div><span class="eyebrow">Особая коллекция</span><h1 id="uniqueTitle">Уникальные машины</h1></div><button class="admin-add-button" type="button" data-open-unique data-admin-only hidden>＋ Добавить уникальную</button></div>
+          <div class="unique-filters"><label class="filter-select filter-select--game"><select id="uniqueGameFilter" aria-label="Игра в Уникальных"><option value="">КП</option><option value="car_parking_1">КП 1</option><option value="car_parking_2">КП 2</option></select></label></div>
           <div class="cards-grid" id="uniqueCars" aria-live="polite"></div>
           <div class="empty-state empty-state--tall" id="uniqueEmptyState"><div class="empty-star" aria-hidden="true">☆</div><h2>Уникальных машин пока нет</h2><p>Раздел заполняет только администратор</p></div>
         </section>

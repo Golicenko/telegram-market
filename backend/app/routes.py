@@ -3782,7 +3782,15 @@ async def profile(user: User = Depends(get_current_user), session: AsyncSession 
     active = list((await session.scalars(select(Listing).where(Listing.seller_id == user.id, Listing.status.in_(["active", "reserved"])).order_by(Listing.created_at.desc()))).all())
     sold = list((await session.scalars(select(Listing).where(Listing.seller_id == user.id, Listing.status == "sold").order_by(Listing.sold_at.desc()))).all())
     purchase_deals = list((await session.scalars(select(Deal).where(Deal.buyer_id == user.id, Deal.status == "completed"))).all())
-    purchases = [await session.get(Listing, item.listing_id) for item in purchase_deals]
+    purchase_ids = {item.listing_id for item in purchase_deals}
+    purchased_by_id = {
+        item.id: item for item in (await session.scalars(
+            select(Listing).where(Listing.id.in_(purchase_ids))
+        )).all()
+    } if purchase_ids else {}
+    # Keep the original deal order and repeated purchase entries while loading
+    # their listing data once rather than issuing one SELECT per purchase.
+    purchases = [purchased_by_id[item.listing_id] for item in purchase_deals if item.listing_id in purchased_by_id]
     deals = list((await session.scalars(
         select(Deal)
         .where(or_(Deal.buyer_id == user.id, Deal.seller_id == user.id))
@@ -3817,12 +3825,41 @@ async def profile(user: User = Depends(get_current_user), session: AsyncSession 
     )).all())
     transactions = list((await session.scalars(select(WalletTransaction).where(WalletTransaction.user_id == user.id).order_by(WalletTransaction.created_at.desc()).limit(100))).all())
     withdrawal_values = list((await session.scalars(select(WithdrawalRequest).where(WithdrawalRequest.user_id == user.id).order_by(WithdrawalRequest.created_at.desc()))).all())
+    profile_listing_ids = {item.id for item in [*active, *sold, *purchases]}
+    ambiguous_prices = {}
+    if profile_listing_ids:
+        ambiguous_ids = list((await session.scalars(
+            select(Conversation.listing_id).where(
+                Conversation.listing_id.in_(profile_listing_ids),
+                Conversation.buyer_id == user.id,
+            ).group_by(Conversation.listing_id).having(func.count(Conversation.id) > 1)
+        )).all())
+        # listing_out historically takes the first scalar, including NULL. The
+        # shared catalogue serializer takes the last non-NULL accepted price.
+        # Preserve the exact former profile query only for ambiguous histories;
+        # ordinary profiles still use a fixed number of batched SELECTs.
+        for listing_id in ambiguous_ids:
+            ambiguous_prices[listing_id] = await session.scalar(
+                select(Conversation.accepted_price_af_coins).where(
+                    Conversation.listing_id == listing_id,
+                    Conversation.buyer_id == user.id,
+                )
+            )
+
+    async def profile_listing_values(items):
+        values = await listing_collection_out(session, items, user.id)
+        return [
+            item.model_copy(update={"effective_price_af_coins": ambiguous_prices[item.id]})
+            if item.id in ambiguous_prices else item
+            for item in values
+        ]
+
     return ProfileOut(
         user=user,
         wallet=wallet_value,
-        active_listings=[await listing_out(session, item, user.id) for item in active],
-        sold_listings=[await listing_out(session, item, user.id) for item in sold],
-        purchases=[await listing_out(session, item, user.id) for item in purchases if item],
+        active_listings=await profile_listing_values(active),
+        sold_listings=await profile_listing_values(sold),
+        purchases=await profile_listing_values(purchases),
         active_deals=active_deals,
         deals=deals,
         deal_threads=[await conversation_details(session, item, user) for item in deal_thread_values],
