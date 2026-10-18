@@ -118,6 +118,8 @@
     adminTrainingBuyers: document.getElementById("adminTrainingBuyers"),
     adminTrainingMaterials: document.getElementById("adminTrainingMaterials"),
     brandFilter: document.getElementById("brandFilter"),
+    marketGameFilter: document.getElementById("marketGameFilter"),
+    uniqueGameFilter: document.getElementById("uniqueGameFilter"),
     priceMinFilter: document.getElementById("priceMinFilter"),
     priceMaxFilter: document.getElementById("priceMaxFilter"),
     powerFilter: document.getElementById("powerFilter"),
@@ -306,6 +308,8 @@
     bind(document.getElementById("resetFiltersButton"), "click", resetFilters, "resetFiltersButton");
     bind(document.getElementById("applyFiltersButton"), "click", renderListings, "applyFiltersButton");
     bind(elements.brandFilter, "change", renderListings, "brandFilter");
+    bind(elements.marketGameFilter, "change", renderListings, "marketGameFilter");
+    bind(elements.uniqueGameFilter, "change", renderListings, "uniqueGameFilter");
     [elements.priceMinFilter, elements.priceMaxFilter].forEach((control, index) => {
       bind(control, "input", renderListings, `priceFilter${index}`);
       bind(control, "keydown", finishPriceFilterInput, `priceFilterDone${index}`);
@@ -493,42 +497,77 @@
       const catalog = await api.resource("data/vehicle_catalog.json", { timeoutMs: 8000, retries: 1 });
       state.catalog = { ...(catalog && typeof catalog === "object" ? catalog : {}), brands: safeArray(catalog?.brands) };
     },
-    regular: async () => { state.regular = safeArray(await api.request("/listings?type=regular")); },
-    unique: async () => { const version = state.contentLoads.unique; const rows = await api.request("/listings?type=unique"); if (version === state.contentLoads.unique) state.unique = safeArray(rows); },
-    training: async () => { const version = state.contentLoads.training; const rows = await api.request(state.me?.user.role === "admin" ? "/admin/training" : "/training"); if (version === state.contentLoads.training) state.training = safeArray(rows); },
+    regular: async () => { return setOptionalValue("regular", safeArray(await api.request("/listings?type=regular"))); },
+    unique: async () => { const version = state.contentLoads.unique; const rows = await api.request("/listings?type=unique"); return version === state.contentLoads.unique ? setOptionalValue("unique", safeArray(rows)) : false; },
+    training: async () => { const version = state.contentLoads.training; const rows = await api.request(state.me?.user.role === "admin" ? "/admin/training" : "/training"); return version === state.contentLoads.training ? setOptionalValue("training", safeArray(rows)) : false; },
     contentUnseen: async () => { await refreshContentBadges(); },
-    trainingPurchases: async () => { state.trainingPurchases = safeArray(await api.request("/training/mine")); },
+    trainingPurchases: async () => { return setOptionalValue("trainingPurchases", safeArray(await api.request("/training/mine"))); },
     profile: async () => {
-      state.profile = await api.request("/profile");
+      const changed = setOptionalValue("profile", await api.request("/profile"));
       if (state.me && state.profile?.wallet) state.me.wallet = state.profile.wallet;
+      return changed;
     },
-    advertisement: async () => { state.advertisement = await api.request("/advertisement", { timeoutMs: 8000 }); },
-    notifications: async () => { state.notifications = safeArray(await api.request("/notifications")); },
+    advertisement: async () => { return setOptionalValue("advertisement", await api.request("/advertisement", { timeoutMs: 8000 })); },
+    notifications: async () => { return setOptionalValue("notifications", safeArray(await api.request("/notifications"))); },
   };
 
+  function setOptionalValue(key, value) {
+    if (JSON.stringify(state[key]) === JSON.stringify(value)) return false;
+    state[key] = value;
+    return true;
+  }
+
+  // Short-lived read cache only. Financial commands always use the backend and
+  // explicit refreshMarketplace() queues a fresh read after any older request.
+  const navigationDataMaxAge = 15000;
+  const optionalDataRequests = new Map();
   let optionalRenderFrame = null;
-  function scheduleOptionalRender() {
+  const optionalRenderKeys = new Set();
+  function scheduleOptionalRender(key) {
+    optionalRenderKeys.add(key || "all");
     if (optionalRenderFrame !== null) return;
     optionalRenderFrame = window.requestAnimationFrame(() => {
       optionalRenderFrame = null;
-      updateFilterOptions(); renderAll();
+      const keys = [...optionalRenderKeys]; optionalRenderKeys.clear();
+      if (keys.includes("all") || keys.includes("regular")) updateFilterOptions();
+      renderAll(keys.includes("all") ? null : keys);
     });
+  }
+
+  function loadOptionalKey(key, options = {}) {
+    let slot = optionalDataRequests.get(key);
+    if (!slot) { slot = { loadedAt: 0, promise: null, next: null }; optionalDataRequests.set(key, slot); }
+    if (slot.promise) {
+      if (!options.force) return slot.promise;
+      // A mutation may have committed after the in-flight SELECT began. Wait
+      // for it, then revalidate once; never let that old response be the last.
+      slot.next ||= slot.promise.catch(() => {}).then(() => {
+        slot.next = null;
+        return loadOptionalKey(key);
+      });
+      return slot.next;
+    }
+    if (!options.force && options.maxAgeMs && slot.loadedAt && Date.now() - slot.loadedAt < options.maxAgeMs && !state.failedOptional.has(key)) return Promise.resolve();
+    slot.promise = (async () => {
+      try {
+        const changed = await optionalLoaders[key]();
+        slot.loadedAt = Date.now();
+        state.failedOptional.delete(key);
+        if (key === "regular") reportStartupStage("market_loaded");
+        if (changed !== false) scheduleOptionalRender(key);
+      } catch (error) {
+        slot.loadedAt = 0;
+        state.failedOptional.add(key);
+        reportClientError(`optional_${key}`, error);
+        throw error;
+      } finally { slot.promise = null; }
+    })();
+    return slot.promise;
   }
 
   async function loadOptionalData(keys = Object.keys(optionalLoaders), options = {}) {
     if (!state.serverAvailable) return [];
-    const tasks = keys.map(async (key) => {
-      try {
-        await optionalLoaders[key]();
-        state.failedOptional.delete(key);
-        if (key === "regular") reportStartupStage("market_loaded");
-        scheduleOptionalRender();
-      } catch (error) {
-        state.failedOptional.add(key);
-        reportClientError(`optional_${key}`, error);
-        throw error;
-      }
-    });
+    const tasks = [...new Set(keys)].map(key => loadOptionalKey(key, options));
     const results = await Promise.allSettled(tasks);
     updateSyncStatus();
     if (state.failedOptional.size && options.allowRecovery !== false && !state.optionalRecoveryUsed) {
@@ -548,7 +587,9 @@
 
   async function refreshMarketplace() {
     if (!state.serverAvailable) return;
-    return await loadOptionalData(["regular", "unique", "training", "trainingPurchases", "profile", "advertisement"], { allowRecovery: false });
+    state.contentSnapshots?.clear();
+    state.contentLoads.unique += 1; state.contentLoads.training += 1;
+    return await loadOptionalData(["regular", "unique", "training", "trainingPurchases", "profile", "advertisement"], { allowRecovery: false, force: true });
   }
 
   function hasTelegramLaunchHint() {
@@ -886,36 +927,53 @@ function handleClick(event) {
     if (viewName === "profile") switchProfileTab("listings");
     if (viewName === "add") void loadPublicationOptions();
     if (viewName === "admin") void loadPublicationAdmin();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: primaryViews.has(viewName) ? "instant" : "smooth" });
+    observeVisibleListingCards();
     if (state.serverAvailable && ["market", "unique", "training", "profile", "activity", "wallet"].includes(viewName)) {
-      try {
-        if (["unique", "training"].includes(viewName)) await openContentSection(viewName);
-        else await loadOptionalData(["profile", "activity", "wallet"].includes(viewName) ? ["profile"] : ["regular"], { allowRecovery: false });
-      } catch (error) { notify(error.message); }
+      const loading = ["unique", "training"].includes(viewName) ? openContentSection(viewName)
+        : loadOptionalData(["profile", "activity", "wallet"].includes(viewName) ? ["profile"] : ["regular"], { allowRecovery: false, maxAgeMs: navigationDataMaxAge });
+      void loading.catch(error => {
+        reportClientError(`navigation_${viewName}`, error);
+        state.failedOptional.add(viewName); updateSyncStatus();
+      });
     }
   }
 
   async function openContentSection(section) {
+    state.contentTasks ||= new Map();
+    state.contentSnapshots ||= new Map();
+    if (state.contentTasks.has(section)) return state.contentTasks.get(section);
+    const cached = state.contentSnapshots.get(section);
+    if (cached && Date.now() - cached.loadedAt < navigationDataMaxAge
+        && Number(state.contentUnseen[section]?.marker || 0) <= cached.marker) return;
     const version = ++state.contentLoads[section];
     state.contentSyncVersion += 1; state.contentLoading += 1;
-    try {
+    const task = (async () => { try {
       const snapshot = await api.request(`/content/${section}/snapshot`);
       if (state.currentView !== section || state.contentLoads[section] !== version || document.hidden) return;
       if (!Array.isArray(snapshot.items) || !Number.isSafeInteger(snapshot.marker)) throw new Error("Не удалось загрузить каталог");
-      state[section] = snapshot.items; state.failedOptional.delete(section);
-      updateFilterOptions(); renderAll();
+      setOptionalValue(section, snapshot.items); state.failedOptional.delete(section);
+      renderAll([section]); updateSyncStatus();
       // Acknowledge only the exact server snapshot rendered in the still-open section.
       const result = await api.request(`/content/${section}/mark-seen`, {
         method: "POST", body: JSON.stringify({ marker: snapshot.marker }),
       });
       state.contentSyncVersion += 1;
-      if (state.contentLoads[section] === version) { state.contentUnseen[section] = result; renderContentBadges(); }
-      if (section === "training") void loadOptionalData(["trainingPurchases"], { allowRecovery: false });
-    } finally { state.contentLoading -= 1; }
+      if (state.contentLoads[section] === version) {
+        state.contentSnapshots.set(section, {marker: snapshot.marker, loadedAt: Date.now()});
+        state.contentUnseen[section] = result; renderContentBadges();
+      }
+      if (section === "training") void loadOptionalData(["trainingPurchases"], { allowRecovery: false, maxAgeMs: navigationDataMaxAge });
+    } catch (error) {
+      state.failedOptional.add(section); updateSyncStatus(); throw error;
+    } finally { state.contentLoading -= 1; state.contentTasks.delete(section); } })();
+    state.contentTasks.set(section, task);
+    return task;
   }
 
   async function refreshContentBadges() {
-    if (!state.serverAvailable || document.hidden || state.contentLoading) return;
+    if (!state.serverAvailable || document.hidden || state.contentLoading || state.contentBadgeLoading) return;
+    state.contentBadgeLoading = true;
     const version = ++state.contentSyncVersion;
     state.contentRefreshAt = Date.now();
     try {
@@ -923,10 +981,11 @@ function handleClick(event) {
       if (version === state.contentSyncVersion) { state.contentUnseen = result; renderContentBadges(); }
     } catch (_) {
       // A failed sync must not clear or fabricate unread state.
-    }
+    } finally { state.contentBadgeLoading = false; }
   }
   async function refreshUnreadMessages() {
-  if (!state.serverAvailable || document.hidden) return;
+  if (!state.serverAvailable || document.hidden || state.messagePollingBusy) return;
+  state.messagePollingBusy = true;
   if (Date.now() - state.contentRefreshAt >= 15000) void refreshContentBadges();
 
   try {
@@ -940,9 +999,11 @@ function handleClick(event) {
 
     renderUnreadBadge();
     if (["profile", "activity"].includes(state.currentView)) {
-      if (state.totalUnread !== previousTotal) state.profile = await api.request("/profile");
-      renderConversations(state.profile?.conversations || []);
-      renderDeals(state.profile?.deal_threads || []);
+      if (state.totalUnread !== previousTotal) await loadOptionalData(["profile"], { allowRecovery: false });
+      if (["profile", "activity"].includes(state.currentView)) {
+        renderConversations(state.profile?.conversations || []);
+        renderDeals(state.profile?.deal_threads || []);
+      }
     }
 
     if (state.totalUnread > previousTotal) {
@@ -961,7 +1022,7 @@ function handleClick(event) {
       state.messagePollingFailureReported = true;
       reportClientError("message_polling", error);
     }
-  }
+  } finally { state.messagePollingBusy = false; }
 }
 
   function renderUnreadBadge() {
@@ -1274,13 +1335,14 @@ function handleClick(event) {
     document.querySelectorAll("[data-open-admin]").forEach(element => { element.hidden = !adminTabs().length; });
   }
 
-  function renderAll() {
-    renderListings();
-    renderTraining();
-    renderProfile();
-    renderBalance();
-    renderAdvertisement();
-    renderContentBadges();
+  function renderAll(keys = null) {
+    const changed = key => !keys || keys.includes(key);
+    const listingSections = ["regular", "unique"].filter(changed);
+    if (listingSections.length) renderListings(listingSections);
+    if (changed("training") || changed("trainingPurchases")) renderTraining();
+    if (changed("profile")) { renderProfile(); renderBalance(); }
+    if (changed("advertisement")) renderAdvertisement();
+    if (changed("contentUnseen")) renderContentBadges();
   }
 
   function renderContentBadges() {
@@ -1309,6 +1371,7 @@ function handleClick(event) {
 
   function getFilteredRegular() {
     const brand = elements.brandFilter.value;
+    const game = elements.marketGameFilter.value;
     const hasMinPrice = elements.priceMinFilter.value !== "";
     const hasMaxPrice = elements.priceMaxFilter.value !== "";
     const minPrice = hasMinPrice ? Number(elements.priceMinFilter.value) : null;
@@ -1321,6 +1384,7 @@ function handleClick(event) {
     const minSpeed = Number(elements.speedFilter.value || 0);
     if (pricesInvalid) return [];
     return state.regular.filter((listing) => {
+      if (game && listing.game_version !== game) return false;
       if (brand && listing.brand !== brand) return false;
       if (minPower && Number(listing.power_hp) < minPower) return false;
       if (minSpeed && Number(listing.max_speed_kph) < minSpeed) return false;
@@ -1328,6 +1392,11 @@ function handleClick(event) {
       if (maxPrice !== null && Number(listing.price_af_coins) > maxPrice) return false;
       return true;
     });
+  }
+
+  function getFilteredUnique() {
+    const game = elements.uniqueGameFilter.value;
+    return state.unique.filter((listing) => !game || listing.game_version === game);
   }
 
   function listingGameLabel(listing) {
@@ -1368,12 +1437,31 @@ function handleClick(event) {
     if (expired) void loadOptionalData(["regular", "unique"]);
   }
 
-  function renderListings() {
-    const regular = getFilteredRegular();
-    elements.marketCars.replaceChildren(...regular.map(createListingCard));
-    elements.uniqueCars.replaceChildren(...state.unique.map(createListingCard));
-    elements.marketEmpty.hidden = regular.length > 0;
-    elements.uniqueEmpty.hidden = state.unique.length > 0;
+  function renderListingCollection(container, rows) {
+    // Keep existing images/buttons when an unchanged snapshot is revalidated.
+    // User role/identity affects owner controls, not just the row data.
+    state.listingRenderSnapshots ||= new WeakMap();
+    const snapshot = JSON.stringify([state.me?.user.id, state.me?.user.role, rows]);
+    if (state.listingRenderSnapshots.get(container) === snapshot) return;
+    container.replaceChildren(...rows.map(createListingCard));
+    state.listingRenderSnapshots.set(container, snapshot);
+  }
+
+  function renderListings(sections = ["regular", "unique"]) {
+    if (!Array.isArray(sections)) sections = ["regular", "unique"]; // DOM event binding
+    if (sections.includes("regular")) {
+      const regular = getFilteredRegular();
+      renderListingCollection(elements.marketCars, regular);
+      elements.marketEmpty.hidden = regular.length > 0;
+      elements.marketEmpty.querySelector("h2").textContent = state.regular.length ? "По выбранным фильтрам объявлений пока нет" : "Пока нет объявлений";
+    }
+    if (sections.includes("unique")) {
+      const unique = getFilteredUnique();
+      renderListingCollection(elements.uniqueCars, unique);
+      elements.uniqueEmpty.hidden = unique.length > 0;
+      elements.uniqueEmpty.querySelector("h2").textContent = state.unique.length ? "По выбранным фильтрам объявлений пока нет" : "Уникальных машин пока нет";
+      elements.uniqueEmpty.querySelector("p").hidden = state.unique.length > 0;
+    }
     refreshPinnedCardAppearance();
     observeVisibleListingCards();
   }
@@ -1385,12 +1473,6 @@ function handleClick(event) {
     if (listing.pinned && listing.pinned_until) card.dataset.pinnedUntil = listing.pinned_until;
     const media = document.createElement("div");
     media.className = "car-card__media";
-    if (listing.listing_type === "unique") {
-      const label = document.createElement("span");
-      label.className = "unique-label";
-      label.textContent = "Уникальная";
-      media.append(label);
-    }
     if (listing.images?.[0]) {
       const image = document.createElement("img");
       image.src = absoluteMediaUrl(listing.images[0]);
@@ -1484,10 +1566,14 @@ function handleClick(event) {
     state.listingViewTimers.forEach((timer) => window.clearTimeout(timer));
     state.listingViewTimers.clear();
     if (!("IntersectionObserver" in window)) return;
-    state.listingViewObserver = new IntersectionObserver((entries) => {
+    const root = state.currentView === "market" ? elements.marketCars : state.currentView === "unique" ? elements.uniqueCars
+      : state.currentView === "profile" ? elements.profileActive : null;
+    state.listingObservationRoot = root;
+    if (!root) return;
+    state.listingViewObserver ||= new IntersectionObserver((entries) => {
       entries.forEach((entry) => {
         const id = entry.target.dataset.listingCard;
-        const visible = entry.isIntersecting && entry.intersectionRatio >= 0.5;
+        const visible = entry.isIntersecting && entry.intersectionRatio >= 0.5 && state.listingObservationRoot?.contains(entry.target);
         if (!visible) {
           window.clearTimeout(state.listingViewTimers.get(id));
           state.listingViewTimers.delete(id);
@@ -1496,13 +1582,14 @@ function handleClick(event) {
         if (state.listingViewRequests.has(id) || state.listingViewTimers.has(id)) return;
         const timer = window.setTimeout(() => {
           state.listingViewTimers.delete(id);
-          if (entry.target.isConnected) void recordListingView(id);
+          if (!document.hidden && entry.target.isConnected && state.listingObservationRoot?.contains(entry.target)) void recordListingView(id);
         }, 750);
         state.listingViewTimers.set(id, timer);
       });
     }, { threshold: [0.5] });
-    document.querySelectorAll("[data-listing-card]").forEach((card) => {
-      const listing = findListing(card.dataset.listingCard);
+    const listings = new Map([...state.regular, ...state.unique, ...(state.profile?.active_listings || [])].map(item => [String(item.id), item]));
+    root.querySelectorAll("[data-listing-card]").forEach((card) => {
+      const listing = listings.get(String(card.dataset.listingCard));
       if (listing && listing.seller_id !== state.me?.user.id) state.listingViewObserver.observe(card);
     });
   }
@@ -2291,7 +2378,10 @@ function handleClick(event) {
 
   function beginPriceFilterInput(event) {
     document.body.classList.add("filter-keyboard-open");
-    window.setTimeout(() => event.currentTarget.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" }), 80);
+    const control = event.currentTarget;
+    window.setTimeout(() => {
+      if (control?.isConnected && document.activeElement === control) control.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+    }, 80);
   }
 
   function endPriceFilterInput() {
@@ -2341,8 +2431,12 @@ function handleClick(event) {
 
   function setSelectOptions(select, placeholder, values) {
     const current = select.value;
-    select.replaceChildren(new Option(placeholder, ""), ...values.map((value) => new Option(value, value)));
-    if (values.includes(current)) select.value = current;
+    // A sold/removed last car for a brand must not silently reset the filter.
+    const available = current && !values.includes(current) ? [current, ...values] : values;
+    const options = ["", ...available];
+    if (select.options.length === options.length && options.every((value, index) => select.options[index].value === value)) return;
+    select.replaceChildren(new Option(placeholder, ""), ...available.map((value) => new Option(value, value)));
+    select.value = current;
   }
 
   function toggleExtraFilters() {
@@ -2352,7 +2446,7 @@ function handleClick(event) {
   }
 
   function resetFilters() {
-    [elements.brandFilter, elements.priceMinFilter, elements.priceMaxFilter, elements.powerFilter, elements.speedFilter].forEach((control) => { control.value = ""; });
+    [elements.marketGameFilter, elements.brandFilter, elements.priceMinFilter, elements.priceMaxFilter, elements.powerFilter, elements.speedFilter].forEach((control) => { control.value = ""; });
     renderListings();
   }
 

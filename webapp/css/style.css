@@ -102,7 +102,6 @@ input::placeholder, textarea::placeholder { color:#677381; }
 
 .car-card { position:relative; overflow:hidden; border:1px solid var(--line); border-radius:12px; background:linear-gradient(180deg,#111b26,#0b121b); box-shadow:0 10px 26px rgba(0,0,0,.24); }
 .car-card.is-unique { border-color:rgba(255,180,20,.76); background:linear-gradient(180deg,#21170d,#0d131b 65%); box-shadow:0 0 0 1px rgba(255,143,0,.12),0 0 18px rgba(255,151,0,.16); }
-.unique-label { position:absolute; z-index:2; left:7px; bottom:7px; padding:4px 6px; border:1px solid rgba(255,221,107,.55); border-radius:6px; color:#251603; background:linear-gradient(135deg,#ffd83c,#ff8d00); font-size:9px; font-weight:900; text-transform:uppercase; }
 /* One outer border, using the existing 1px box. VIP never changes the photo layout. */
 .car-card.is-pinned {
   border-color: transparent;
@@ -115,6 +114,9 @@ input::placeholder, textarea::placeholder { color:#677381; }
 .car-card.is-pinned .listing-game-badge{top:36px}
 .listing-game-badge{position:absolute;z-index:3;top:7px;left:7px;max-width:calc(100% - 14px);padding:4px 7px;border:1px solid rgba(255,211,133,.5);border-radius:7px;background:rgba(102,65,24,.76);color:#fff0cb;text-shadow:0 1px 2px rgba(40,24,4,.6);font-size:10px;font-weight:700;line-height:1.2;white-space:nowrap;pointer-events:none}
 .listing-game-badge[data-game="car_parking_2"]{background:rgba(34,73,112,.78);border-color:rgba(142,208,255,.5);color:#e3f4ff}
+.car-card.is-unique .listing-game-badge{padding:4px 5px;font-size:9px;overflow:hidden;text-overflow:ellipsis}
+.car-card.is-unique.is-pinned .listing-game-badge{top:7px;max-width:calc(100% - 69px)}
+.car-card.is-unique .car-vip-badge{top:7px;right:7px;left:auto;padding:4px 5px;font-size:9px;letter-spacing:.02em}
 .seller-delivery-deadline{display:grid;gap:5px;margin-bottom:9px;padding:9px;border:1px solid rgba(255,194,74,.55);border-radius:9px;background:rgba(181,115,20,.14)}
 .seller-delivery-deadline strong{font-size:12px;line-height:1.4}
 .seller-delivery-deadline__time{color:#ffdb86;font-size:19px;font-weight:850;font-variant-numeric:tabular-nums}
@@ -201,6 +203,9 @@ input::placeholder, textarea::placeholder { color:#677381; }
 .af-coin{display:inline-block;width:19px;height:19px;flex:0 0 auto;border-radius:50%;vertical-align:-4px;background:url("../images/af-coin.jpg") center/cover no-repeat;box-shadow:0 0 9px rgba(255,164,0,.48)}
 .af-coin--small{width:14px;height:14px;vertical-align:-3px}.af-coin--tiny{width:11px!important;height:11px!important;left:7px!important}.af-coin--hero{width:72px;height:72px;box-shadow:0 0 24px rgba(255,164,0,.42)}
 .filters{display:flex;grid-template-columns:none;gap:5px;min-width:0;overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:none;padding-bottom:2px}.filters::-webkit-scrollbar{display:none}.filter-select{flex:0 0 132px}.filter-price{flex:0 0 94px;height:40px;min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:3px;padding:0 7px;border:1px solid var(--line);border-radius:8px;color:var(--muted);background:var(--panel);font-size:9px}.filter-price input{width:100%;min-width:0;border:0;outline:0;color:var(--text);background:transparent;font-size:16px;line-height:1}.filter-price:has(input[aria-invalid="true"]){border-color:#d64b4b}.filter-toggle{flex:0 0 40px}.market-tools{min-width:0}.filter-select select{padding-left:23px}
+.filter-select.filter-select--game{flex:0 0 64px;width:64px}
+.filter-select--game select{padding-left:8px}
+.unique-filters{display:flex;margin-top:6px}
 body.filter-keyboard-open .bottom-nav{visibility:hidden;pointer-events:none}
 .admin-title-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.admin-add-button{min-height:32px;padding:0 9px;border:1px solid var(--orange);border-radius:8px;color:#ffb31c;background:rgba(255,139,0,.08);font-size:9px;font-weight:850}.account-warning,.security-note{padding:10px;border:1px solid rgba(255,154,0,.35);border-radius:9px;color:#d7b77d;background:rgba(255,139,0,.055);font-size:10px;line-height:1.5}
 .wallet-breakdown{display:grid;grid-template-columns:1fr;gap:5px;margin-bottom:8px}.wallet-breakdown>div{display:grid;gap:4px;padding:8px 5px;border:1px solid var(--line);border-radius:8px;text-align:center;background:var(--panel)}.wallet-breakdown span{color:var(--muted);font-size:8px}.wallet-breakdown strong{color:#fff;font-size:11px}.profile-identity small{color:#65717e;font-size:9px}.profile-wallet>small{color:var(--muted);font-size:8px}.profile-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:7px 0}.profile-actions button{min-height:36px;border:1px solid rgba(255,151,0,.35);border-radius:8px;color:#ffb41f;background:rgba(255,139,0,.07);font-size:10px;font-weight:800}.profile-tabs{grid-template-columns:repeat(3,1fr)}

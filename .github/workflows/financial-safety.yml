@@ -42,6 +42,10 @@ jobs:
           npx playwright install --with-deps chromium
       - name: VIP renewal and mobile keyboard regression (fixtures only)
         run: node webapp/tests/vip-renewal-keyboard-browser.cjs
+      - name: Independent game filters and unique badges on mobile layouts (fixtures only)
+        run: node webapp/tests/catalog-game-filters-browser.cjs
+      - name: Repeated navigation, request limits and outage recovery with 50 to 500 listings (fixtures only)
+        run: node webapp/tests/catalog-navigation-browser.cjs
       - name: Real publication UI, signed API and isolated PostgreSQL (no payments)
         run: python -m pytest -q -s tests/test_publication_browser_postgres.py
         working-directory: backend
