@@ -640,6 +640,9 @@ function handleClick(event) {
 
   const copyGameId = target.closest("[data-copy-game-id]");
   if (copyGameId) return void copyBuyerGameId(copyGameId.dataset.copyGameId);
+  if (target.closest("[data-copy-profile-id]") && state.me?.user.telegram_id != null) {
+    return void copyBuyerGameId(String(state.me.user.telegram_id));
+  }
 
   if (target.closest("[data-open-add]")) {
     return void openListingForm("regular");
@@ -910,6 +913,7 @@ function handleClick(event) {
     document.body.classList.toggle("chat-open", viewName === "deal-chat");
     if (viewName !== "deal-chat") document.body.classList.remove("deal-details-required");
     document.body.classList.toggle("admin-open", viewName === "admin");
+    document.body.classList.toggle("profile-open", viewName === "profile");
     if (viewName === "deal-chat") updateChatViewport();
     updateFloatingChatVisibility();
     elements.views.forEach((view) => {
@@ -2502,26 +2506,71 @@ function handleClick(event) {
       return;
     }
     container.replaceChildren(...listings.map((listing) => {
-      const row = document.createElement("div");
+      const row = document.createElement("article");
       row.className = "profile-mini-card";
-      const image = document.createElement(listing.images?.[0] ? "img" : "div");
-      if (listing.images?.[0]) { image.src = absoluteMediaUrl(listing.images[0]); image.alt = listingTitle(listing); }
-      else image.className = "profile-mini-placeholder";
-      const copy = document.createElement("div");
-      const title = document.createElement("strong"); title.textContent = listingTitle(listing);
-      const meta = document.createElement("small"); meta.textContent = `${listingGameLabel(listing)} · ${statusLabel(listing.status)}`;
+      const media = document.createElement("button"); media.type = "button"; media.className = "profile-listing-media";
+      media.dataset.openListing = listing.id; media.setAttribute("aria-label", `Открыть ${listingTitle(listing)}`);
+      const photos = safeArray(listing.images).filter(url => typeof url === "string" && url).slice(0, 2);
+      media.classList.toggle("has-pair", photos.length > 1);
+      if (!photos.length) media.textContent = "AF";
+      photos.forEach((url, index) => {
+        const image = document.createElement("img");
+        // Only our persisted media endpoint supports thumbnails. Legacy/external
+        // image URLs keep their original query/signature and are never rewritten.
+        image.src = profileThumbnailUrl(url); image.alt = `${listingTitle(listing)}${index ? ", второе фото" : ""}`;
+        image.loading = "lazy"; image.decoding = "async";
+        image.addEventListener("error", () => {
+          image.remove(); const count = media.querySelectorAll("img").length;
+          media.classList.toggle("has-pair", count > 1);
+          if (!count) media.textContent = "AF";
+        }, { once: true });
+        media.append(image);
+      });
+      const copy = document.createElement("div"); copy.className = "profile-listing-copy";
+      const title = document.createElement("h2"); title.className = "profile-listing-title"; title.textContent = listingTitle(listing);
+      const meta = document.createElement("div"); meta.className = "profile-listing-meta";
+      const game = document.createElement("span"); game.textContent = listingGameLabel(listing);
+      const status = document.createElement("span"); status.className = "profile-listing-status";
+      status.classList.toggle("is-available", listing.status === "active"); status.textContent = statusLabel(listing.status);
+      meta.append(game, status);
+      if (listing.pinned) {
+        const vip = document.createElement("span"); vip.className = "profile-listing-vip"; vip.textContent = "👑 VIP";
+        if (listing.pinned_until) vip.title = `До ${formatDate(listing.pinned_until)}`;
+        meta.append(vip);
+      }
       copy.append(title, meta);
-      const price = document.createElement("b"); price.append(document.createTextNode(`${formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins)} `), coin("af-coin--small"));
-      row.append(image, copy, price);
+      const price = document.createElement("b"); price.className = "profile-listing-price";
+      const amount = document.createElement("span"); amount.textContent = formatNumber(listing.effective_price_af_coins ?? listing.price_af_coins);
+      price.append(amount, coin("af-coin--small"));
+      row.append(media, copy, price);
       if (ownerControls) {
         const actions = document.createElement("div"); actions.className = "profile-card-actions";
-        const edit = document.createElement("button"); edit.dataset.editListing = listing.id; edit.textContent = "Изменить";
-        const promote = document.createElement("button"); promote.dataset.promoteListing = listing.id; promote.textContent = listing.pinned ? "Закреплено" : "Закрепить"; promote.disabled = listing.pinned;
-        const remove = document.createElement("button"); remove.dataset.deleteListing = listing.id; remove.textContent = "Удалить"; remove.className = "is-danger";
+        const edit = profileActionButton("edit", "Изменить"); edit.dataset.editListing = listing.id;
+        const promote = profileActionButton("pin", listing.pinned ? "Закреплено" : "Закрепить"); promote.dataset.promoteListing = listing.id; promote.disabled = listing.pinned;
+        if (listing.pinned_until) promote.title = `Закреплено до ${formatDate(listing.pinned_until)}`;
+        const remove = profileActionButton("trash", "Удалить"); remove.dataset.deleteListing = listing.id; remove.className = "is-danger";
         actions.append(edit, promote, remove); row.append(actions);
       }
       return row;
     }));
+  }
+
+  function profileActionButton(iconName, label) {
+    const button = document.createElement("button"); button.type = "button";
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.classList.add("profile-icon"); svg.setAttribute("aria-hidden", "true");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use"); use.setAttribute("href", `#profile-icon-${iconName}`); svg.append(use);
+    const text = document.createElement("span"); text.textContent = label; button.append(svg, text); return button;
+  }
+
+  function profileThumbnailUrl(url) {
+    const resolved = absoluteMediaUrl(url);
+    try {
+      const source = new URL(resolved, window.location.origin);
+      if (source.origin === new URL(api.baseUrl, window.location.origin).origin && /^\/api\/media\/[^/]+$/.test(source.pathname)) {
+        source.searchParams.set("preview", "true"); return source.href;
+      }
+    } catch (_error) { /* A malformed historical URL must not break the profile. */ }
+    return resolved;
   }
 
   function renderHistory(transactions) {
@@ -2701,6 +2750,7 @@ async function hideCurrentConversation() {
   function toggleProfileSection(section) {
     elements.profileActive.hidden = section !== "active";
     elements.profileSold.hidden = section !== "sold";
+    document.querySelectorAll("[data-profile-section]").forEach(button => button.setAttribute("aria-expanded", String(button.dataset.profileSection === section)));
   }
 
   async function startConversation(listingId) {
@@ -5428,18 +5478,27 @@ async function hideCurrentConversation() {
   function renderBalance() {
     const value = Number(state.me?.wallet.available_balance || 0).toFixed(2);
     document.querySelectorAll("[data-balance]").forEach((node) => { node.textContent = value; });
+    document.querySelector(".profile-wallet")?.classList.toggle("is-large-balance", value.length > 9);
   }
 
   function renderUser() {
     const user = state.me?.user; if (!user) return;
-    const name = [user.first_name, user.last_name].filter(Boolean).join(" ");
+    const name = [user.first_name, user.last_name].filter(Boolean).join(" ") || "Пользователь";
     document.getElementById("profileName").textContent = name;
+    document.getElementById("profileName").title = name;
     document.getElementById("profileUsername").textContent = user.username ? `@${user.username}` : "Username не указан";
-    document.getElementById("profileTelegramId").textContent = `Telegram ID: ${user.telegram_id}`;
+    document.getElementById("profileUsername").title = user.username ? `@${user.username}` : "Username не указан";
+    document.getElementById("profileTelegramId").textContent = `Telegram ID:\n${user.telegram_id ?? "—"}`;
+    document.getElementById("copyProfileTelegramId").disabled = user.telegram_id == null;
     [document.getElementById("headerAvatarFallback"), document.getElementById("profileAvatarFallback")].forEach((node) => { node.textContent = name.slice(0, 1).toUpperCase(); });
-    if (user.photo_url) {
-      [document.getElementById("headerAvatarImage"), document.getElementById("profileAvatarImage")].forEach((image) => { image.src = user.photo_url; image.hidden = false; image.previousElementSibling.hidden = true; });
-    }
+    [document.getElementById("headerAvatarImage"), document.getElementById("profileAvatarImage")].forEach((image) => {
+      const fallback = image.previousElementSibling;
+      image.hidden = true; fallback.hidden = false;
+      image.onload = () => { image.hidden = false; fallback.hidden = true; };
+      image.onerror = () => { image.hidden = true; fallback.hidden = false; };
+      if (user.photo_url) image.src = user.photo_url;
+      else image.removeAttribute("src");
+    });
   }
 
   function bind(element, eventName, handler, label) {

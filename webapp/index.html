@@ -6,17 +6,17 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-306f07deed9c" />
-    <link rel="stylesheet" href="css/style.css?v=af-306f07deed9c" />
+    <meta name="autoflow-build" content="af-8696ae5d4586" />
+    <link rel="stylesheet" href="css/style.css?v=af-8696ae5d4586" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-306f07deed9c" defer></script>
-    <script src="js/referrals.js?v=af-306f07deed9c" defer></script>
-    <script src="js/deal-confirmation.js?v=af-306f07deed9c" defer></script>
-    <script src="js/admin-operations.js?v=af-306f07deed9c" defer></script>
-    <script src="js/analytics.js?v=af-306f07deed9c" defer></script>
-    <script src="js/training-sales.js?v=af-306f07deed9c" defer></script>
-    <script src="js/help.js?v=af-306f07deed9c" defer></script>
-    <script src="js/app.js?v=af-306f07deed9c" defer></script>
+    <script src="js/api.js?v=af-8696ae5d4586" defer></script>
+    <script src="js/referrals.js?v=af-8696ae5d4586" defer></script>
+    <script src="js/deal-confirmation.js?v=af-8696ae5d4586" defer></script>
+    <script src="js/admin-operations.js?v=af-8696ae5d4586" defer></script>
+    <script src="js/analytics.js?v=af-8696ae5d4586" defer></script>
+    <script src="js/training-sales.js?v=af-8696ae5d4586" defer></script>
+    <script src="js/help.js?v=af-8696ae5d4586" defer></script>
+    <script src="js/app.js?v=af-8696ae5d4586" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -109,23 +109,35 @@
         <section class="view training-detail" data-view="training-detail" aria-labelledby="trainingDetailTitle" hidden><div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><span class="premium-mark">PREMIUM</span></div><img class="training-detail__cover" id="trainingDetailCover" alt="Обложка обучения" /><div class="training-detail__body"><span class="training-type" id="trainingDetailType"></span><h1 id="trainingDetailTitle"></h1><p id="trainingDetailDescription"></p><div class="training-detail__meta"><span id="trainingDetailAvailability"></span><strong><span id="trainingDetailPrice">0</span> AF Coins</strong></div><div class="training-detail__views" id="trainingDetailViews">👁 0 просмотров</div><video id="trainingDetailVideo" controls playsinline hidden></video><button class="publish-button" id="trainingBuyButton" type="button">Купить обучение</button><p class="commission-note">Покупка оплачивается внутренними AF Coins. Telegram Stars используются только для пополнения баланса; заказ и доступ хранятся на сервере.</p></div></section>
 
         <section class="view profile-view" data-view="profile" aria-labelledby="profileTitle" hidden>
-          <div class="screen-heading"><h1 id="profileTitle">Профиль</h1></div>
+          <svg class="profile-icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+            <symbol id="profile-icon-coins" viewBox="0 0 24 24"><ellipse cx="10" cy="5" rx="7" ry="3"/><path d="M3 5v5c0 4 14 4 14 0V5M3 10v5c0 3 8 4 12 2M3 15v4c0 2 6 4 11 2M20 9v11m-3-8c0 2 4 2 4 0m-4 5c0 2 4 2 4 0"/></symbol>
+            <symbol id="profile-icon-wallet" viewBox="0 0 24 24"><path d="M20 8V5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h15V8H5a2 2 0 0 1 0-4h13M20 12h-6v5h6"/><path d="M16 14.5h.1"/></symbol>
+            <symbol id="profile-icon-listings" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 7h6M9 12h6M9 17h4"/></symbol>
+            <symbol id="profile-icon-chats" viewBox="0 0 24 24"><path d="M21 11c0 5-4 8-9 8H7l-4 3 1-6a8 8 0 0 1-2-5c0-5 4-8 10-8s9 3 9 8Z"/><path d="M7 11h.1M12 11h.1M17 11h.1"/></symbol>
+            <symbol id="profile-icon-support" viewBox="0 0 24 24"><path d="M3 14v-3a9 9 0 0 1 18 0v3M21 17v2c0 2-4 3-7 3"/><rect x="2" y="11" width="4" height="8" rx="2"/><rect x="18" y="11" width="4" height="8" rx="2"/></symbol>
+            <symbol id="profile-icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 10v7M12 6h.1"/></symbol>
+            <symbol id="profile-icon-admin" viewBox="0 0 24 24"><path d="m12 2 9 4v6c0 5-5 9-9 11-4-2-9-6-9-11V6l9-4Z"/><path d="m8 12 3 3 5-6"/></symbol>
+            <symbol id="profile-icon-copy" viewBox="0 0 24 24"><rect x="8" y="7" width="12" height="15" rx="2"/><path d="M15 3H4v14"/></symbol>
+            <symbol id="profile-icon-edit" viewBox="0 0 24 24"><path d="m14 5 5 5M3 21l2-7L17 2l5 5L10 19l-7 2Z"/></symbol>
+            <symbol id="profile-icon-pin" viewBox="0 0 24 24"><path d="m15 3 6 6-4 2-3 6-3-3-6 7 5-8-3-3 6-3 2-4Z"/></symbol>
+            <symbol id="profile-icon-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7"/></symbol>
+          </defs></svg>
+          <div class="screen-heading profile-heading"><h1 id="profileTitle">Профиль</h1><span aria-hidden="true">AF</span></div>
           <div class="profile-summary">
             <div class="profile-photo"><span id="profileAvatarFallback">A</span><img id="profileAvatarImage" alt="Фотография профиля" hidden /></div>
-            <div class="profile-identity"><strong id="profileName">Telegram User</strong><span id="profileUsername">—</span><small id="profileTelegramId">ID: —</small></div>
-            <div class="profile-wallet"><small>AF Coins</small><div><span data-balance>0.00</span> <span class="af-coin" aria-label="AF Coins"></span></div></div>
+            <div class="profile-identity"><strong id="profileName">Пользователь</strong><span id="profileUsername">—</span><div class="profile-id"><small id="profileTelegramId">Telegram ID: —</small><button id="copyProfileTelegramId" type="button" data-copy-profile-id aria-label="Скопировать Telegram ID" disabled><svg class="profile-icon" aria-hidden="true"><use href="#profile-icon-copy"/></svg></button></div></div>
+            <button class="profile-wallet" type="button" data-nav-target="wallet" aria-label="Баланс AF Coins и история выводов"><small>AF Coins</small><div><span data-balance>0.00</span><span class="af-coin" aria-label="AF Coins"></span></div><span class="profile-chevron" aria-hidden="true">›</span></button>
           </div>
           <div class="profile-actions profile-main-actions" aria-label="Действия профиля">
-            <button type="button" data-open-topup>Пополнение</button>
-            <button type="button" data-open-withdraw>💸 Вывести средства</button>
-            <button class="is-active" type="button" data-profile-tab="listings">Мои объявления</button>
-            <button type="button" data-profile-tab="deals">Сделки и чаты</button>
-            <button type="button" data-open-support>Поддержка</button>
-            <button type="button" data-open-info>Информация</button>
-            <button class="profile-admin" type="button" data-open-admin data-admin-only hidden>Администратор</button>
+            <button type="button" data-open-topup><span class="profile-action-icon"><svg class="profile-icon" aria-hidden="true"><use href="#profile-icon-coins"/></svg></span><span>Пополнение</span><span class="profile-chevron" aria-hidden="true">›</span></button>
+            <button class="profile-action--gold" type="button" data-open-withdraw><span class="profile-action-icon"><svg class="profile-icon" aria-hidden="true"><use href="#profile-icon-wallet"/></svg></span><span>Вывести средства</span><span class="profile-chevron" aria-hidden="true">›</span></button>
+            <button class="is-active profile-action--gold" type="button" data-profile-tab="listings"><span class="profile-action-icon"><svg class="profile-icon" aria-hidden="true"><use href="#profile-icon-listings"/></svg></span><span>Мои объявления</span><span class="profile-chevron" aria-hidden="true">›</span></button>
+            <button type="button" data-profile-tab="deals"><span class="profile-action-icon"><svg class="profile-icon" aria-hidden="true"><use href="#profile-icon-chats"/></svg></span><span>Сделки и чаты</span><span class="profile-chevron" aria-hidden="true">›</span></button>
+            <button type="button" data-open-support><span class="profile-action-icon"><svg class="profile-icon" aria-hidden="true"><use href="#profile-icon-support"/></svg></span><span>Поддержка</span><span class="profile-chevron" aria-hidden="true">›</span></button>
+            <button type="button" data-open-info><span class="profile-action-icon"><svg class="profile-icon" aria-hidden="true"><use href="#profile-icon-info"/></svg></span><span>Информация</span><span class="profile-chevron" aria-hidden="true">›</span></button>
+            <button class="profile-admin" type="button" data-open-admin data-admin-only hidden><span class="profile-action-icon"><svg class="profile-icon" aria-hidden="true"><use href="#profile-icon-admin"/></svg></span><span>Администратор</span><span class="profile-chevron" aria-hidden="true">›</span></button>
           </div>
-          <small class="profile-work-note">Профиль дорабатывается</small>
-          <div class="profile-panel" data-profile-panel="listings"><button class="profile-row" type="button" data-profile-section="active"><span>▣</span><strong>Активные объявления</strong><b id="activeCount">0</b></button><div class="profile-listings" id="profileActiveCars"></div><button class="profile-row" type="button" data-profile-section="sold"><span>▤</span><strong>Проданные товары</strong><b id="soldCount">0</b></button><div class="profile-listings" id="profileSoldCars" hidden></div></div>
+          <div class="profile-panel" data-profile-panel="listings"><button class="profile-row" type="button" data-profile-section="active" aria-expanded="true" aria-controls="profileActiveCars"><span class="profile-section-icon"><svg class="profile-icon" aria-hidden="true"><use href="#profile-icon-listings"/></svg></span><strong>Активные объявления</strong><b id="activeCount">0</b><span class="profile-chevron" aria-hidden="true">›</span></button><div class="profile-listings" id="profileActiveCars"></div><button class="profile-row" type="button" data-profile-section="sold" aria-expanded="false" aria-controls="profileSoldCars"><span class="profile-section-icon"><svg class="profile-icon" aria-hidden="true"><use href="#profile-icon-listings"/></svg></span><strong>Проданные товары</strong><b id="soldCount">0</b><span class="profile-chevron" aria-hidden="true">›</span></button><div class="profile-listings" id="profileSoldCars" hidden></div></div>
         </section>
 
         <section class="view wallet-view" data-view="wallet" aria-labelledby="walletTitle" hidden>
