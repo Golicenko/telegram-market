@@ -116,8 +116,17 @@ async function profileScenario(browser, { width, role, slow = false }) {
     }
     await page.waitForFunction(()=>document.getElementById('activeCount').textContent==='17');
     assert.equal(await profileView.locator('#profileName').textContent(),[user.first_name,user.last_name].join(' '));
+    assert.equal(await profileView.locator('#profileName').getAttribute('title'),[user.first_name,user.last_name].join(' '),'full name stays available when visually clamped');
+    assert(await profileView.locator('#profileName').evaluate(node=>node.getBoundingClientRect().height<=parseFloat(getComputedStyle(node).lineHeight)*3+1),'long identity uses at most three visible lines');
     assert.equal(await profileView.locator('#profileUsername').textContent(),user.username?'@'+user.username:'Username не указан');
+    assert.equal(await profileView.locator('#profileUsername').getAttribute('title'),user.username?'@'+user.username:'Username не указан');
     assert((await profileView.locator('#profileTelegramId').textContent()).includes(String(user.telegram_id)));
+    const idRange=await profileView.locator('#profileTelegramId').evaluate(node=>{
+      const text=node.firstChild, start=text.textContent.indexOf('\n')+1, range=document.createRange();
+      range.setStart(text,start);range.setEnd(text,text.textContent.length);
+      return [...range.getClientRects()].filter(rect=>rect.width>0).map(rect=>({x:rect.x,y:rect.y,width:rect.width,height:rect.height}));
+    });
+    assert.equal(new Set(idRange.map(rect=>Math.round(rect.y))).size,1,'Telegram ID value stays on one physical line');
     assert.equal(await profileView.locator('[data-balance]').textContent(),available.toFixed(2));
     if(available<1000000)assert(await profileView.locator('[data-balance]').evaluate(node=>node.getBoundingClientRect().height<=parseFloat(getComputedStyle(node).lineHeight)+1),'ordinary balance must remain on one line');
     assert.equal(await profileView.locator('#activeCount').textContent(),'17');
@@ -139,6 +148,7 @@ async function profileScenario(browser, { width, role, slow = false }) {
     assert.equal(await profileView.locator('.profile-work-note').count(),0);
     assert.deepEqual(await page.locator('.bottom-nav button').evaluateAll(nodes=>nodes.map(node=>node.dataset.navTarget)),['unique','training','market','profile','more']);
     assert.equal(await page.locator('.bottom-nav .is-active').getAttribute('data-nav-target'),'profile');
+    assert.equal(await page.locator('#floatingChatButton').isVisible(),false,'Profile chat menu keeps its duplicate floating button from covering Delete');
     const topup=profileView.locator('[data-open-topup]'),withdraw=profileView.locator('[data-open-withdraw]');
     const topupBox=await topup.boundingBox(),withdrawBox=await withdraw.boundingBox();
     assert(Math.abs(topupBox.y-withdrawBox.y)<=1,'funding and withdrawal occupy one row');
@@ -184,7 +194,13 @@ async function profileScenario(browser, { width, role, slow = false }) {
     await first.locator('[data-promote-listing="owned-0"]').click();await page.locator('#purchaseModal').waitFor({state:'visible'});
     assert.match(await page.locator('#purchaseModalTitle').innerText(),/VIP/);assert(quotes>0);
     await page.locator('#purchaseModal [data-close-purchase]').last().click();await page.locator('#purchaseModal').waitFor({state:'hidden'});
-    await first.locator('[data-delete-listing="owned-0"]').click();
+    const deleteButton=first.locator('[data-delete-listing="owned-0"]');
+    await deleteButton.scrollIntoViewIfNeeded();
+    assert(await deleteButton.evaluate(button=>{
+      const rect=button.getBoundingClientRect(),target=document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2);
+      return target===button || button.contains(target);
+    }),'Delete center is clickable without floating chat/navigation occlusion');
+    await deleteButton.click();
     assert.equal(await page.evaluate(()=>window.__profileFixture.confirms.length),1);
     assert.equal(await page.locator('#profileActiveCars .profile-mini-card').count(),17,'cancelled delete keeps the listing');
     await profileView.locator('[data-profile-section="sold"]').click();assert.equal(await page.locator('#profileSoldCars').isVisible(),true);await noOverflow();
@@ -192,6 +208,9 @@ async function profileScenario(browser, { width, role, slow = false }) {
     await page.evaluate(()=>window.scrollTo(0,0));
     await page.waitForTimeout(80);
     const listeners=await page.evaluate(()=>window.__profileFixture.listeners),profileReadsBefore=profileRequests;
+    await page.locator('.bottom-nav [data-nav-target="market"]').click();await view('market');
+    assert.equal(await page.locator('#floatingChatButton').isVisible(),true,'other sections keep their floating chat entry');
+    await returnProfile();
     await page.evaluate(()=>{for(let index=0;index<40;index++)document.querySelector(`.bottom-nav [data-nav-target="${['market','unique','training','profile'][index%4]}"]`).click();});
     await profileView.waitFor({state:'visible'});await page.waitForTimeout(80);
     assert(await page.evaluate(()=>window.__profileFixture.listeners)<=listeners+3,'repeated opens do not accumulate handlers');
@@ -209,7 +228,7 @@ async function profileScenario(browser, { width, role, slow = false }) {
     if(width===320 || width===390)await page.screenshot({path:path.join(evidence,`profile-${suffix}-full.png`),fullPage:true,animations:'disabled'});
     assert.deepEqual(forbiddenWrites,[],'opening flows must not submit financial/listing mutations');
     assert.deepEqual(errors,[]);
-    const result={role,width,slow,relativeApi:slow,malformedHistoricalImage:slow,profileRequests,quotes,listenerCount:await page.evaluate(()=>window.__profileFixture.listeners),activeListings:17,soldListings:2,
+    const result={role,width,slow,relativeApi:slow,malformedHistoricalImage:slow,idRange,profileRequests,quotes,listenerCount:await page.evaluate(()=>window.__profileFixture.listeners),activeListings:17,soldListings:2,
       fallbackAvatar:missing||broken,missingUsername:missing,largeBalance:available,topupBox,withdrawBox,unverified:'Physical iPhone/Android Telegram clients and production data are not exercised.'};
     fs.writeFileSync(path.join(evidence,`profile-${suffix}.json`),JSON.stringify(result,null,2));
     console.log(`PASS ${suffix}: API identity/balance, ID copy, 17 owned +2 sold, all existing flows, role visibility, layout/safe areas, repeated navigation; no money/listing writes`);
