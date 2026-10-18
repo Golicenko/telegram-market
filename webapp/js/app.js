@@ -999,7 +999,7 @@ function handleClick(event) {
 
     renderUnreadBadge();
     if (["profile", "activity"].includes(state.currentView)) {
-      if (state.totalUnread !== previousTotal) await loadOptionalData(["profile"], { allowRecovery: false });
+      if (state.totalUnread !== previousTotal) await loadOptionalData(["profile"], { allowRecovery: false, force: true });
       if (["profile", "activity"].includes(state.currentView)) {
         renderConversations(state.profile?.conversations || []);
         renderDeals(state.profile?.deal_threads || []);
@@ -1434,7 +1434,7 @@ function handleClick(event) {
     }
     // Re-fetch authoritative order once when a displayed period expires. Never
     // assign new pin state/priority locally or reset the user's filter inputs.
-    if (expired) void loadOptionalData(["regular", "unique"]);
+    if (expired) void loadOptionalData(["regular", "unique"], { force: true });
   }
 
   function renderListingCollection(container, rows) {
@@ -3472,7 +3472,7 @@ async function hideCurrentConversation() {
       if (payment.status === "paid") {
         const alreadyConfirmed = state.confirmedTopupPayments.has(intentId);
         state.me.wallet = payment.wallet;
-        if (!alreadyConfirmed) await loadOptionalData(["profile"], { allowRecovery: false });
+        if (!alreadyConfirmed) await loadOptionalData(["profile"], { allowRecovery: false, force: true });
         renderBalance();
         state.confirmedTopupPayments.add(intentId);
         renderPaymentStatus("confirmed");
@@ -3591,7 +3591,7 @@ async function hideCurrentConversation() {
   async function refreshAccount(button) {
     if (button.disabled) return;
     button.disabled = true;
-    try { state.me = await api.request("/me"); await loadOptionalData(["profile"], { allowRecovery: false }); renderAll(); notify("Данные профиля обновлены"); }
+    try { state.me = await api.request("/me"); await loadOptionalData(["profile"], { allowRecovery: false, force: true }); renderAll(); notify("Данные профиля обновлены"); }
     catch (error) { reportClientError("refresh_account", error); notify("Не удалось обновить профиль. Попробуйте снова."); }
     finally { button.disabled = false; }
   }
@@ -3756,7 +3756,7 @@ async function hideCurrentConversation() {
     try {
       const purchase = await api.request(`/training/${flow.product.id}/purchase`, { method: "POST" });
       state.me = await api.request("/me");
-      await loadOptionalData(["trainingPurchases", "profile"], { allowRecovery: false });
+      await loadOptionalData(["trainingPurchases", "profile"], { allowRecovery: false, force: true });
       if (elements.purchaseModal?.open) elements.purchaseModal.close();
       state.purchaseFlow = null;
       renderBalance(); renderTraining(); renderTrainingLibrary();

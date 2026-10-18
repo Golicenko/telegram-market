@@ -92,3 +92,24 @@ test('badge sync never overlaps and its gate is released after a failed request'
   const first=c.refreshContentBadges();await c.refreshContentBadges();assert.equal(reads,1);pending.resolve();await first;
   assert.equal(c.state.contentBadgeLoading,false);await c.refreshContentBadges();assert.equal(reads,2);
 });
+
+test('confirmed payment requests a fresh profile after any pre-payment read',async()=>{
+  let refresh;
+  const c=vm.createContext({state:{confirmedTopupPayments:new Set(),me:{}},
+    api:{async request(){return {status:'paid',wallet:{available_balance:100}};}},renderPaymentStatus(){},renderBalance(){},
+    loadOptionalData:async(keys,options)=>{refresh={keys,options};}});
+  vm.runInContext(code('async function checkStarPaymentStatus','function renderPaymentStatus'),c);
+  await c.checkStarPaymentStatus('confirmed');
+  assert.equal(refresh.options.force,true);assert.deepEqual(Array.from(refresh.keys),['profile']);
+  assert.equal(c.state.confirmedTopupPayments.has('confirmed'),true);
+});
+
+test('confirmed training purchase refreshes library and profile after older reads',async()=>{
+  let refresh;
+  const c=vm.createContext({state:{},track(){},elements:{purchaseModalAction:{}},notify(){},renderBalance(){},renderTraining(){},renderTrainingLibrary(){},openTrainingPurchase:async()=>{},
+    document:{getElementById(){return {}; }},api:{async request(p){return p==='/me'?{wallet:{available_balance:50}}:{id:'purchase',product_type:'personal'};}},
+    loadOptionalData:async(keys,options)=>{refresh={keys,options};}});
+  vm.runInContext(code('async function executeTrainingPurchase','async function payTrainingShortfall'),c);
+  await c.executeTrainingPurchase({product:{id:'course'}});
+  assert.equal(refresh.options.force,true);assert.deepEqual(Array.from(refresh.keys),['trainingPurchases','profile']);
+});
