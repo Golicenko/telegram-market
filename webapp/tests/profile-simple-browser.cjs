@@ -10,7 +10,7 @@ const server=http.createServer((req,res)=>{
 });
 (async()=>{
   await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
-  const browser=await chromium.launch({channel:"msedge",headless:true});
+  const browser=await chromium.launch({...(process.env.CI?{}:{channel:"msedge"}),headless:true});
   try{
     for(const role of ["user","admin"])for(const width of [320,360,390,430]){
       const page=await browser.newPage({viewport:{width,height:740},isMobile:true,hasTouch:true});
@@ -34,7 +34,7 @@ const server=http.createServer((req,res)=>{
       await page.waitForTimeout(400);
       const menu=profile.locator(".profile-main-actions");
       assert.equal(await menu.locator('[data-profile-tab="deals"] .conversation-unread').textContent(),'2');
-      assert.equal(await menu.locator("button:visible").count(),role==="admin"?6:5);
+      assert.equal(await menu.locator("button:visible").count(),role==="admin"?7:6);
       assert.equal(await profile.locator('[data-open-support],[data-open-info]').count(),2);
       assert.equal(await page.locator('[data-view="settings"],[data-refresh-account]').count(),0);
       assert.equal(await page.locator('[data-view="more"]').count(),1);

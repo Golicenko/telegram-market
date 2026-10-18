@@ -22,10 +22,13 @@ test("More is the referral page; legacy Settings stays removed", () => {
 test("Profile uses user-facing wallet and navigation labels", () => {
   assert.doesNotMatch(html, /data-open-frozen/);
   assert.doesNotMatch(html, /<span>Под защитой<\/span>/);
-  for (const label of ["Мои объявления", "Сделки и чаты", "Диалоги", "Пополнение", "Профиль дорабатывается"]) {
+  for (const label of ["Мои объявления", "Сделки и чаты", "Диалоги", "Пополнение", "Вывести средства"]) {
     assert.match(html, new RegExp(label));
   }
   assert.doesNotMatch(html, /data-profile-tab="training"/);
+  assert.doesNotMatch(html, /Профиль дорабатывается/);
+  assert.match(html, /data-copy-profile-id/);
+  assert.match(html, /class="profile-wallet" type="button" data-nav-target="wallet"/);
 });
 
 test("wallet history hides ledger internals and presents understandable events", () => {
