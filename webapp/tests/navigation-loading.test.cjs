@@ -68,7 +68,7 @@ test('primary navigation resolves immediately and later read cannot change the c
   const state={currentView:'market',navigationStack:[],serverAvailable:true};
   const c=vm.createContext({state,primaryViews:new Set(['market','profile','training']),navigationDataMaxAge:15000,
     elements:{views,navButtons:[],shell:{classList:list()}},document:{body:{classList:list()}},window:{scrollTo(){}},
-    track(){},syncReferralsPage(){},syncBackNavigation(){},updateFloatingChatVisibility(){},observeVisibleListingCards(){},switchProfileTab(){},
+    track(){},syncReferralsPage(){},syncReferralHeader(){},syncBackNavigation(){},updateFloatingChatVisibility(){},observeVisibleListingCards(){},switchProfileTab(){},
     loadOptionalData:async()=>pending.promise,reportClientError(){},updateSyncStatus(){}});
   vm.runInContext(code('async function navigate','async function openContentSection'),c);
   await c.navigate('profile');assert.equal(state.currentView,'profile');

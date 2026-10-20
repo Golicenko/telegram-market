@@ -46,6 +46,8 @@ jobs:
         run: node webapp/tests/catalog-game-filters-browser.cjs
       - name: Profile reference layout, existing actions and safe mobile navigation (fixtures only)
         run: node webapp/tests/profile-reference-browser.cjs
+      - name: Referral references, confirmed rewards, native share and mobile modal lifecycle (fixtures only)
+        run: node webapp/tests/referral-reference-browser.cjs
       - name: Repeated navigation, request limits and outage recovery with 50 to 500 listings (fixtures only)
         run: node webapp/tests/catalog-navigation-browser.cjs
       - name: Real publication UI, signed API and isolated PostgreSQL (no payments)

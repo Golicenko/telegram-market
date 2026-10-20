@@ -300,7 +300,7 @@
     trainingForm?.elements.price_af_coins?.setAttribute("min", "0.01");
     document.getElementById("trainingMaterialForm")?.elements.title?.removeAttribute("maxlength");
     document.addEventListener("click", handleClick);
-    bind(document.getElementById("infoButton"), "click", () => openSecondary("help"), "infoButton");
+    bind(document.getElementById("infoButton"), "click", () => state.currentView === "more" ? openReferralInformation() : openSecondary("help"), "infoButton");
     renderHelpCenter();
     bind(document.getElementById("topupAmount"), "input", renderTopupSelection, "topupSelection");
     renderTopupSelection();
@@ -848,10 +848,11 @@ function handleClick(event) {
   function syncReferralsPage(viewName) {
     if (!referralsPage && viewName === "more") {
       referralsPage = window.AutoFlowReferrals.create({
-        api, notify,
+        api, notify: notifyToast,
         async refreshWallet() {
           state.me = await api.request("/me");
           renderBalance();
+          renderUser();
         },
       });
     }
@@ -860,6 +861,7 @@ function handleClick(event) {
 
   async function goBack() {
     if (window.AutoFlowDealConfirmation.dismiss()) return;
+    if (referralsPage?.dismiss()) return;
     const publicationModal = document.querySelector("dialog.publication-modal[open]");
     if (publicationModal) { publicationModal.dispatchEvent(new Event("cancel", { cancelable: true })); return; }
     if (elements.purchaseModal?.open) { await closePurchaseFlow(); return; }
@@ -914,6 +916,9 @@ function handleClick(event) {
     if (viewName !== "deal-chat") document.body.classList.remove("deal-details-required");
     document.body.classList.toggle("admin-open", viewName === "admin");
     document.body.classList.toggle("profile-open", viewName === "profile");
+    document.body.classList.toggle("more-open", viewName === "more");
+    if (viewName === "more") loadReferralBanner();
+    syncReferralHeader(viewName === "more");
     if (viewName === "deal-chat") updateChatViewport();
     updateFloatingChatVisibility();
     elements.views.forEach((view) => {
@@ -3699,6 +3704,44 @@ async function hideCurrentConversation() {
     }
   }
 
+  function openReferralInformation() {
+    openSecondary("help");
+    const article = document.getElementById("help-referrals");
+    if (!article) return;
+    article.open = true;
+    article.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+  }
+
+  function loadReferralBanner() {
+    const banner = document.getElementById("referralBannerImage");
+    if (!banner || banner.getAttribute("src")) return;
+    banner.onload = () => document.body.classList.add("has-referral-art");
+    banner.onerror = () => { document.body.classList.remove("has-referral-art"); banner.removeAttribute("src"); };
+    // No image request at startup in Market/Profile: load once, only in More.
+    banner.src = banner.dataset.referralBannerSrc;
+  }
+
+  function syncReferralHeader(active) {
+    state.referralHeaderObserver?.disconnect();
+    if (!active) { document.getElementById("headerAvatarName").style.removeProperty("max-width"); return; }
+    state.layoutReferralHeader ||= () => {
+      if (state.currentView !== "more") return;
+      const name = document.getElementById("headerAvatarName"), balance = document.querySelector(".header-balance");
+      // Both offsets are relative to appHeader. Reserve the real wallet width,
+      // not a guessed width that fails for a long name or a large balance.
+      const width = Math.max(0, balance.offsetLeft - name.offsetLeft - 8);
+      if (name.style.maxWidth !== `${width}px`) name.style.maxWidth = `${width}px`;
+    };
+    if (typeof window.ResizeObserver === "function") {
+      state.referralHeaderObserver ||= new ResizeObserver(state.layoutReferralHeader);
+      state.referralHeaderObserver.observe(document.getElementById("appHeader"));
+      state.referralHeaderObserver.observe(document.querySelector(".header-balance"));
+    } else if (!state.referralHeaderResizeBound) {
+      window.addEventListener("resize", state.layoutReferralHeader, { passive: true }); state.referralHeaderResizeBound = true;
+    }
+    state.layoutReferralHeader();
+  }
+
   function renderHelpCenter() {
     const openIds = new Set([...document.querySelectorAll(".help-article[open]")].map(item => item.id));
     const articles = window.AutoFlowHelp.articles(state.helpRules);
@@ -5479,12 +5522,15 @@ async function hideCurrentConversation() {
     const value = Number(state.me?.wallet.available_balance || 0).toFixed(2);
     document.querySelectorAll("[data-balance]").forEach((node) => { node.textContent = value; });
     document.querySelector(".profile-wallet")?.classList.toggle("is-large-balance", value.length > 9);
+    if (state.currentView === "more") state.layoutReferralHeader?.();
   }
 
   function renderUser() {
     const user = state.me?.user; if (!user) return;
     const name = [user.first_name, user.last_name].filter(Boolean).join(" ") || "Пользователь";
     document.getElementById("profileName").textContent = name;
+    const headerName = document.getElementById("headerAvatarName");
+    if (headerName) { headerName.textContent = name; headerName.title = name; }
     document.getElementById("profileName").title = name;
     document.getElementById("profileUsername").textContent = user.username ? `@${user.username}` : "Username не указан";
     document.getElementById("profileUsername").title = user.username ? `@${user.username}` : "Username не указан";
@@ -5493,6 +5539,7 @@ async function hideCurrentConversation() {
     [document.getElementById("headerAvatarFallback"), document.getElementById("profileAvatarFallback")].forEach((node) => { node.textContent = name.slice(0, 1).toUpperCase(); });
     [document.getElementById("headerAvatarImage"), document.getElementById("profileAvatarImage")].forEach((image) => {
       const fallback = image.previousElementSibling;
+      if (user.photo_url && image.getAttribute("src") === user.photo_url) return;
       image.hidden = true; fallback.hidden = false;
       image.onload = () => { image.hidden = false; fallback.hidden = true; };
       image.onerror = () => { image.hidden = true; fallback.hidden = false; };
@@ -5661,7 +5708,8 @@ async function hideCurrentConversation() {
       else resolve(window.confirm(message));
     });
   }
-  function notify(message) { if (telegram?.initData && telegram.showAlert) return telegram.showAlert(message); elements.toast.textContent = message; elements.toast.classList.add("is-visible"); clearTimeout(notify.timeout); notify.timeout = setTimeout(() => elements.toast.classList.remove("is-visible"), 2600); }
+  function notify(message) { if (telegram?.initData && telegram.showAlert) return telegram.showAlert(message); notifyToast(message); }
+  function notifyToast(message) { elements.toast.textContent = message; elements.toast.classList.add("is-visible"); clearTimeout(notifyToast.timeout); notifyToast.timeout = setTimeout(() => elements.toast.classList.remove("is-visible"), 2600); }
   function coin(extraClass = "") { const item = document.createElement("i"); item.className = `af-coin ${extraClass}`.trim(); item.setAttribute("aria-label", "AF Coins"); return item; }
   function absoluteMediaUrl(url) { return url.startsWith("/") ? `${api.baseUrl.replace(/\/api$/, "")}${url}` : url; }
   function listingTitle(listing) { return [listing?.brand, listing?.model].filter(Boolean).join(" ") || "Автомобиль"; }

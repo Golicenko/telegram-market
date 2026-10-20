@@ -14,7 +14,7 @@ interface ReferralPageOptions {
   refreshWallet(): Promise<void>;
 }
 interface Window {
-  AutoFlowReferrals: { create(options: ReferralPageOptions): { setActive(active: boolean): void } };
+  AutoFlowReferrals: { create(options: ReferralPageOptions): { setActive(active: boolean): void; dismiss(): boolean } };
   Telegram?: { WebApp?: {
     shareMessage?(id: string, callback: (sent: boolean) => void): void;
     isVersionAtLeast?(version: string): boolean;

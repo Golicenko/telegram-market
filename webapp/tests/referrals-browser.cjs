@@ -16,7 +16,7 @@ const server = http.createServer((req, res) => {
 
 (async () => {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await chromium.launch({ ...(process.env.CI ? {} : { channel: "msedge" }), headless: true });
   try {
     for (const width of [320, 360, 390, 430, 768]) {
       const context = await browser.newContext({ viewport: { width, height: 844 }, isMobile: true, hasTouch: true });
@@ -131,13 +131,19 @@ const server = http.createServer((req, res) => {
       assert.equal(shareCalls, callsBeforeUnsupported);
       // Server update (not local reward math) refreshes count, badges and wallet.
       invited = 20; balance = 188.45;
+      await page.clock.install();
+      await page.clock.fastForward(16000); // Existing finite navigation cache expires.
       await page.locator('.bottom-nav [data-nav-target="market"]').click();
-      await page.locator('[data-nav-target="more"]').click();
+      await page.locator('.bottom-nav [data-nav-target="more"]').click();
       await page.waitForFunction(() => document.getElementById("referralCount").textContent === "20");
       await page.waitForFunction(() => document.querySelector(".app-header [data-balance]").textContent === "188.45");
       assert.equal(await page.locator(".referral-milestone.is-complete").count(), 3);
       for (const card of await page.locator(".referral-milestone").all()) {
-        assert(await card.evaluate(node => node.querySelector("span").getBoundingClientRect().right <= node.getBoundingClientRect().right - 4),
+        assert(await card.evaluate(node => {
+          const box = node.getBoundingClientRect();
+          return [node.querySelector('.referral-milestone__title'), node.querySelector('.referral-milestone__completed > small')]
+            .every(label => { const rect = label.getBoundingClientRect(); return rect.left >= box.left + 4 && rect.right <= box.right - 4; });
+        }),
           "Completed milestone label stays inside its card");
       }
       assert(await page.locator("#referralLimit").isVisible());
