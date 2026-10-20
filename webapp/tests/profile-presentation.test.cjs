@@ -35,7 +35,7 @@ test('legacy images, signed external URLs and malformed historical URLs are not 
 function userPresentation(user) {
   const nodes = new Map();
   for (const id of ['profileName','profileUsername','profileTelegramId','copyProfileTelegramId','headerAvatarFallback','profileAvatarFallback','headerAvatarImage','profileAvatarImage']) {
-    nodes.set(id, { textContent:'', hidden:false, removeAttribute(name){ delete this[name]; } });
+    nodes.set(id, { textContent:'', hidden:false, getAttribute(name){return this[name] ?? null;}, removeAttribute(name){ delete this[name]; } });
   }
   nodes.get('headerAvatarImage').previousElementSibling = nodes.get('headerAvatarFallback');
   nodes.get('profileAvatarImage').previousElementSibling = nodes.get('profileAvatarFallback');
@@ -54,6 +54,7 @@ test('profile identity uses server values; avatar failure and removal restore in
   const image = nodes.get('profileAvatarImage'), fallback = nodes.get('profileAvatarFallback');
   assert.equal(image.hidden,true); assert.equal(fallback.textContent,'А');
   image.onload(); assert.equal(image.hidden,false); assert.equal(fallback.hidden,true);
+  const loaded = image.onload; render(); assert.equal(image.onload,loaded); assert.equal(image.hidden,false);
   image.onerror(); assert.equal(image.hidden,true); assert.equal(fallback.hidden,false);
   state.me.user.photo_url = null; render();
   assert.equal(image.src,undefined); assert.equal(fallback.hidden,false);

@@ -28,7 +28,8 @@ async function profileScenario(browser, { width, role, slow = false }) {
   await context.route(/^https:/, route => route.fulfill({ status:200, body:'' }));
   await context.addInitScript(({ platform, fallbackCopy, relativeApi }) => {
     if(relativeApi)window.AUTO_FLOW_API_BASE='/api';
-    const metrics = window.__profileFixture = { copies:[], confirms:[], listeners:0 };
+    const metrics = window.__profileFixture = { copies:[], confirms:[], listeners:0, networkEvents:[] };
+    for(const name of ['online','offline'])window.addEventListener(name,()=>metrics.networkEvents.push({type:name,online:navigator.onLine,time:performance.now()}),true);
     const nativeAdd = EventTarget.prototype.addEventListener;
     EventTarget.prototype.addEventListener = function(...args) { metrics.listeners++; return nativeAdd.apply(this, args); };
     Object.defineProperty(navigator, 'clipboard', { configurable:true, value:{ async writeText(value) {
@@ -233,7 +234,10 @@ async function profileScenario(browser, { width, role, slow = false }) {
     fs.writeFileSync(path.join(evidence,`profile-${suffix}.json`),JSON.stringify(result,null,2));
     console.log(`PASS ${suffix}: API identity/balance, ID copy, 17 owned +2 sold, all existing flows, role visibility, layout/safe areas, repeated navigation; no money/listing writes`);
   } catch(error) {
-    console.error(JSON.stringify({role,width,slow,errors,forbiddenWrites,lastRequests:requests.slice(-10)}));
+    const runtime=await page.evaluate(()=>({online:navigator.onLine,networkEvents:window.__profileFixture.networkEvents,
+      startup:document.getElementById('startupStatus')?.textContent,sync:document.getElementById('syncStatusText')?.textContent,
+      view:document.querySelector('[data-view].is-active')?.dataset.view})).catch(()=>null);
+    console.error(JSON.stringify({role,width,slow,errors,forbiddenWrites,lastRequests:requests.slice(-10),runtime}));
     await page.screenshot({path:path.join(evidence,`profile-failure-${role}-${width}.png`),fullPage:true}).catch(()=>{});
     throw error;
   } finally {await context.close();}

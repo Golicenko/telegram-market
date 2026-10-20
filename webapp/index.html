@@ -6,17 +6,17 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-8696ae5d4586" />
-    <link rel="stylesheet" href="css/style.css?v=af-8696ae5d4586" />
+    <meta name="autoflow-build" content="af-0fd0846343be" />
+    <link rel="stylesheet" href="css/style.css?v=af-0fd0846343be" />
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-8696ae5d4586" defer></script>
-    <script src="js/referrals.js?v=af-8696ae5d4586" defer></script>
-    <script src="js/deal-confirmation.js?v=af-8696ae5d4586" defer></script>
-    <script src="js/admin-operations.js?v=af-8696ae5d4586" defer></script>
-    <script src="js/analytics.js?v=af-8696ae5d4586" defer></script>
-    <script src="js/training-sales.js?v=af-8696ae5d4586" defer></script>
-    <script src="js/help.js?v=af-8696ae5d4586" defer></script>
-    <script src="js/app.js?v=af-8696ae5d4586" defer></script>
+    <script src="js/api.js?v=af-0fd0846343be" defer></script>
+    <script src="js/referrals.js?v=af-0fd0846343be" defer></script>
+    <script src="js/deal-confirmation.js?v=af-0fd0846343be" defer></script>
+    <script src="js/admin-operations.js?v=af-0fd0846343be" defer></script>
+    <script src="js/analytics.js?v=af-0fd0846343be" defer></script>
+    <script src="js/training-sales.js?v=af-0fd0846343be" defer></script>
+    <script src="js/help.js?v=af-0fd0846343be" defer></script>
+    <script src="js/app.js?v=af-0fd0846343be" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -28,11 +28,14 @@
         <button id="startupRetry" type="button" hidden>Повторить</button>
       </section>
       <header class="app-header" id="appHeader">
+        <img class="referral-banner-art" id="referralBannerImage" data-referral-banner-src="images/referral-hero-20261020.jpg" alt="AutoFlow Market" decoding="async" />
         <button class="header-balance" type="button" data-nav-target="wallet" aria-label="Открыть кошелёк AF Coins"><span data-balance>0.00</span><span class="af-coin" aria-label="AF Coins"></span><span class="balance-plus">＋</span></button>
+        <button class="referral-header-topup" id="referralHeaderTopup" type="button" data-open-topup aria-label="Пополнить баланс AF Coins">＋</button>
         <div class="logo" aria-label="AutoFlow Market"><span class="logo__auto">AUTOFLOW</span><span class="logo__speed" aria-hidden="true"></span><span class="logo__market">MARKET</span></div>
         <div class="header-lower">
           <button class="info-button" id="infoButton" type="button"><span aria-hidden="true">▰</span> Информация <span aria-hidden="true">›</span></button>
           <div class="header-avatar" aria-label="Аватар пользователя"><span id="headerAvatarFallback">A</span><img id="headerAvatarImage" alt="Фотография профиля" hidden /></div>
+          <span class="header-avatar-name" id="headerAvatarName"></span>
           <span class="header-spacer" aria-hidden="true"></span>
         </div>
       </header>
@@ -313,23 +316,22 @@
         </section>
         <section class="view referral-view" data-view="more" aria-labelledby="referralTitle" hidden>
           <header class="referral-heading">
-            <span class="referral-symbol" aria-hidden="true">↗</span>
-            <div><h1 id="referralTitle">Реферальная программа</h1><p>Приглашай друзей и получай бонусы</p></div>
+            <span class="referral-symbol" aria-hidden="true"><svg viewBox="0 0 48 40"><circle cx="18" cy="10" r="7"/><circle cx="34" cy="9" r="6"/><path d="M5 36v-6c0-13 26-13 26 0v6H5ZM30 18c13-3 16 6 16 11v4H34v-3c0-5-1-9-4-12Z"/></svg></span>
+            <div><h1 id="referralTitle"><span>Реферальная</span><span>программа</span></h1><p>Приглашай друзей и получай бонусы</p></div>
           </header>
           <div id="referralStatus" class="referral-status" role="status" aria-live="polite">Загрузка программы…</div>
           <button id="referralRetry" class="ghost-button" type="button" hidden>Попробовать снова</button>
           <div id="referralContent" hidden>
-            <p class="referral-commission"><strong id="referralPercent"></strong><span>с каждого пополнения друга</span></p>
-            <div class="referral-count" aria-live="polite">Приглашено друзей: <strong id="referralCount"></strong></div>
+            <div class="referral-stats"><p class="referral-commission"><strong id="referralPercent"></strong><span>с каждого<br />пополнения<br />друга</span></p><div class="referral-count" aria-live="polite"><span class="referral-count__icon" aria-hidden="true"><svg viewBox="0 0 48 40"><circle cx="18" cy="10" r="7"/><circle cx="34" cy="9" r="6"/><path d="M5 36v-6c0-13 26-13 26 0v6H5ZM30 18c13-3 16 6 16 11v4H34v-3c0-5-1-9-4-12Z"/></svg></span><span>Приглашено<br />друзей:</span> <strong id="referralCount"></strong></div></div>
             <h2 class="referral-section-title">Награды за приглашения</h2>
             <div id="referralMilestones" class="referral-milestones"></div>
             <p id="referralLimit" class="referral-limit" hidden>Максимум приглашённых друзей достигнут</p>
             <div class="referral-link-panel">
               <label for="referralUrl">Ваша реферальная ссылка</label>
-              <div class="referral-link-row"><input id="referralUrl" type="text" readonly aria-label="Полная реферальная ссылка" /><button type="button" data-copy-referral aria-label="Скопировать ссылку">⧉</button></div>
+              <div class="referral-link-row"><input id="referralUrl" type="text" readonly aria-label="Полная реферальная ссылка" /><button type="button" data-copy-referral aria-label="Скопировать ссылку"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="7" width="12" height="15" rx="2"/><path d="M15 3H4v14"/></svg></button></div>
               <div class="referral-actions">
-                <button type="button" class="ghost-button" data-copy-referral>Скопировать</button>
-                <button id="referralShare" type="button" class="publish-button">Переслать</button>
+                <button type="button" class="ghost-button" data-copy-referral><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="7" width="12" height="15" rx="2"/><path d="M15 3H4v14"/></svg><span>Скопировать</span></button>
+                <button id="referralShare" type="button" class="publish-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m2 10 20-8-5 20-6-7-5 4 1-7 10-6-8 8Z"/></svg><span id="referralShareLabel">Переслать</span></button>
               </div>
             </div>
           </div>
@@ -345,6 +347,7 @@
       </nav>
     </div>
 
+    <dialog class="modal referral-reward-modal" id="referralRewardModal" aria-labelledby="referralRewardTitle" aria-describedby="referralRewardDescription" aria-modal="true"><button class="referral-reward-close" type="button" data-close-referral-reward aria-label="Закрыть">×</button><span class="referral-reward-mark" aria-hidden="true">✦</span><h2 id="referralRewardTitle"></h2><p id="referralRewardDescription"></p><p id="referralRewardProgressLabel"></p><progress id="referralRewardProgress" value="0" max="1" aria-label="Прогресс приглашений"></progress><p id="referralRewardStatus" role="status" aria-live="polite"></p><button class="referral-reward-dismiss" type="button" data-close-referral-reward>Понятно</button></dialog>
     <dialog class="modal purchase-modal" id="purchaseModal"><div class="modal-head"><div><span class="eyebrow">Покупка автомобиля</span><h2 id="purchaseModalTitle">Покупка автомобиля</h2></div><button type="button" data-close-purchase aria-label="Закрыть">×</button></div><p id="purchaseModalText">Цена автомобиля</p><div class="purchase-modal__amount" id="purchaseModalAmount"></div><p class="security-note" id="purchaseModalNote">Деньги будут под защитой до получения автомобиля. Продавец получит их только после вашего подтверждения.</p><button class="publish-button" id="purchaseModalAction" type="button">Подтвердить покупку</button><button class="ghost-button" type="button" data-close-purchase>Отмена</button></dialog>
     <dialog class="modal promotion-choice-modal" id="promotionChoiceModal"><div class="modal-head"><div><span class="eyebrow">Продвижение</span><h2>Закрепить объявление?</h2></div></div><p>Ваше объявление будет показываться выше остальных в течение 24 часов.</p><div class="purchase-modal__amount">5 <span class="af-coin af-coin--small" aria-label="AF Coins"></span></div><button class="publish-button" id="promotionChoicePaid" type="button">Закрепить за 5 AF</button><button class="ghost-button" id="promotionChoiceFree" type="button">Опубликовать бесплатно</button></dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
