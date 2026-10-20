@@ -94,7 +94,7 @@ async function scenario(browser, count) {
       else if(endpoint.endsWith('/mark-seen'))body={unseen_count:0,marker:1};
       else if(endpoint==='/content/unseen')body={unique:{unseen_count:0,marker:1},training:{unseen_count:0,marker:1}};
       else if(endpoint==='/conversations/unread-summary')body={total_unread:0,conversations:[]};
-      else if(endpoint==='/referrals')body={referralCode:'TEST62',referralUrl:'https://t.me/FixtureBot?startapp=TEST62',referralCount:0,referralLimit:20,commissionPercent:5,canInvite:true,milestones:[]};
+      else if(endpoint==='/referrals')body={referralCode:'TEST62',referralUrl:'https://t.me/FixtureBot?startapp=TEST62',referralCount:0,referralLimit:20,commissionPercent:5,canInvite:true,milestones:[{count:3,reward:10,completed:false},{count:10,reward:15,completed:false},{count:20,reward:50,completed:false}]};
       else if(endpoint==='/advertisement')body={is_active:false};
       else if(endpoint.match(/^\/listings\/[^/]+\/view$/))body={views_count:1,likes_count:0,liked_by_me:false};
       else if(endpoint.match(/^\/listings\/[^/]+$/))body=[...regular,...unique].find(item=>endpoint.endsWith('/'+item.id));
@@ -137,12 +137,17 @@ async function scenario(browser, count) {
     assert.equal(await page.locator('[data-view=market]').isVisible(),true);
     assert.equal(await page.locator('#marketCars [data-listing-card]').count(),count,'outage retains cached catalogue');
     profileFailure=false;delay=0;
-    const after=checkpoints.at(-1), initial=checkpoints[0];
+    const after=checkpoints.at(-1), initial=checkpoints[0], warmed=checkpoints.find(point=>point.label==='after5');
     if(!baseline){
       assert(after.dataRequests-initial.dataRequests<=16,'50 cached switches must not repeat every catalogue/profile request');
       assert.equal(after.stableMarketCard,true,'unchanged listings keep the same DOM nodes across unrelated navigation');
       assert(after.cardsAdded-initial.cardsAdded<=count,'unrelated profile/content results must not recreate both catalogues');
-      assert(after.listenersAdded-initial.listenersAdded<=12,'listeners must not grow per navigation');
+      // The first complete five-tab cycle lazily mounts each section once.
+      // Compare every subsequent switch against that warm state: unlike a
+      // larger cold-start allowance, this permits no per-navigation growth.
+      assert.equal(after.listenersAdded,warmed.listenersAdded,'listeners must not grow after the first complete tab cycle');
+      assert.equal(await page.locator('#referralStatus').textContent(),'','the referral fixture must satisfy the real summary contract without retry churn');
+      assert.equal(await page.locator('#referralMilestones [data-referral-milestone]').count(),3);
       assert(after.observersActive<=2,'listing observers do not accumulate');
       assert(after.nodes<=initial.nodes+100,'DOM size remains bounded after navigation');
       assert(rapid.dataRequests<=6,'rapid delayed loads are deduplicated per data source');
