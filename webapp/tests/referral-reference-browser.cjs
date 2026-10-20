@@ -322,6 +322,15 @@ async function scenario(browser,width,{failure=false}={}) {
 (async()=>{
   fs.mkdirSync(evidence,{recursive:true});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const browser=await chromium.launch({...(process.env.CI?{}:{channel:'msedge'}),headless:true});
-  try{for(const width of widths)await scenario(browser,width);if(process.env.REFERRAL_SKIP_FAILURE!=='1')await scenario(browser,390,{failure:true});}
+  try{
+    // Each width owns its context, routes, SDK state and evidence filenames.
+    // Settle both before closing the browser, including when one width fails.
+    for(let index=0;index<widths.length;index+=2){
+      const results=await Promise.allSettled(widths.slice(index,index+2).map(width=>scenario(browser,width)));
+      const failure=results.find(result=>result.status==='rejected');
+      if(failure)throw failure.reason;
+    }
+    if(process.env.REFERRAL_SKIP_FAILURE!=='1')await scenario(browser,390,{failure:true});
+  }
   finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);server.close();process.exitCode=1;});
