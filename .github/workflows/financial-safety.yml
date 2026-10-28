@@ -50,6 +50,8 @@ jobs:
         run: node webapp/tests/referral-reference-browser.cjs
       - name: Repeated navigation, request limits and outage recovery with 50 to 500 listings (fixtures only)
         run: node webapp/tests/catalog-navigation-browser.cjs
+      - name: Navigation races, populated sections, resume and withdrawal help (fixtures only)
+        run: node webapp/tests/navigation-resilience-browser.cjs
       - name: Real publication UI, signed API and isolated PostgreSQL (no payments)
         run: python -m pytest -q -s tests/test_publication_browser_postgres.py
         working-directory: backend

@@ -157,6 +157,41 @@ async function profileScenario(browser, { width, role, slow = false }) {
     for(const control of [topup,withdraw,profileView.locator('[data-profile-tab="listings"]'),profileView.locator('[data-profile-tab="deals"]'),profileView.locator('[data-open-support]'),profileView.locator('[data-open-info]')]){
       const box=await control.boundingBox();assert(box.height>=44 && box.width>=44,`small tap target ${JSON.stringify(box)}`);assert(box.x>=0 && box.x+box.width<=width+1);
     }
+    if(width===390 && !slow){
+      const actionEvidence=path.join(__dirname,'evidence/perf-20261028/after');fs.mkdirSync(actionEvidence,{recursive:true});
+      const actions=profileView.locator('.profile-main-actions > button'),listingsAction=profileView.locator('[data-profile-tab="listings"]');
+      const normalStyles=await actions.evaluateAll(nodes=>nodes.filter(node=>!node.classList.contains('profile-admin')).map(node=>{
+        const style=getComputedStyle(node);return {border:style.borderColor,background:style.backgroundImage};
+      }));
+      assert(normalStyles.every(style=>style.border==='rgb(48, 77, 110)' && style.background===normalStyles[0].background),'all resting profile actions share navy styling, including withdrawals and listings');
+      assert.equal(await profileView.locator('.profile-main-actions > button.is-active').count(),0,'profile opens without a default selected action');
+      if(role==='admin')assert.match(await profileView.locator('.profile-admin').evaluate(node=>getComputedStyle(node).backgroundImage),/31, 27, 59/,'admin retains its separate purple styling');
+      await page.waitForFunction(()=>!document.getElementById('toast').classList.contains('is-visible') && document.getElementById('chatNotification').hidden);
+      await page.screenshot({path:path.join(actionEvidence,`profile-actions-normal-${role}-390.png`),animations:'disabled'});
+      const box=await listingsAction.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
+      try{
+        await page.waitForFunction(()=>getComputedStyle(document.querySelector('.profile-main-actions [data-profile-tab="listings"]')).borderColor==='rgb(218, 156, 50)');
+        assert.match(await listingsAction.evaluate(node=>getComputedStyle(node).transform),/0\.985/,'press has an immediate small scale instead of a navigation delay');
+        await page.screenshot({path:path.join(actionEvidence,`profile-actions-pressed-${role}-390.png`),animations:'disabled'});
+      }finally{await page.mouse.up();}
+      assert.equal(await profileView.locator('.profile-main-actions > button.is-active').count(),1);
+      assert.equal(await listingsAction.getAttribute('aria-pressed'),'true');
+      await page.screenshot({path:path.join(actionEvidence,`profile-actions-selected-${role}-390.png`),animations:'disabled'});
+      await page.emulateMedia({reducedMotion:'reduce'});
+      assert(await listingsAction.evaluate(node=>getComputedStyle(node).transitionDuration.split(',').every(value=>parseFloat(value)<=.001)),'reduced-motion disables button transitions');
+      await page.mouse.down();
+      try{assert.equal(await listingsAction.evaluate(node=>getComputedStyle(node).transform),'none','reduced-motion removes the press transform');}
+      finally{await page.mouse.up();}
+      await page.emulateMedia({reducedMotion:'no-preference'});
+      await topup.click();await view('topup');
+      assert.equal(await page.locator('.profile-main-actions > button.is-active').count(),0,'leaving the profile clears its selection');
+      await returnProfile();
+      assert.equal(await profileView.locator('.profile-main-actions > button.is-active').count(),0,'returning does not revive the previous highlight');
+      await listingsAction.focus();await page.keyboard.press('Enter');
+      assert.equal(await listingsAction.getAttribute('aria-pressed'),'true','keyboard activation uses the same selected state');
+      assert.equal(await profileView.locator('.profile-main-actions > button.is-active').count(),1);
+      await returnProfile();
+    }
     const cards=profileView.locator('#profileActiveCars .profile-mini-card');
     const first=cards.first();
     assert.match(await first.innerText(),/BMW M5 F90/);

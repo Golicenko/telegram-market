@@ -68,11 +68,11 @@ test('primary navigation resolves immediately and later read cannot change the c
   const state={currentView:'market',navigationStack:[],serverAvailable:true};
   const c=vm.createContext({state,primaryViews:new Set(['market','profile','training']),navigationDataMaxAge:15000,
     elements:{views,navButtons:[],shell:{classList:list()}},document:{body:{classList:list()}},window:{scrollTo(){}},
-    track(){},syncReferralsPage(){},syncReferralHeader(){},syncBackNavigation(){},updateFloatingChatVisibility(){},observeVisibleListingCards(){},switchProfileTab(){},
+    track(){},selectProfileAction(){},syncReferralsPage(){},syncReferralHeader(){},syncBackNavigation(){},updateFloatingChatVisibility(){},observeVisibleListingCards(){},switchProfileTab(){},
     loadOptionalData:async()=>pending.promise,reportClientError(){},updateSyncStatus(){}});
   vm.runInContext(code('async function navigate','async function openContentSection'),c);
   await c.navigate('profile');assert.equal(state.currentView,'profile');
-  await c.navigate('market');assert.equal(state.currentView,'market');pending.resolve([]);await Promise.resolve();assert.equal(state.currentView,'market');
+  await c.navigate('market');assert.equal(state.currentView,'market');assert.equal(state.navigationVersion,2);pending.resolve([]);await Promise.resolve();assert.equal(state.currentView,'market');
 });
 
 test('slow unread polling is single-flight and recovers after its first failure',async()=>{

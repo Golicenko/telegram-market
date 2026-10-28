@@ -16,8 +16,8 @@ from .broadcasts import recover_admin_broadcasts
 from .database import engine
 from .message_notifications import run_message_notification_worker
 from .frontend import FRONTEND_BUILD, WEBAPP_DIR, versioned_webapp_url
-from .routes import UPLOAD_DIR, recover_deal_purchase_notifications, recover_training_background_jobs, run_deal_transfer_reminder_worker, run_seller_response_timeout_worker, router
-from .referral_routes import router as referral_router
+from .routes import UPLOAD_DIR, recover_deal_purchase_notifications, recover_training_background_jobs, run_deal_transfer_reminder_worker, run_seller_response_timeout_worker, router, shutdown_help_gift_catalog
+from .referral_routes import router as referral_router, shutdown_referral_identity, warm_referral_identity
 from .admin_operations import router as admin_operations_router
 from .analytics import router as analytics_router, run_analytics_retention
 from .referrals import backfill_referral_codes
@@ -69,6 +69,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(run_startup_job("message_notification_worker", run_message_notification_worker)),
         asyncio.create_task(run_startup_job("broadcast_recovery", recover_admin_broadcasts)),
         asyncio.create_task(run_startup_job("referral_code_backfill", backfill_referral_codes)),
+        asyncio.create_task(run_startup_job("referral_bot_identity", warm_referral_identity)),
         asyncio.create_task(run_startup_job("analytics_retention", run_analytics_retention)),
         asyncio.create_task(run_startup_job("publication_recovery", run_publication_worker)),
         asyncio.create_task(run_startup_job("vip_recovery", run_promotion_worker)),
@@ -80,6 +81,8 @@ async def lifespan(_app: FastAPI):
             if not recovery_task.done():
                 recovery_task.cancel()
         await asyncio.gather(*recovery_tasks, return_exceptions=True)
+        await shutdown_referral_identity()
+        await shutdown_help_gift_catalog()
         await engine.dispose()
 
 
