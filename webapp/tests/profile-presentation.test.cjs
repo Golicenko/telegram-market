@@ -77,3 +77,59 @@ test('balance formatting still uses the existing available balance and only adap
   state.me.wallet.available_balance='1234567890.12'; render();
   assert(nodes.every(node=>node.textContent==='1234567890.12')); assert.equal(flags.get('is-large-balance'),true);
 });
+
+function miniListingsPresentation() {
+  function node(tagName) {
+    return {tagName,children:[],dataset:{},className:'',textContent:'',replacements:0,
+      classList:{toggle(){}},setAttribute(){},addEventListener(){},
+      append(...children){this.children.push(...children);},
+      replaceChildren(...children){this.children=children;this.replacements++;}};
+  }
+  const render=loadFunction('renderMiniListings','profileActionButton',{
+    state:{},document:{createElement:node},safeArray:value=>Array.isArray(value)?value:[],
+    listingTitle:listing=>listing.title,listingGameLabel:listing=>listing.game_version,
+    statusLabel:status=>status,formatDate:value=>value,formatNumber:value=>String(value),
+    coin:()=>node('coin'),profileActionButton:(_icon,label)=>Object.assign(node('button'),{textContent:label}),
+  });
+  return {render,container:node('section'),node};
+}
+
+test('unchanged owned-listing data preserves row identity, while real price/VIP changes update controls', () => {
+  const {render,container}=miniListingsPresentation();
+  const listing={id:'owned-one',title:'BMW M5',game_version:'car_parking_1',status:'active',images:[],price_af_coins:100,pinned:false};
+  render(container,[listing],'No listings',true);
+  const originalRow=container.children[0];
+  render(container,[JSON.parse(JSON.stringify(listing))],'No listings',true);
+  assert.equal(container.children[0],originalRow,'an equal server response must not rebuild existing image/action DOM');
+  assert.equal(container.replacements,1);
+  listing.price_af_coins=150;listing.pinned=true;listing.pinned_until='2026-10-29T12:00:00Z';
+  render(container,[listing],'No listings',true);
+  const changedRow=container.children[0];
+  assert.notEqual(changedRow,originalRow);
+  assert.equal(changedRow.children[2].children[0].textContent,'150');
+  assert.equal(changedRow.children[3].children[1].disabled,true);
+  assert.equal(changedRow.children[3].children[1].textContent,'Закреплено');
+});
+
+test('profile listing memoization is per container and reacts to permissions and empty states', () => {
+  const {render,container,node}=miniListingsPresentation(),other=node('section');
+  const listings=[{id:'one',title:'Car',game_version:'car_parking_2',status:'active',images:[],price_af_coins:25}];
+  render(container,listings,'Empty',true);render(other,listings,'Empty',true);
+  assert.equal(container.replacements,1);assert.equal(other.replacements,1);
+  render(container,listings,'Empty',false);
+  assert.equal(container.children[0].children.length,3,'removing owner controls invalidates the snapshot');
+  render(container,[],'No active listings',false);
+  assert.equal(container.children[0].textContent,'No active listings');
+  render(container,[],'No active listings',false);assert.equal(container.replacements,3);
+  render(container,[],'Nothing sold yet',false);
+  assert.equal(container.children[0].textContent,'Nothing sold yet');assert.equal(container.replacements,4);
+});
+
+test('a failed DOM replacement is not cached as a successful profile render', () => {
+  const {render,container}=miniListingsPresentation();
+  const listings=[{id:'one',title:'Car',game_version:'car_parking_2',status:'active',images:[],price_af_coins:25}];
+  const replace=container.replaceChildren;container.replaceChildren=()=>{throw Error('temporary rendering failure');};
+  assert.throws(()=>render(container,listings,'Empty',true),/temporary rendering failure/);
+  container.replaceChildren=replace;render(container,listings,'Empty',true);
+  assert.equal(container.children.length,1);assert.equal(container.replacements,1);
+});

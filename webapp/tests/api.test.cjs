@@ -150,6 +150,117 @@ test("timeout remains bounded without AbortController", async () => {
   );
 });
 
+for (const scenario of [
+  { name: "successful response", status: 200 },
+  { name: "HTTP error response", status: 503 },
+  { name: "older WebView response", status: 200, abortController: false },
+]) {
+  test(`timeout bounds a hanging JSON body after headers: ${scenario.name}`, async () => {
+    let calls = 0;
+    const { api, warnings } = loadApi(async () => {
+      calls += 1;
+      return { ...jsonResponse({}, scenario.status), json: () => new Promise(() => {}) };
+    }, "", { abortController: scenario.abortController });
+    let safetyTimer;
+    try {
+      const outcome = await Promise.race([
+        api.request("/health", { retries: 0, timeoutMs: 8 }).then(
+          () => "unexpected success",
+          (error) => error.errorType,
+        ),
+        new Promise((resolve) => { safetyTimer = setTimeout(() => resolve("body read remained pending"), 120); }),
+      ]);
+      assert.equal(outcome, "timeout");
+      assert.equal(calls, 1);
+      assert.equal(warnings.length, 1);
+    } finally {
+      clearTimeout(safetyTimer);
+    }
+  });
+}
+
+test("a hanging JSON body consumes only the configured GET retry budget", async () => {
+  let calls = 0;
+  const { api, warnings } = loadApi(async () => {
+    calls += 1;
+    return { ...jsonResponse({}), json: () => new Promise(() => {}) };
+  }, "", { abortController: false });
+  await assert.rejects(api.request("/me", { timeoutMs: 8, retries: 1, retryDelayMs: 1 }), (error) => error.errorType === "timeout");
+  assert.equal(calls, 2);
+  assert.equal(warnings.length, 2);
+});
+
+test("a timed-out JSON body never retries a POST automatically", async () => {
+  let calls = 0;
+  const { api } = loadApi(async () => {
+    calls += 1;
+    return { ...jsonResponse({}), json: () => new Promise(() => {}) };
+  });
+  await assert.rejects(api.request("/listings", { method: "POST", body: "{}", timeoutMs: 8 }), (error) => error.errorType === "timeout");
+  assert.equal(calls, 1);
+});
+
+test("a late JSON body from a timed-out attempt cannot replace a newer result", async () => {
+  let calls = 0;
+  let finishOldBody;
+  const { api, warnings } = loadApi(async () => {
+    calls += 1;
+    if (calls === 1) return { ...jsonResponse({}), json: () => new Promise((resolve) => { finishOldBody = resolve; }) };
+    return jsonResponse({ version: "new" });
+  }, "", { abortController: false });
+  let committed;
+  await api.request("/listings", { timeoutMs: 8, retries: 1, retryDelayMs: 1 }).then((result) => { committed = result; });
+  assert.deepEqual(committed, { version: "new" });
+  finishOldBody({ version: "old" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(committed, { version: "new" });
+  assert.equal(calls, 2);
+  assert.equal(warnings.length, 1);
+});
+
+for (const status of [200, 503]) {
+  test(`external cancellation interrupts an uncooperative JSON body (HTTP ${status})`, async () => {
+    let bodyStarted;
+    const started = new Promise((resolve) => { bodyStarted = resolve; });
+    let calls = 0;
+    const { api, warnings } = loadApi(async () => {
+      calls += 1;
+      return { ...jsonResponse({}, status), json: () => { bodyStarted(); return new Promise(() => {}); } };
+    }, "", { abortController: false });
+    const cancellation = new AbortController();
+    const request = api.request("/me", { signal: cancellation.signal, timeoutMs: 100, retries: 2, retryDelayMs: 1 });
+    await started;
+    cancellation.abort();
+    await assert.rejects(request, (error) => error.errorType === "aborted" && error.status === 0);
+    assert.equal(calls, 1);
+    assert.equal(warnings.length, 1);
+  });
+}
+
+test("an already cancelled request does not reach the network", async () => {
+  let calls = 0;
+  const { api } = loadApi(async () => { calls += 1; return jsonResponse({}); });
+  const cancellation = new AbortController();
+  cancellation.abort();
+  await assert.rejects(api.request("/me", { signal: cancellation.signal, timeoutMs: 20 }), (error) => error.errorType === "aborted");
+  assert.equal(calls, 0);
+});
+
+test("204 responses do not read a body", async () => {
+  const { api } = loadApi(async () => ({ ...jsonResponse({}, 204), json: () => { throw new Error("must not decode 204"); } }));
+  assert.equal(await api.request("/listings", { method: "DELETE", timeoutMs: 20 }), null);
+});
+
+test("unreadable HTTP error JSON preserves the original status mapping", async () => {
+  let calls = 0;
+  const { api } = loadApi(async () => {
+    calls += 1;
+    return { ...jsonResponse({}, 403), json: async () => { throw new SyntaxError("invalid error body"); } };
+  });
+  await assert.rejects(api.request("/me", { retries: 1 }), (error) => error.status === 403 && error.errorType === "http");
+  assert.equal(calls, 1);
+});
+
 test("429 is retried once and respects a bounded Retry-After", async () => {
   let calls = 0;
   const { api } = loadApi(async () => {

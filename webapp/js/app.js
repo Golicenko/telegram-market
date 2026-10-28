@@ -610,7 +610,10 @@
 
 function handleClick(event) {
   const target = event.target;
-  if (target.closest("[data-reload-help]")) return void loadHelpRules();
+  const profileAction = target.closest(".profile-main-actions > button");
+  if (profileAction) selectProfileAction(profileAction);
+  if (target.closest("[data-reload-help]")) return void loadHelpRules(true);
+  if (target.closest("[data-retry-withdrawal-example]")) return void loadHelpWithdrawalExample(true);
   const adminDealOpen = target.closest("[data-admin-deal-open]");
   if (adminDealOpen) return void openAdminDealControl(adminDealOpen.dataset.adminDealOpen);
   const adminDealAction = target.closest("[data-admin-deal-action]");
@@ -891,6 +894,8 @@ function handleClick(event) {
     if (viewName === "settings") viewName = "profile";
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
+    state.navigationVersion = (state.navigationVersion || 0) + 1;
+    selectProfileAction();
     if (state.currentView === "deal-chat" && viewName !== "deal-chat") {
       saveChatDraft();
       state.chatOpening = (state.chatOpening || 0) + 1;
@@ -910,15 +915,12 @@ function handleClick(event) {
     if (viewName === "help") void loadHelpRules();
     const viewEvent = { market: "market_viewed", training: "training_list_view", topup: "topup_screen_opened", support: "support_opened" }[viewName];
     if (viewEvent) track(viewEvent);
-    syncReferralsPage(viewName);
-    syncBackNavigation();
     document.body.classList.toggle("chat-open", viewName === "deal-chat");
     if (viewName !== "deal-chat") document.body.classList.remove("deal-details-required");
     document.body.classList.toggle("admin-open", viewName === "admin");
     document.body.classList.toggle("profile-open", viewName === "profile");
     document.body.classList.toggle("more-open", viewName === "more");
     if (viewName === "more") loadReferralBanner();
-    syncReferralHeader(viewName === "more");
     if (viewName === "deal-chat") updateChatViewport();
     updateFloatingChatVisibility();
     elements.views.forEach((view) => {
@@ -933,6 +935,10 @@ function handleClick(event) {
       active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
     });
     elements.shell.classList.toggle("is-focused", ["add", "wallet", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin", "training-purchase", "help", "activity"].includes(viewName));
+    // Commit the visible destination before initializing or refreshing a section.
+    syncReferralHeader(viewName === "more");
+    syncReferralsPage(viewName);
+    syncBackNavigation();
     if (viewName === "profile") switchProfileTab("listings");
     if (viewName === "add") void loadPublicationOptions();
     if (viewName === "admin") void loadPublicationAdmin();
@@ -1654,6 +1660,8 @@ function handleClick(event) {
   }
 
   function renderTraining() {
+    const snapshot = JSON.stringify([state.me?.user.id, state.me?.user.role, state.training, state.trainingPurchases]);
+    if (state.trainingRenderSnapshot === snapshot) return;
     elements.trainingCards.replaceChildren(...state.training.map((product) => {
       const card = document.createElement("article"); card.className = `training-card${product.pinned ? " is-pinned" : ""}${!product.published ? " is-draft" : ""}`;
       const open = document.createElement("button"); open.type = "button"; open.className = "training-card__open"; open.dataset.openTrainingProduct = product.id;
@@ -1678,6 +1686,7 @@ function handleClick(event) {
     }));
     elements.trainingEmpty.hidden = state.training.length > 0 || state.trainingPurchases.length > 0;
     renderTrainingLibrary();
+    state.trainingRenderSnapshot = snapshot;
   }
 
   async function buyNowFlow(id) {
@@ -2503,11 +2512,15 @@ function handleClick(event) {
   }
 
   function renderMiniListings(container, listings, emptyText, ownerControls = false) {
+    state.profileListingSnapshots ||= new WeakMap();
+    const snapshot = JSON.stringify([ownerControls, emptyText, listings]);
+    if (state.profileListingSnapshots.get(container) === snapshot) return;
     if (!listings.length) {
       const empty = document.createElement("div");
       empty.className = "history-empty";
       empty.textContent = emptyText;
       container.replaceChildren(empty);
+      state.profileListingSnapshots.set(container, snapshot);
       return;
     }
     container.replaceChildren(...listings.map((listing) => {
@@ -2558,6 +2571,7 @@ function handleClick(event) {
       }
       return row;
     }));
+    state.profileListingSnapshots.set(container, snapshot);
   }
 
   function profileActionButton(iconName, label) {
@@ -2741,10 +2755,17 @@ async function hideCurrentConversation() {
     notify(frozen > 0 ? "Средства заморожены в активных сделках или заявках на вывод" : "Замороженных средств сейчас нет");
   }
 
+  function selectProfileAction(button = null) {
+    document.querySelectorAll(".profile-main-actions > button").forEach(item => {
+      const active = item === button;
+      item.classList.toggle("is-active", active);
+      item.setAttribute("aria-pressed", String(active));
+    });
+  }
+
   function switchProfileTab(tabName) {
     if (!["listings", "deals", "history", "chats"].includes(tabName)) return;
     if (tabName !== "listings") void navigate("activity");
-    document.querySelectorAll("[data-profile-tab]").forEach((button) => button.classList.toggle("is-active", button.dataset.profileTab === tabName));
     document.querySelectorAll("[data-activity-tab]").forEach((button) => {
       const active = button.dataset.activityTab === tabName;
       button.classList.toggle("is-active", active); button.setAttribute("aria-pressed", String(active));
@@ -3652,8 +3673,12 @@ async function hideCurrentConversation() {
   }
 
   async function openTrainingPurchase(id) {
+    const opening = state.trainingOpening = (state.trainingOpening || 0) + 1;
+    const navigation = state.navigationVersion || 0;
+    const current = () => opening === state.trainingOpening && navigation === (state.navigationVersion || 0);
     try {
       const access = await api.request(`/training/purchases/${id}/access`);
+      if (!current()) return false;
       const purchase = access.purchase;
       const host = document.getElementById("trainingPurchaseContent");
       const cover = document.createElement("img"); cover.className = "training-detail__cover"; cover.src = absoluteMediaUrl(purchase.cover_url_snapshot); cover.alt = purchase.title_snapshot;
@@ -3679,7 +3704,7 @@ async function hideCurrentConversation() {
       const order = document.createElement("small"); order.textContent = `Заказ: ${purchase.id}`; host.append(order);
       await navigate("training-purchase");
       return true;
-    } catch (error) { reportClientError("training_purchase_access", error); notify("Не удалось открыть покупку. Попробуйте снова или обратитесь в поддержку."); return false; }
+    } catch (error) { if (current()) { reportClientError("training_purchase_access", error); notify("Не удалось открыть покупку. Попробуйте снова или обратитесь в поддержку."); } return false; }
   }
 
   async function openPurchasedMaterials(button) {
@@ -3693,15 +3718,56 @@ async function hideCurrentConversation() {
     finally { button.disabled = false; }
   }
 
-  async function loadHelpRules() {
-    try {
+  function loadHelpRules(force = false) {
+    if (state.helpRulesLoading) return state.helpRulesLoading;
+    if (!force && state.helpRules && Date.now() - state.helpRulesLoadedAt < 60000) return Promise.resolve();
+    state.helpRulesLoading = (async () => { try {
       const rules = await api.request("/help/rules");
       if (!rules?.publication) throw new Error("Условия временно недоступны");
-      state.helpRules = rules;
-      renderHelpCenter();
+      const changed = JSON.stringify(state.helpRules) !== JSON.stringify(rules);
+      state.helpRules = rules; state.helpRulesLoadedAt = Date.now();
+      if (changed) renderHelpCenter();
+      else document.getElementById("helpRulesStatus").textContent = "Тарифы и лимиты получены с сервера. Итог операции всегда проверяйте перед подтверждением.";
     } catch (_error) {
       document.getElementById("helpRulesStatus").textContent = "Точные тарифы сейчас недоступны. Повторите загрузку или проверьте расчёт перед оплатой.";
+    } })().finally(() => { state.helpRulesLoading = null; });
+    return state.helpRulesLoading;
+  }
+
+  function loadHelpWithdrawalExample(force = false) {
+    if (state.helpWithdrawalLoading) return state.helpWithdrawalLoading;
+    if (!force && state.helpWithdrawalExample && Date.now() - state.helpWithdrawalLoadedAt < 120000) { renderHelpWithdrawalExample(); return Promise.resolve(); }
+    state.helpWithdrawalError = false;
+    state.helpWithdrawalLoading = (async () => { try {
+      const example = await api.request("/help/withdrawal-example?amount=30", { timeoutMs: 10000, retries: 0 });
+      if (!["budget_af", "gross_af", "fee_af", "unspent_af"].every(key => typeof example?.[key] === "string" && /^\d+\.\d{2}$/.test(example[key]))
+          || !Number.isSafeInteger(example.payout_stars) || example.payout_stars <= 0 || !Number.isFinite(example.fee_percent)) throw new Error("Некорректный пример");
+      state.helpWithdrawalExample = example; state.helpWithdrawalLoadedAt = Date.now();
+    } catch (_error) { state.helpWithdrawalError = true; }
+    })().finally(() => { state.helpWithdrawalLoading = null; renderHelpWithdrawalExample(); });
+    renderHelpWithdrawalExample();
+    return state.helpWithdrawalLoading;
+  }
+
+  function renderHelpWithdrawalExample() {
+    const host = document.getElementById("helpWithdrawalExample");
+    if (!host) return;
+    const example = state.helpWithdrawalExample;
+    const heading = document.createElement("h3"); heading.textContent = example ? `Пример для бюджета ${formatNumber(example.budget_af)} AF` : "Пример расчёта вывода";
+    host.replaceChildren(heading);
+    if (example) {
+      const amounts = document.createElement("dl");
+      for (const [label, value] of [["Вы указали бюджет", `${formatNumber(example.budget_af)} AF`], ["Резерв всего", `${formatNumber(example.gross_af)} AF`],
+        [`В том числе комиссия (${formatNumber(example.fee_percent)}%)`, `${formatNumber(example.fee_af)} AF`], ["Остаётся на балансе", `${formatNumber(example.unspent_af)} AF`], ["Вы получите подарки стоимостью", `${formatNumber(example.payout_stars)} Stars`]]) {
+        const term = document.createElement("dt"), amount = document.createElement("dd"); term.textContent = label; amount.textContent = value; amounts.append(term, amount);
+      }
+      const note = document.createElement("p"); note.textContent = `${formatNumber(example.unspent_af)} AF не исчезают и не ждут возврата: эта часть бюджета не резервируется и остаётся доступной. Пример основан на каталоге подарков; перед созданием заявки сервер рассчитает сумму заново.`;
+      host.append(amounts, note);
     }
+    const status = document.createElement("p"); status.setAttribute("role", "status");
+    status.textContent = state.helpWithdrawalError ? "Не удалось обновить пример. Остальная информация доступна; попробуйте снова." : state.helpWithdrawalLoading ? "Получаем пример по действующим правилам…" : "Это пояснение, не заявка на вывод. Никакие средства не резервируются.";
+    host.append(status);
+    if (state.helpWithdrawalError) { const retry = document.createElement("button"); retry.type = "button"; retry.dataset.retryWithdrawalExample = ""; retry.textContent = "Повторить расчёт примера"; host.append(retry); }
   }
 
   function openReferralInformation() {
@@ -3760,6 +3826,11 @@ async function hideCurrentConversation() {
         illustration.append(caption, route); content.append(illustration);
       }
       const warning = document.createElement("p"); warning.className = "help-warning"; warning.textContent = article.warning;
+      if (article.withdraw) {
+        const example = document.createElement("section"); example.id = "helpWithdrawalExample"; example.className = "help-withdrawal-example";
+        content.append(example);
+        section.addEventListener("toggle", () => { if (section.open) void loadHelpWithdrawalExample(); });
+      }
       const action = document.createElement("button"); action.type = "button"; action.textContent = article.action;
       if (article.view) action.dataset.navTarget = article.view;
       else if (article.profile) action.addEventListener("click", () => { void navigate("profile"); switchProfileTab(article.profile); });
@@ -3770,14 +3841,19 @@ async function hideCurrentConversation() {
       content.append(warning, action); section.append(title, content); return section;
     }));
     document.getElementById("helpRulesStatus").textContent = state.helpRules ? "Тарифы и лимиты получены с сервера. Итог операции всегда проверяйте перед подтверждением." : "Актуальные тарифы загружаются при открытии раздела.";
+    renderHelpWithdrawalExample();
   }
 
   async function openTrainingProduct(id) {
     const owned = state.trainingPurchases.find((item) => String(item.product_id) === String(id));
     if (owned) return openTrainingPurchase(owned.id);
+    const opening = state.trainingOpening = (state.trainingOpening || 0) + 1;
+    const navigation = state.navigationVersion || 0;
+    const current = () => opening === state.trainingOpening && navigation === (state.navigationVersion || 0);
     try {
       const cached = state.training.find((item) => String(item.id) === String(id));
       const product = cached?.published === false ? cached : await api.request(`/training/${id}`);
+      if (!current()) return false;
       state.selectedTraining = product;
       track("training_product_view", product.id);
       document.getElementById("trainingDetailCover").src = absoluteMediaUrl(product.cover_url);
@@ -3797,11 +3873,12 @@ async function hideCurrentConversation() {
         try {
           const engagement = await api.request(`/training/${product.id}/view`, { method: "POST" });
           product.views_count = Number(engagement.views_count || 0);
-          document.getElementById("trainingDetailViews").textContent = `👁 ${product.views_count} просмотров`;
+          if (state.currentView === "training-detail" && state.selectedTraining === product) document.getElementById("trainingDetailViews").textContent = `👁 ${product.views_count} просмотров`;
         } catch (error) { reportClientError("training_view", error); }
       }
       return true;
     } catch (error) {
+      if (!current()) return false;
       if (Number(error?.status) === 404) {
         notify("Обучение недоступно");
         await navigate("training");

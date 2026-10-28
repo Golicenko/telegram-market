@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
+from time import monotonic
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -176,6 +177,11 @@ Image.MAX_IMAGE_PIXELS = 64_000_000  # Includes 48 MP phone photos; still a stri
 UPLOAD_DIR = Path(get_settings().upload_dir) if get_settings().upload_dir else Path(__file__).resolve().parents[1] / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_PROCESSING_SLOTS = asyncio.Semaphore(1)  # Bound peak memory for large HEIC/AVIF decodes.
+_help_gift_catalog_cache = None
+_help_gift_catalog_expires = 0
+_help_gift_catalog_task = None
+_HELP_GIFT_CATALOG_TTL_SECONDS = 120
+_HELP_GIFT_CATALOG_TIMEOUT_SECONDS = 8
 
 
 def resolve_training_admin_telegram_id(seller: User | None) -> int | None:
@@ -1243,6 +1249,75 @@ async def help_rules(user: User = Depends(get_current_user), session: AsyncSessi
         "renewal_stars": settings.vip_renewal_price_stars, "renewal_hours": settings.vip_renewal_hours,
         "referral_limit": REFERRAL_LIMIT, "referral_percent": COMMISSION_PERCENT,
         "milestones": [{"count": count, "reward": reward} for count, reward in MILESTONES]}
+
+
+async def _fetch_help_gift_catalog():
+    """Cache only the help illustration; financial quotes still fetch fresh gifts."""
+    from .gift_withdrawals import available_gifts
+    global _help_gift_catalog_cache, _help_gift_catalog_expires
+    try:
+        async with asyncio.timeout(_HELP_GIFT_CATALOG_TIMEOUT_SECONDS):
+            gifts = await available_gifts()
+    except (TimeoutError, HTTPException, ValueError, TypeError):
+        raise HTTPException(503, "Пример вывода временно недоступен. Попробуйте позже.") from None
+    _help_gift_catalog_cache = gifts
+    _help_gift_catalog_expires = monotonic() + _HELP_GIFT_CATALOG_TTL_SECONDS
+    return gifts
+
+
+def _help_gift_catalog_finished(task):
+    global _help_gift_catalog_task
+    if _help_gift_catalog_task is task:
+        _help_gift_catalog_task = None
+    if not task.cancelled():
+        task.exception()
+
+
+async def _help_gift_catalog():
+    global _help_gift_catalog_task
+    if _help_gift_catalog_cache is not None and monotonic() < _help_gift_catalog_expires:
+        return _help_gift_catalog_cache
+    loop = asyncio.get_running_loop()
+    if _help_gift_catalog_task is None or _help_gift_catalog_task.done() or _help_gift_catalog_task.get_loop() is not loop:
+        _help_gift_catalog_task = loop.create_task(_fetch_help_gift_catalog(), name="help_gift_catalog")
+        _help_gift_catalog_task.add_done_callback(_help_gift_catalog_finished)
+    return await asyncio.shield(_help_gift_catalog_task)
+
+
+async def shutdown_help_gift_catalog():
+    global _help_gift_catalog_task
+    task = _help_gift_catalog_task
+    if task is not None and task.get_loop() is asyncio.get_running_loop():
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if _help_gift_catalog_task is task:
+            _help_gift_catalog_task = None
+
+
+@router.get("/help/withdrawal-example")
+async def help_withdrawal_example(
+    response: Response,
+    amount: Decimal = Query(default=Decimal("30.00"), gt=0, le=Decimal("999999999"), decimal_places=2),
+    user: User = Depends(get_current_user),
+):
+    from .gift_withdrawals import WITHDRAWAL_FEE_PERCENT, calculate_quote
+    del user
+    response.headers["Cache-Control"] = "no-store"
+    gifts = await _help_gift_catalog()
+    try:
+        values = calculate_quote(amount, gifts)
+    except HTTPException:
+        raise HTTPException(503, "Для этой суммы сейчас нет доступной комбинации подарков. Попробуйте позже.") from None
+    return {
+        "budget_af": format(amount, ".2f"),
+        "gross_af": format(values["gross_af"], ".2f"),
+        "fee_af": format(values["fee_af"], ".2f"),
+        "payout_stars": values["payout_stars"],
+        "unspent_af": format(values["unspent_af"], ".2f"),
+        "fee_percent": WITHDRAWAL_FEE_PERCENT,
+        "gift_plan": [{"count": item["quantity"], "star_count": item["star_count"]} for item in values["gift_plan"]],
+    }
 
 
 @router.post("/uploads", status_code=201)

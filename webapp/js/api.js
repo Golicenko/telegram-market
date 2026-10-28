@@ -172,36 +172,52 @@
       let timedOut = false;
       const startedAt = performance.now();
       const externalSignal = fetchOptions.signal;
-      const forwardAbort = () => controller?.abort();
-      externalSignal?.addEventListener?.("abort", forwardAbort, { once: true });
+      let interruptRequest;
+      const forwardAbort = () => {
+        interruptRequest?.(new ApiError(0, "Загрузка отменена", { endpoint: safeEndpoint(url), errorType: "aborted", autoflowErrorId: errorId }));
+        controller?.abort();
+      };
       let timeout;
       try {
         const timeoutRequest = new Promise((_resolve, reject) => {
+          interruptRequest = reject;
           timeout = window.setTimeout(() => {
             timedOut = true;
-            controller?.abort();
             reject(new ApiError(0, "Сервер не ответил вовремя", { endpoint: safeEndpoint(url), errorType: "timeout", autoflowErrorId: errorId }));
+            controller?.abort();
           }, Math.max(1, timeoutMs));
         });
-        const request = fetch(url, { ...fetchOptions, headers, signal: controller?.signal || externalSignal });
-        const response = await Promise.race([request, timeoutRequest]);
-        if (!response.ok) {
-          let detail = response.statusText || "Ошибка запроса";
-          try {
-            const payload = await response.json();
-            detail = payload.detail || payload;
-          } catch (_error) { /* Keep the HTTP status text. */ }
-          const retryAfter = Number(response.headers?.get?.("Retry-After") || 0);
-          throw new ApiError(response.status, detail, {
-            endpoint: safeEndpoint(url),
-            errorType: "http",
-            autoflowErrorId: errorId,
-            retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 0,
-          });
-        }
-        if (response.status === 204) return null;
-        try { return await response.json(); }
-        catch (error) { throw new ApiError(502, "Сервер вернул некорректный ответ", { endpoint: safeEndpoint(url), errorType: "invalid_json", cause: error, autoflowErrorId: errorId }); }
+        externalSignal?.addEventListener?.("abort", forwardAbort, { once: true });
+        if (externalSignal?.aborted) forwardAbort();
+        // Headers alone do not finish the request: JSON decoding shares its deadline.
+        const request = (async () => {
+          if (externalSignal?.aborted) return await timeoutRequest;
+          const response = await fetch(url, { ...fetchOptions, headers, signal: controller?.signal || externalSignal });
+          if (!response.ok) {
+            let detail = response.statusText || "Ошибка запроса";
+            try {
+              const payload = await response.json();
+              detail = payload.detail || payload;
+            } catch (error) {
+              if (timedOut || externalSignal?.aborted || error?.name === "AbortError") throw error;
+              /* Keep the HTTP status text for an unreadable error body. */
+            }
+            const retryAfter = Number(response.headers?.get?.("Retry-After") || 0);
+            throw new ApiError(response.status, detail, {
+              endpoint: safeEndpoint(url),
+              errorType: "http",
+              autoflowErrorId: errorId,
+              retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 0,
+            });
+          }
+          if (response.status === 204) return null;
+          try { return await response.json(); }
+          catch (error) {
+            if (timedOut || externalSignal?.aborted || error?.name === "AbortError") throw error;
+            throw new ApiError(502, "Сервер вернул некорректный ответ", { endpoint: safeEndpoint(url), errorType: "invalid_json", cause: error, autoflowErrorId: errorId });
+          }
+        })();
+        return await Promise.race([request, timeoutRequest]);
       } catch (rawError) {
         const durationMs = performance.now() - startedAt;
         const aborted = !timedOut && (rawError?.name === "AbortError" || externalSignal?.aborted);

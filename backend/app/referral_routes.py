@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import time
 import uuid
@@ -26,6 +27,9 @@ from .referrals import (
 router = APIRouter(prefix="/api/referrals", tags=["referrals"])
 _identity_cache = None
 _identity_expires = 0
+_identity_task = None
+_IDENTITY_TTL_SECONDS = 300
+_IDENTITY_TIMEOUT_SECONDS = 8
 # Content-addressed, unmodified owner-supplied JPEG, packaged by the existing Docker COPY.
 # When replacing it, use a new hash filename so Telegram cannot reuse the old photo.
 REFERRAL_PHOTO_PATH = "/images/referral-share.ffadf191b10c.jpg"
@@ -49,29 +53,74 @@ def referral_photo_url():
     return base.rstrip("/") + REFERRAL_PHOTO_PATH
 
 
-async def referral_url(code):
+async def _fetch_bot_identity():
     global _identity_cache, _identity_expires
-    if _identity_cache is None or time.monotonic() >= _identity_expires:
-        try:
+    try:
+        async with asyncio.timeout(_IDENTITY_TIMEOUT_SECONDS):
             result = (await call_bot_api("getMe", {}))["result"]
-            username = str(result.get("username") or "")
-            if (
-                not username
-                or not username.replace("_", "").isascii()
-                or not username.replace("_", "").isalnum()
-            ):
-                raise ValueError("Invalid bot username")
-        except (HTTPException, KeyError, TypeError, ValueError) as exc:
-            raise HTTPException(
-                503, "Не удалось получить реферальную ссылку. Попробуйте позже."
-            ) from exc
-        _identity_cache, _identity_expires = result, time.monotonic() + 300
-    base = f"https://t.me/{quote(_identity_cache['username'], safe='')}"
+        username = str(result.get("username") or "")
+        if (
+            not username
+            or not username.replace("_", "").isascii()
+            or not username.replace("_", "").isalnum()
+        ):
+            raise ValueError("Invalid bot username")
+    except (TimeoutError, HTTPException, KeyError, TypeError, ValueError):
+        raise HTTPException(
+            503, "Не удалось получить реферальную ссылку. Попробуйте позже."
+        ) from None
+    _identity_cache, _identity_expires = result, time.monotonic() + _IDENTITY_TTL_SECONDS
+    return result
+
+
+def _identity_finished(task):
+    global _identity_task
+    if _identity_task is task:
+        _identity_task = None
+    # A disconnected caller does not own the shared request. Retrieve an error
+    # even when all waiters have left; the next request can retry normally.
+    if not task.cancelled():
+        task.exception()
+
+
+async def _verified_bot_identity():
+    global _identity_task
+    if _identity_cache is not None and time.monotonic() < _identity_expires:
+        return _identity_cache
+    loop = asyncio.get_running_loop()
+    if _identity_task is None or _identity_task.done() or _identity_task.get_loop() is not loop:
+        _identity_task = loop.create_task(_fetch_bot_identity(), name="referral_bot_identity")
+        _identity_task.add_done_callback(_identity_finished)
+    # One cancelled HTTP request must not cancel verification for other users.
+    # The shared operation itself has an eight-second deadline, below the
+    # existing Mini App GET timeout. Expired identities are never served.
+    return await asyncio.shield(_identity_task)
+
+
+async def warm_referral_identity():
+    if get_settings().bot_token:
+        await _verified_bot_identity()
+
+
+async def shutdown_referral_identity():
+    global _identity_task
+    task = _identity_task
+    if task is not None and task.get_loop() is asyncio.get_running_loop():
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if _identity_task is task:
+            _identity_task = None
+
+
+async def referral_url(code):
+    identity = await _verified_bot_identity()
+    base = f"https://t.me/{quote(identity['username'], safe='')}"
     short_name = get_settings().telegram_mini_app_short_name
     if short_name:
         base += f"/{quote(short_name, safe='')}"
     key = (
-        "startapp" if short_name or _identity_cache.get("has_main_web_app") else "start"
+        "startapp" if short_name or identity.get("has_main_web_app") else "start"
     )
     return f"{base}?{urlencode({key: code})}"
 

@@ -184,15 +184,16 @@ input::placeholder, textarea::placeholder { color:#677381; }
 .profile-wallet .profile-chevron { position:absolute; right:6px; top:50%; transform:translateY(-50%); }
 .profile-chevron { color:#8ca6c5; font-size:23px; line-height:1; font-weight:300; }
 .profile-main-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:8px 0 11px; }
-.profile-main-actions>button { position:relative; display:grid; grid-template-columns:29px minmax(0,1fr) 8px; align-items:center; gap:9px; min-width:0; min-height:51px; padding:6px 9px; border:1px solid #304d6e; border-radius:10px; color:#f0f4fa; background:linear-gradient(115deg,#10243a,#06182a 70%,#0b2540); box-shadow:inset 0 1px 0 #bedaff09,0 4px 9px #0002; font-size:12px; font-weight:650; line-height:1.35; text-align:left; touch-action:manipulation; transition:border-color .16s,background-color .16s,transform .16s; }
-.profile-action-icon { display:grid; place-items:center; width:29px; height:32px; border:1px solid #5385b329; border-radius:9px; color:#9bcbff; background:linear-gradient(145deg,#1a3a5a,#10233c); box-shadow:0 0 10px #245c8821; }
+.profile-main-actions>button { position:relative; display:grid; grid-template-columns:29px minmax(0,1fr) 8px; align-items:center; gap:9px; min-width:0; min-height:51px; padding:6px 9px; border:1px solid #304d6e; border-radius:10px; color:#f0f4fa; background:linear-gradient(115deg,#10243a,#06182a 70%,#0b2540); box-shadow:inset 0 1px 0 #bedaff09,0 4px 9px #0002; font-size:12px; font-weight:650; line-height:1.35; text-align:left; touch-action:manipulation; transition:border-color .2s ease,box-shadow .2s ease,transform .12s ease; }
+.profile-action-icon { display:grid; place-items:center; width:29px; height:32px; border:1px solid #5385b329; border-radius:9px; color:#9bcbff; background:linear-gradient(145deg,#1a3a5a,#10233c); box-shadow:0 0 10px #245c8821; transition:color .2s ease,border-color .2s ease,box-shadow .2s ease; }
 .profile-action-icon .profile-icon { width:19px; height:19px; }
-.profile-main-actions>button.profile-action--gold { border-color:#6b4930; background:linear-gradient(115deg,#302218,#101922 75%,#3c2315); }
-.profile-action--gold .profile-action-icon { color:#ffb34e; border-color:#e9ac5126; background:linear-gradient(145deg,#624223,#302416); box-shadow:0 0 12px #e48e2221; }
-.profile-main-actions>button.is-active { border-color:#da9c32; background:linear-gradient(115deg,#3b2a17,#1d211e 74%,#322311); box-shadow:0 0 9px #ffad1929,inset 0 1px 0 #eac47e12; }
 .profile-main-actions>button.profile-admin { grid-column:1/-1; border-color:#4a426c; background:linear-gradient(115deg,#1f1b3b,#10152b 75%,#222041); }
 .profile-admin .profile-action-icon { color:#c2adff; border-color:#7c66bb38; background:linear-gradient(145deg,#423264,#242044); }
-.profile-main-actions>button:active,.profile-wallet:active,.profile-card-actions>button:active { transform:translateY(1px); filter:brightness(1.13); }
+.profile-main-actions>button:is(.is-active,:active) { border-color:#da9c32; box-shadow:0 0 9px #ffad1929,inset 0 0 28px #eac47e24; }
+.profile-main-actions>button:not(.profile-admin):is(.is-active,:active) .profile-action-icon { color:#f6c56c; border-color:#e9ac514d; box-shadow:inset 0 0 16px #e48e2221; }
+.profile-main-actions>button:active { transform:scale(.985); }
+.profile-wallet:active,.profile-card-actions>button:active { transform:translateY(1px); filter:brightness(1.13); }
+@media(prefers-reduced-motion:reduce){.profile-main-actions>button,.profile-main-actions .profile-action-icon{transition:none}.profile-main-actions>button:active{transform:none}}
 .profile-view button:focus-visible { outline:2px solid #f4b855; outline-offset:2px; }
 .profile-view .profile-panel { margin-top:0; gap:7px; }
 .profile-view .profile-row { display:grid; width:100%; align-items:center; text-align:left; grid-template-columns:25px minmax(0,1fr) auto 8px; min-height:44px; gap:8px; margin:0; padding:6px 10px; border:1px solid #24374e; border-radius:9px; background:linear-gradient(100deg,#0b1b2c,#07111d); }
@@ -822,6 +823,8 @@ body.more-open .header-spacer{display:none}
 .withdraw-form input,.withdraw-form textarea{font-size:16px;min-height:44px}
 .withdraw-form label,.withdraw-form p{font-size:12px}
 #withdrawQuote{display:grid;gap:6px;overflow-wrap:anywhere}
+.help-withdrawal-example{margin:12px 0;padding:12px;border:1px solid #4c658044;border-radius:10px;background:#0a1c2d}
+.help-withdrawal-example h3{margin:0 0 10px;color:#ebcb80;font-size:15px}.help-withdrawal-example dl{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin:0;font-size:13px;line-height:1.4}.help-withdrawal-example dt{min-width:0;color:#c3cfdf}.help-withdrawal-example dd{margin:0;color:#f5db9c;text-align:right;overflow-wrap:anywhere}.help-withdrawal-example p{font-size:12px;line-height:1.5}.help-withdrawal-example button{min-height:44px}
 .admin-withdrawal small{display:block;font-size:11px;overflow-wrap:anywhere;line-height:1.4}
 .admin-withdrawal__actions button{min-height:44px;font-size:11px;padding:6px 10px}
 .profile-view .profile-main-actions .conversation-unread{position:absolute;top:2px;right:4px;background:#f03140;color:#fff;border-radius:999px;padding:2px 5px;font-size:11px}
