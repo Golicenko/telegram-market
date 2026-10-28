@@ -1665,7 +1665,9 @@ function handleClick(event) {
     elements.trainingCards.replaceChildren(...state.training.map((product) => {
       const card = document.createElement("article"); card.className = `training-card${product.pinned ? " is-pinned" : ""}${!product.published ? " is-draft" : ""}`;
       const open = document.createElement("button"); open.type = "button"; open.className = "training-card__open"; open.dataset.openTrainingProduct = product.id;
-      const media = document.createElement("div"); media.className = "training-card__media"; const image = document.createElement("img"); image.src = absoluteMediaUrl(product.cover_url); image.alt = product.title; image.loading = "lazy"; image.decoding = "async"; media.append(image);
+      const media = document.createElement("div"); media.className = "training-card__media"; const image = document.createElement("img"); image.src = absoluteMediaUrl(product.cover_url); image.alt = product.title; image.loading = "lazy"; image.decoding = "async";
+      image.addEventListener("error", () => { state.trainingRenderSnapshot = null; }, { once: true });
+      media.append(image);
       const badge = document.createElement("span"); badge.className = "premium-mark"; badge.textContent = product.pinned ? "PREMIUM · PINNED" : "PREMIUM";
       const body = document.createElement("div"); body.className = "training-card__body";
       const type = document.createElement("span"); type.className = "training-type"; type.textContent = trainingTypeLabel(product.product_type);
@@ -2538,6 +2540,7 @@ function handleClick(event) {
         image.src = profileThumbnailUrl(url); image.alt = `${listingTitle(listing)}${index ? ", второе фото" : ""}`;
         image.loading = "lazy"; image.decoding = "async";
         image.addEventListener("error", () => {
+          state.profileListingSnapshots.delete(container);
           image.remove(); const count = media.querySelectorAll("img").length;
           media.classList.toggle("has-pair", count > 1);
           if (!count) media.textContent = "AF";

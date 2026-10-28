@@ -4,7 +4,9 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const app = fs.readFileSync(path.join(__dirname, '../js/app.js'), 'utf8');
 
 function loadFunction(name, next, environment) {
-  const source = app.slice(app.indexOf(`  function ${name}(`), app.indexOf(`  function ${next}(`));
+  let end = app.indexOf(`  function ${next}(`);
+  if (end < 0) end = app.indexOf(`  async function ${next}(`);
+  const source = app.slice(app.indexOf(`  function ${name}(`), end);
   return vm.runInNewContext(`(${source.trim()})`, environment);
 }
 
@@ -80,16 +82,20 @@ test('balance formatting still uses the existing available balance and only adap
 
 function miniListingsPresentation() {
   function node(tagName) {
-    return {tagName,children:[],dataset:{},className:'',textContent:'',replacements:0,
-      classList:{toggle(){}},setAttribute(){},addEventListener(){},
-      append(...children){this.children.push(...children);},
+    return {tagName,children:[],dataset:{},className:'',textContent:'',replacements:0,listeners:new Map(),
+      classList:{toggle(){}},setAttribute(){},
+      addEventListener(type,listener){this.listeners.set(type,listener);},
+      emit(type){this.listeners.get(type)?.();this[`on${type}`]?.();},
+      querySelectorAll(selector){return this.children.flatMap(child=>[...(child.tagName===selector?[child]:[]),...child.querySelectorAll(selector)]);},
+      remove(){if(this.parent)this.parent.children=this.parent.children.filter(child=>child!==this);},
+      append(...children){children.forEach(child=>{child.parent=this;this.children.push(child);});},
       replaceChildren(...children){this.children=children;this.replacements++;}};
   }
   const render=loadFunction('renderMiniListings','profileActionButton',{
     state:{},document:{createElement:node},safeArray:value=>Array.isArray(value)?value:[],
     listingTitle:listing=>listing.title,listingGameLabel:listing=>listing.game_version,
     statusLabel:status=>status,formatDate:value=>value,formatNumber:value=>String(value),
-    coin:()=>node('coin'),profileActionButton:(_icon,label)=>Object.assign(node('button'),{textContent:label}),
+    coin:()=>node('coin'),profileThumbnailUrl:url=>url,profileActionButton:(_icon,label)=>Object.assign(node('button'),{textContent:label}),
   });
   return {render,container:node('section'),node};
 }
@@ -132,4 +138,54 @@ test('a failed DOM replacement is not cached as a successful profile render', ()
   assert.throws(()=>render(container,listings,'Empty',true),/temporary rendering failure/);
   container.replaceChildren=replace;render(container,listings,'Empty',true);
   assert.equal(container.children.length,1);assert.equal(container.replacements,1);
+});
+
+test('a failed profile photo is retried on the next equal server render, without rebuilding successful photos repeatedly', () => {
+  const {render,container}=miniListingsPresentation();
+  const listings=[{id:'one',title:'Car',game_version:'car_parking_2',status:'active',images:['/car.jpg'],price_af_coins:25}];
+  render(container,listings,'Empty',true);
+  const row=container.children[0],media=row.children[0],image=media.children[0];
+  render(container,listings,'Empty',true);
+  assert.equal(container.children[0],row,'healthy image DOM is memoized');
+  image.emit('error');
+  assert.equal(media.querySelectorAll('img').length,0);assert.equal(media.textContent,'AF');
+  render(container,JSON.parse(JSON.stringify(listings)),'Empty',true);
+  const recoveredRow=container.children[0],recoveredImage=recoveredRow.children[0].children[0];
+  assert.notEqual(recoveredRow,row,'a temporary media failure must invalidate only this container snapshot');
+  assert.equal(recoveredImage.src,'/car.jpg');
+  render(container,listings,'Empty',true);assert.equal(container.children[0],recoveredRow,'the retry does not disable memoization permanently');
+});
+
+test('either image in a profile pair can fail without removing the healthy photo or invalidating other containers', () => {
+  for (const failedIndex of [0,1]) {
+    const {render,container,node}=miniListingsPresentation(),other=node('section');
+    const listings=[{id:'paired',title:'Car',game_version:'car_parking_1',status:'active',images:['/first.jpg','/second.jpg'],price_af_coins:25}];
+    render(container,listings,'Empty',true);render(other,listings,'Empty',true);
+    const row=container.children[0],otherRow=other.children[0],media=row.children[0];
+    const healthy=media.children[1-failedIndex];
+    media.children[failedIndex].emit('error');
+    assert.deepEqual(media.querySelectorAll('img'),[healthy],'the successful half of the photo pair remains visible');
+    assert.notEqual(media.textContent,'AF');
+    render(other,listings,'Empty',true);assert.equal(other.children[0],otherRow,'an unrelated healthy container remains memoized');
+    render(container,listings,'Empty',true);
+    assert.notEqual(container.children[0],row);assert.equal(container.children[0].children[0].children.length,2,'the next equal payload retries the failed pair member');
+  }
+});
+
+test('a failed training cover is retried on the next equal render while healthy covers preserve DOM identity', () => {
+  const {node}=miniListingsPresentation(),cards=node('section');
+  const state={me:{user:{id:'buyer',role:'user'}},trainingPurchases:[],training:[{id:'training-one',title:'Урок',cover_url:'/cover.jpg',
+    product_type:'automatic',published:true,admin_id:'owner',availability:'available',price_af_coins:25,short_description:'Описание'}]};
+  const render=loadFunction('renderTraining','buyNowFlow',{state,
+    document:{createElement:node,createTextNode:text=>Object.assign(node('#text'),{textContent:text})},
+    elements:{trainingCards:cards,trainingEmpty:{}},absoluteMediaUrl:url=>url,
+    trainingTypeLabel:value=>value,trainingAvailabilityLabel:value=>value,formatNumber:value=>String(value),coin:()=>node('coin'),renderTrainingLibrary(){},
+  });
+  render();
+  const originalCard=cards.children[0],cover=originalCard.children[0].children[0].children[0];
+  render();assert.equal(cards.children[0],originalCard,'a healthy cover must remain memoized');
+  cover.emit('error');render();
+  assert.notEqual(cards.children[0],originalCard,'a temporary cover failure must invalidate the training render snapshot');
+  assert.equal(cards.children[0].children[0].children[0].children[0].src,'/cover.jpg');
+  const recoveredCard=cards.children[0];render();assert.equal(cards.children[0],recoveredCard);
 });
