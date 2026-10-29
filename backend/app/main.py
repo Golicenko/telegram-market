@@ -25,6 +25,7 @@ from .publications import router as publication_router, run_publication_worker
 from .promotions import router as promotion_router, run_worker as run_promotion_worker
 from .training_analytics import router as training_analytics_router
 from .upload_guard import ImageUploadGuard
+from .feedback import router as feedback_router, run_feedback_worker
 
 
 settings = get_settings()
@@ -68,6 +69,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(run_startup_job("seller_response_timeout_worker", run_seller_response_timeout_worker)),
         asyncio.create_task(run_startup_job("message_notification_worker", run_message_notification_worker)),
         asyncio.create_task(run_startup_job("broadcast_recovery", recover_admin_broadcasts)),
+        asyncio.create_task(run_startup_job("feedback_worker", run_feedback_worker)),
         asyncio.create_task(run_startup_job("referral_code_backfill", backfill_referral_codes)),
         asyncio.create_task(run_startup_job("referral_bot_identity", warm_referral_identity)),
         asyncio.create_task(run_startup_job("analytics_retention", run_analytics_retention)),
@@ -142,6 +144,7 @@ app.include_router(analytics_router)
 app.include_router(publication_router)
 app.include_router(promotion_router)
 app.include_router(training_analytics_router)
+app.include_router(feedback_router)
 
 
 @app.get("/", include_in_schema=False)

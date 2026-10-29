@@ -177,6 +177,7 @@ Image.MAX_IMAGE_PIXELS = 64_000_000  # Includes 48 MP phone photos; still a stri
 UPLOAD_DIR = Path(get_settings().upload_dir) if get_settings().upload_dir else Path(__file__).resolve().parents[1] / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 IMAGE_PROCESSING_SLOTS = asyncio.Semaphore(1)  # Bound peak memory for large HEIC/AVIF decodes.
+IMAGE_PREVIEW_SLOTS = asyncio.Semaphore(2)
 _help_gift_catalog_cache = None
 _help_gift_catalog_expires = 0
 _help_gift_catalog_task = None
@@ -1405,8 +1406,12 @@ async def uploaded_image(image_id: uuid.UUID, session: AsyncSession = Depends(ge
     image = await session.get(UploadedImage, image_id)
     if not image:
         raise HTTPException(status_code=404, detail="Фотография не найдена")
+    content = image.data
+    if preview:
+        async with IMAGE_PREVIEW_SLOTS:
+            content = await run_in_threadpool(image_preview, content)
     return Response(
-        content=await run_in_threadpool(image_preview, image.data) if preview else image.data,
+        content=content,
         media_type=image.content_type,
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
@@ -4000,6 +4005,11 @@ async def telegram_webhook(
         return {"ok": True}
     callback = update.get("callback_query") or {}
     callback_data = str(callback.get("data") or "")
+    if callback.get("id") and callback_data.startswith("feedback:"):
+        from .feedback import handle_callback
+        answer = await handle_callback(session, callback)
+        await answer_bot_callback(str(callback["id"]), answer)
+        return {"ok": True}
     if callback.get("id") and callback_data.startswith("offer:"):
         callback_sender = callback.get("from") or {}
         try:
@@ -4147,6 +4157,10 @@ async def telegram_webhook(
         await session.commit()
         background_tasks.add_task(send_bot_menu, int(sender["id"]), start_payload=start_payload)
     payment = message.get("successful_payment")
+    if not payment and start_command != "/start":
+        from .feedback import handle_message
+        if await handle_message(session, update):
+            return {"ok": True}
     if payment and sender.get("id"):
         from .promotions import PREFIX as VIP_PREFIX, receive_payment as receive_vip_payment, fulfill as fulfill_vip
         if str(payment.get("invoice_payload") or "").startswith(VIP_PREFIX):

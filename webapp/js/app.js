@@ -340,11 +340,15 @@
     bind(elements.listingPageOfferButton, "click", showListingOfferForm, "listingPageOfferButton");
     bind(elements.listingOfferForm, "submit", submitListingOffer, "listingOfferForm");
     bind(elements.withdrawForm, "submit", createWithdrawal, "withdrawForm");
-    bind(elements.withdrawForm, "input", () => {
+    bind(elements.withdrawForm, "input", (event) => {
+      if (event.target.name !== "amount") return;
       if (state.withdrawalBusy) return;
       state.withdrawalQuote = null;
+      state.withdrawalQuoteVersion = (state.withdrawalQuoteVersion || 0) + 1;
+      window.clearTimeout(state.withdrawalQuoteTimer);
       document.getElementById("withdrawQuote").replaceChildren();
       elements.withdrawForm.querySelector("button[type=submit]").textContent = "Рассчитать подарки";
+      if (event.target.value && event.target.validity.valid) state.withdrawalQuoteTimer = window.setTimeout(() => void loadWithdrawalQuote(), 450);
     }, "withdrawFormInput");
     bind(document.getElementById("trainingForm"), "submit", submitTrainingProduct, "trainingForm");
     bind(trainingForm?.elements.product_type, "change", toggleAutomaticMaterialFields, "trainingProductType");
@@ -529,8 +533,19 @@
     optionalRenderFrame = window.requestAnimationFrame(() => {
       optionalRenderFrame = null;
       const keys = [...optionalRenderKeys]; optionalRenderKeys.clear();
-      if (keys.includes("all") || keys.includes("regular")) updateFilterOptions();
-      renderAll(keys.includes("all") ? null : keys);
+      for (const key of keys.includes("all") ? Object.keys(optionalLoaders) : keys) {
+        try {
+          if (key === "regular" || key === "catalog") updateFilterOptions();
+          renderAll([key]);
+          state.renderFailures?.delete(key);
+        } catch (error) {
+          state.renderFailures ||= new Set(); state.renderFailures.add(key);
+          state.failedOptional.add(key);
+          const slot = optionalDataRequests.get(key); if (slot) slot.loadedAt = 0;
+          reportClientError(`render_${key}`, error);
+        }
+      }
+      updateSyncStatus();
     });
   }
 
@@ -554,7 +569,7 @@
         slot.loadedAt = Date.now();
         state.failedOptional.delete(key);
         if (key === "regular") reportStartupStage("market_loaded");
-        if (changed !== false) scheduleOptionalRender(key);
+        if (changed !== false || state.renderFailures?.has(key)) scheduleOptionalRender(key);
       } catch (error) {
         slot.loadedAt = 0;
         state.failedOptional.add(key);
@@ -614,6 +629,12 @@ function handleClick(event) {
   if (profileAction) selectProfileAction(profileAction);
   if (target.closest("[data-reload-help]")) return void loadHelpRules(true);
   if (target.closest("[data-retry-withdrawal-example]")) return void loadHelpWithdrawalExample(true);
+  if (target.closest("[data-feedback-start]")) return void startFeedbackCampaign(target.closest("button"));
+  if (target.closest("[data-feedback-stop]")) return void stopFeedbackCampaign(target.closest("button"));
+  if (target.closest("[data-feedback-filter]")) { state.feedbackFilter=target.closest("button").dataset.feedbackFilter;return void loadAdminFeedback(); }
+  if (target.closest("[data-feedback-seen]")) return void markFeedbackSeen(target.closest("button"));
+  if (target.closest("[data-feedback-page]")) return void loadAdminFeedback(Number(target.closest("button").dataset.feedbackPage));
+  if (target.closest("[data-feedback-refresh]")) return void loadAdminFeedback();
   const adminDealOpen = target.closest("[data-admin-deal-open]");
   if (adminDealOpen) return void openAdminDealControl(adminDealOpen.dataset.adminDealOpen);
   const adminDealAction = target.closest("[data-admin-deal-action]");
@@ -895,6 +916,9 @@ function handleClick(event) {
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
     state.navigationVersion = (state.navigationVersion || 0) + 1;
+    const transition = { from: state.currentView, to: viewName, phase: "requested", at: Math.round(performance.now()) };
+    state.navigationTrace ||= []; state.navigationTrace.push(transition);
+    if (state.navigationTrace.length > 12) state.navigationTrace.shift();
     selectProfileAction();
     if (state.currentView === "deal-chat" && viewName !== "deal-chat") {
       saveChatDraft();
@@ -912,17 +936,11 @@ function handleClick(event) {
       });
     }
     state.currentView = viewName;
-    if (viewName === "help") void loadHelpRules();
-    const viewEvent = { market: "market_viewed", training: "training_list_view", topup: "topup_screen_opened", support: "support_opened" }[viewName];
-    if (viewEvent) track(viewEvent);
     document.body.classList.toggle("chat-open", viewName === "deal-chat");
     if (viewName !== "deal-chat") document.body.classList.remove("deal-details-required");
     document.body.classList.toggle("admin-open", viewName === "admin");
     document.body.classList.toggle("profile-open", viewName === "profile");
     document.body.classList.toggle("more-open", viewName === "more");
-    if (viewName === "more") loadReferralBanner();
-    if (viewName === "deal-chat") updateChatViewport();
-    updateFloatingChatVisibility();
     elements.views.forEach((view) => {
       const active = view === next;
       view.hidden = !active;
@@ -935,7 +953,15 @@ function handleClick(event) {
       active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
     });
     elements.shell.classList.toggle("is-focused", ["add", "wallet", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin", "training-purchase", "help", "activity"].includes(viewName));
+    transition.phase = "visible";
     // Commit the visible destination before initializing or refreshing a section.
+    try {
+    if (viewName === "help") void loadHelpRules();
+    const viewEvent = { market: "market_viewed", training: "training_list_view", topup: "topup_screen_opened", support: "support_opened" }[viewName];
+    if (viewEvent) track(viewEvent);
+    if (viewName === "more") loadReferralBanner();
+    if (viewName === "deal-chat") updateChatViewport();
+    updateFloatingChatVisibility();
     syncReferralHeader(viewName === "more");
     syncReferralsPage(viewName);
     syncBackNavigation();
@@ -944,6 +970,13 @@ function handleClick(event) {
     if (viewName === "admin") void loadPublicationAdmin();
     window.scrollTo({ top: 0, behavior: primaryViews.has(viewName) ? "instant" : "smooth" });
     observeVisibleListingCards();
+    transition.phase = "initialized";
+    } catch (error) {
+      transition.phase = "initialization_failed";
+      reportClientError(`navigation_${viewName}`, error);
+      elements.syncStatus.hidden = false;
+      elements.syncStatusText.textContent = "Экран открыт, но часть данных не загрузилась. Попробуйте обновить данные.";
+    }
     if (state.serverAvailable && ["market", "unique", "training", "profile", "activity", "wallet"].includes(viewName)) {
       const loading = ["unique", "training"].includes(viewName) ? openContentSection(viewName)
         : loadOptionalData(["profile", "activity", "wallet"].includes(viewName) ? ["profile"] : ["regular"], { allowRecovery: false, maxAgeMs: navigationDataMaxAge });
@@ -1320,7 +1353,7 @@ function handleClick(event) {
   }
 
   function adminTabs() {
-    return state.me?.admin_access?.tabs || (state.me?.user.role === "admin" ? ["overview", "analytics", "users", "training", "listings", "deals", "withdrawals", "support", "audit", "advertisement", "broadcasts"] : []);
+    return state.me?.admin_access?.tabs || (state.me?.user.role === "admin" ? ["overview", "analytics", "users", "training", "listings", "deals", "withdrawals", "support", "audit", "advertisement", "broadcasts", "feedback"] : []);
   }
 
   async function loadAdminPlatformSummary() {
@@ -1490,9 +1523,10 @@ function handleClick(event) {
     media.className = "car-card__media";
     if (listing.images?.[0]) {
       const image = document.createElement("img");
-      image.src = absoluteMediaUrl(listing.images[0]);
       image.alt = listingTitle(listing);
       image.loading = "lazy";
+      image.decoding = "async";
+      image.src = profileThumbnailUrl(listing.images[0]);
       media.append(image);
     } else {
       const placeholder = document.createElement("div");
@@ -1665,7 +1699,7 @@ function handleClick(event) {
     elements.trainingCards.replaceChildren(...state.training.map((product) => {
       const card = document.createElement("article"); card.className = `training-card${product.pinned ? " is-pinned" : ""}${!product.published ? " is-draft" : ""}`;
       const open = document.createElement("button"); open.type = "button"; open.className = "training-card__open"; open.dataset.openTrainingProduct = product.id;
-      const media = document.createElement("div"); media.className = "training-card__media"; const image = document.createElement("img"); image.src = absoluteMediaUrl(product.cover_url); image.alt = product.title; image.loading = "lazy"; image.decoding = "async";
+      const media = document.createElement("div"); media.className = "training-card__media"; const image = document.createElement("img"); image.alt = product.title; image.loading = "lazy"; image.decoding = "async"; image.src = profileThumbnailUrl(product.cover_url);
       image.addEventListener("error", () => { state.trainingRenderSnapshot = null; }, { once: true });
       media.append(image);
       const badge = document.createElement("span"); badge.className = "premium-mark"; badge.textContent = product.pinned ? "PREMIUM · PINNED" : "PREMIUM";
@@ -3608,6 +3642,40 @@ async function hideCurrentConversation() {
     }
   }
 
+  function renderWithdrawalQuote(quote, budget) {
+    const output = document.getElementById("withdrawQuote"); output.replaceChildren();
+    const card = document.createElement("section"); card.className = "withdraw-calculation";
+    const title = document.createElement("h2"); title.textContent = "Расчёт вывода"; card.append(title);
+    const values = [["Запрошенный бюджет", `${formatNumber(budget)} AF`], ["Комиссия (уже включена)", `${formatNumber(quote.fee_af)} AF`], ["Будет зарезервировано", `${formatNumber(quote.gross_af)} AF`]];
+    if (Number(quote.unspent_af) > 0) values.push(["Останется на балансе", `${formatNumber(quote.unspent_af)} AF`]);
+    values.push(["К получению: подарки стоимостью", `${quote.payout_stars} Stars`]);
+    for (const [label,value] of values) { const row=document.createElement("div"); const text=document.createElement("span");text.textContent=label;const sum=document.createElement("strong");sum.textContent=value;row.append(text,sum);card.append(row); }
+    const gifts=document.createElement("p");gifts.textContent=quote.gift_plan.map(item=>`${item.quantity} × ${item.star_count} Stars`).join(" + ");card.append(gifts);
+    if (Number(quote.unspent_af) > 0) { const note=document.createElement("p");note.textContent="Неиспользованная часть суммы не резервируется и остаётся на балансе AutoFlow Market. Это не потерянные средства — они доступны в приложении согласно действующим условиям.";card.append(note); }
+    output.append(card);
+  }
+
+  function loadWithdrawalQuote() {
+    window.clearTimeout(state.withdrawalQuoteTimer);
+    const amount=elements.withdrawForm.elements.amount.value;
+    if (!amount || !elements.withdrawForm.elements.amount.validity.valid) return Promise.resolve(false);
+    const version=state.withdrawalQuoteVersion || 0;
+    if (state.withdrawalQuoteLoading?.version===version) return state.withdrawalQuoteLoading.promise;
+    const output=document.getElementById("withdrawQuote"),button=elements.withdrawForm.querySelector("button[type=submit]");
+    output.textContent="Рассчитываем по актуальным условиям…";
+    const promise=(async()=>{
+      try {
+        const quote=await api.request("/withdrawals/quote",{method:"POST",body:JSON.stringify({amount})});
+        if (version!==(state.withdrawalQuoteVersion||0) || amount!==elements.withdrawForm.elements.amount.value) return false;
+        state.withdrawalQuote=quote;state.withdrawalQuoteAmount=amount;renderWithdrawalQuote(quote,amount);button.textContent="Подтвердить заявку";return true;
+      } catch(error) {
+        if (version===(state.withdrawalQuoteVersion||0)) { state.withdrawalQuote=null;output.textContent=`Не удалось рассчитать вывод. ${error.message} Нажмите «Рассчитать подарки», чтобы повторить.`;button.textContent="Рассчитать подарки"; }
+        return false;
+      } finally { if(state.withdrawalQuoteLoading?.version===version) state.withdrawalQuoteLoading=null; }
+    })();
+    state.withdrawalQuoteLoading={version,promise};return promise;
+  }
+
   async function createWithdrawal(event) {
     event.preventDefault();
     if (state.withdrawalBusy) return;
@@ -3620,22 +3688,12 @@ async function hideCurrentConversation() {
     try {
       if (!state.withdrawalQuote) {
         button.textContent = "Рассчитываем…";
-        const quote = await api.request("/withdrawals/quote", { method: "POST", body: JSON.stringify({ amount: form.get("amount") }) });
-        state.withdrawalQuote = quote;
-        output.replaceChildren();
-        for (const text of [
-          `Подарки: ${quote.gift_plan.map(item => `${item.quantity} × ${item.star_count} Stars`).join(" + ")}`,
-          `Стоимость подарков: ${quote.payout_stars} Stars`,
-          `Комиссия: ${formatNumber(quote.fee_af)} AF Coins`,
-          `Будет зарезервировано: ${formatNumber(quote.gross_af)} AF Coins`,
-          `Из указанного бюджета останется: ${formatNumber(quote.unspent_af)} AF Coins`,
-          "После подтверждения заявка ожидает ручной отправки администратором.",
-        ]) { const row = document.createElement("p"); row.textContent = text; output.append(row); }
-        button.textContent = "Подтвердить заявку";
+        await loadWithdrawalQuote();
       } else {
+        if (state.withdrawalQuoteAmount !== String(form.get("amount"))) { state.withdrawalQuote=null;await loadWithdrawalQuote();return; }
         button.textContent = "Сохраняем заявку…";
         const request = await api.request("/withdrawals", { method: "POST", body: JSON.stringify({ quote_id: state.withdrawalQuote.quote_id, details: form.get("details") }) });
-        state.withdrawalQuote = null; elements.withdrawForm.reset();
+        state.withdrawalQuote = null; window.clearTimeout(state.withdrawalQuoteTimer); elements.withdrawForm.reset();
         output.textContent = withdrawalSubmissionText(request);
         button.textContent = "Рассчитать подарки";
         try { await refreshMarketplace(); } catch (error) { notify("Заявка сохранена. Баланс временно не удалось обновить."); }
@@ -3643,6 +3701,7 @@ async function hideCurrentConversation() {
     } catch (error) {
       // Keep the quote after an uncertain POST: retry uses the same server idempotency key.
       const message = error.status === 409 ? "Расчёт устарел или каталог изменился. Измените сумму и рассчитайте заново." : error.message;
+      if (error.status === 409) { state.withdrawalQuote = null; output.textContent=message; }
       notify(message); button.textContent = state.withdrawalQuote ? "Повторить подтверждение" : "Рассчитать подарки";
     } finally { state.withdrawalBusy = false; controls.forEach(control => { control.disabled = false; }); }
   }
@@ -4565,7 +4624,78 @@ async function hideCurrentConversation() {
     finally { button.disabled = false; state.dealActionPending = false; }
   }
 
+  function ensureFeedbackAdminUi() {
+    if (document.getElementById("feedbackAdmin")) return;
+    const tabs=document.querySelector(".admin-tabs");if(!tabs)return;
+    const tab=document.createElement("button");tab.type="button";tab.dataset.adminTab="feedback";tab.textContent="Сбор отзывов";tabs.append(tab);
+    const panel=document.createElement("section");panel.dataset.adminPanel="feedback";panel.hidden=true;
+    panel.innerHTML=`<div id="feedbackAdmin" class="feedback-admin"><h2>Сбор отзывов</h2>
+      <p>Добровольные честные отзывы, отдельно от обычной рассылки. Не чаще одного приглашения за 30 дней. Пользователи с текущей сделкой или обращением пропускаются.</p>
+      <button type="button" class="publish-button" data-feedback-start>Отправить запрос отзывов</button>
+      <button type="button" class="ghost-button" data-feedback-refresh>Обновить</button>
+      <div id="feedbackStats" role="status" aria-live="polite"></div><div id="feedbackCampaigns"></div>
+      <nav class="support-admin-filters" aria-label="Фильтр отзывов"><button type="button" data-feedback-filter="new">Новые</button><button type="button" data-feedback-filter="all">Все</button><button type="button" data-feedback-filter="allowed">Разрешено публиковать</button></nav>
+      <p>Оригиналы пересылаются в личный чат администратора ботом, если Telegram разрешает пересылку. В канал публикуйте вручную и только с актуальным согласием «Разрешено». Отсутствие ответа — не согласие.</p>
+      <div id="feedbackReviews"></div></div>`;
+    tabs.parentElement.append(panel);
+  }
+
+  async function loadAdminFeedback(offset=0) {
+    const filter=state.feedbackFilter||"new",version=state.feedbackLoadVersion=(state.feedbackLoadVersion||0)+1;
+    const host=document.getElementById("feedbackReviews"),stats=document.getElementById("feedbackStats");if(!host)return;
+    try {
+      const [summary,result]=await Promise.all([api.request("/admin/feedback"),api.request(`/admin/feedback/reviews?filter=${filter}&offset=${offset}`)]);
+      if(version!==state.feedbackLoadVersion)return;
+      stats.textContent=`Отправлено запросов: ${summary.sent} · Получено: ${summary.received} · Новых: ${summary.new} · С согласием: ${summary.allowed}`;
+      document.querySelectorAll("[data-feedback-filter]").forEach(button=>button.classList.toggle("is-active",button.dataset.feedbackFilter===filter));
+      const active=summary.campaigns.some(item=>["queued","running"].includes(item.status));
+      state.feedbackCampaignActive=active;
+      document.querySelector("[data-feedback-start]").disabled=active||Boolean(state.feedbackStarting);
+      document.getElementById("feedbackCampaigns").replaceChildren(...summary.campaigns.map(item=>{
+        const row=document.createElement("article");row.className="support-ticket";
+        const text=document.createElement("p");text.textContent=`${new Date(item.created_at).toLocaleString("ru-RU",{timeZone:"Europe/Bratislava"})} Europe/Bratislava · ${item.status} · ${item.sent}/${item.total} отправлено · ${item.failed} ошибок · ${item.received} отзывов`;row.append(text);
+        if(["queued","running"].includes(item.status)){const stop=document.createElement("button");stop.type="button";stop.dataset.feedbackStop=item.id;stop.textContent="Остановить приглашения";row.append(stop);}return row;
+      }));
+      host.replaceChildren(...result.items.map(item=>{
+        const card=document.createElement("article");card.className="support-ticket";
+        const title=document.createElement("strong");title.textContent=`${item.name||"Пользователь"}${item.username?` · @${item.username}`:""}`;
+        const text=document.createElement("p");text.className="feedback-original";text.textContent=item.text;
+        const status=document.createElement("p");status.textContent={pending:"Согласие не получено — не публиковать",allowed:"✅ Разрешено публиковать вручную",private:"🔒 Только администрации — не публиковать"}[item.consent];
+        const details=document.createElement("small");details.textContent=`${item.id} · ${new Date(item.created_at).toLocaleString("ru-RU",{timeZone:"Europe/Bratislava"})} Europe/Bratislava · Пересылка: ${item.forward?.status||"не запланирована"}${item.forward?.error_type?` (${item.forward.error_type})`:""}`;
+        card.append(title,text,status,details);
+        if(!item.seen_at){const seen=document.createElement("button");seen.type="button";seen.dataset.feedbackSeen=item.id;seen.textContent="Отметить просмотренным";card.append(seen);}return card;
+      }));
+      if(!result.items.length)host.textContent="Отзывов по этому фильтру пока нет";
+      for(const [value,label]of [[offset-30,"Назад"],[offset+30,"Далее"]]){if(value<0||(label==="Далее"&&!result.has_more))continue;const button=document.createElement("button");button.type="button";button.dataset.feedbackPage=String(value);button.textContent=label;host.append(button);}
+    } catch(error){if(version===state.feedbackLoadVersion)stats.textContent=`Не удалось загрузить отзывы. ${error.message} Нажмите «Обновить».`;}
+  }
+
+  async function startFeedbackCampaign(button) {
+    if(button.disabled||state.feedbackStarting)return;state.feedbackStarting=true;button.disabled=true;
+    try {
+      if(!await confirmCriticalAction("Отправить добровольный запрос отзывов подходящим пользователям? Повторные приглашения ограничены 30 днями. Обычная рассылка не изменяется.","Да, начать сбор отзывов"))return;
+      state.feedbackRequestId ||= createRequestId();
+      await api.request("/admin/feedback/campaigns",{method:"POST",body:JSON.stringify({client_request_id:state.feedbackRequestId,confirmed:true})});
+      state.feedbackRequestId=null;await loadAdminFeedback();
+    } catch(error){notify(error.message);}finally{state.feedbackStarting=false;button.disabled=Boolean(state.feedbackCampaignActive);}
+  }
+
+  async function stopFeedbackCampaign(button) {
+    if(button.disabled)return;button.disabled=true;
+    try {
+      if(!await confirmCriticalAction("Остановить ещё не отправленные приглашения? Одно уже отправляемое сообщение может дойти; ответы и согласия продолжат приниматься.","Да, остановить"))return;
+      await api.request(`/admin/feedback/campaigns/${button.dataset.feedbackStop}/stop`,{method:"POST"});await loadAdminFeedback();
+    }catch(error){notify(error.message);}finally{button.disabled=false;}
+  }
+
+  async function markFeedbackSeen(button) {
+    if(button.disabled)return;button.disabled=true;
+    try{await api.request(`/admin/feedback/reviews/${button.dataset.feedbackSeen}/seen`,{method:"POST"});await loadAdminFeedback();}
+    catch(error){notify(error.message);}finally{button.disabled=false;}
+  }
+
   function ensureBroadcastAdminUi() {
+    ensureFeedbackAdminUi();
     if (document.getElementById("broadcastForm")) return;
     const tabs = document.querySelector(".admin-tabs");
     const container = tabs?.parentElement;
@@ -5401,7 +5531,7 @@ async function hideCurrentConversation() {
     const loaders = {
       overview: () => window.AutoFlowAdmin.overview(api), audit: () => window.AutoFlowAdmin.audit(api), analytics: () => window.AutoFlowAdmin.analytics(api),
       users: () => Promise.all([loadAdminUsers(), loadAdminPlatformSummary()]), listings: loadAdminListings,
-      deals: loadAdminDeals, withdrawals: loadAdminWithdrawals, support: loadAdminSupport,
+      deals: loadAdminDeals, withdrawals: loadAdminWithdrawals, support: loadAdminSupport, feedback: loadAdminFeedback,
       advertisement: loadAdvertisementAdmin, training: () => loadAdminTraining(state.adminTrainingFilter), broadcasts: loadAdminBroadcasts,
     };
     const panel = document.querySelector(`[data-admin-panel="${tab}"]`);
@@ -5710,6 +5840,7 @@ async function hideCurrentConversation() {
       compression_error_type: error?.compression_error_type || null,
       photo_index: Number.isInteger(error?.photoIndex) ? error.photoIndex : null,
       client_time: new Date().toISOString(),
+      navigation_trace: (state.navigationTrace || []).map(({from, to, phase, at}) => ({from, to, phase, at})),
     };
     console[expectedDegradation ? "warn" : "error"]("[AutoFlow Client]", diagnostic);
     if (state.me && api) {

@@ -13,7 +13,7 @@ def staff_access(user):
     if user.role == "admin":
         role = "owner" if getattr(user, "telegram_id", None) == settings.admin_id and settings.admin_id else "admin"
         return {"role": role, "tabs": ["overview", "analytics", "users", "training", "listings", "deals",
-                                       "withdrawals", "support", "audit", "advertisement", "broadcasts"]}
+                                       "withdrawals", "support", "audit", "advertisement", "broadcasts", "feedback"]}
     if getattr(user, "telegram_id", None) in settings.support_telegram_ids:
         return {"role": "support", "tabs": ["support"]}
     return {"role": "user", "tabs": []}

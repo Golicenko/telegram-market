@@ -52,6 +52,8 @@ jobs:
         run: node webapp/tests/catalog-navigation-browser.cjs
       - name: Navigation races, populated sections, resume and withdrawal help (fixtures only)
         run: node webapp/tests/navigation-resilience-browser.cjs
+      - name: Automatic withdrawal quote and separate feedback admin UI (fixtures only)
+        run: node webapp/tests/feedback-withdrawal-browser.cjs
       - name: Real publication UI, signed API and isolated PostgreSQL (no payments)
         run: python -m pytest -q -s tests/test_publication_browser_postgres.py
         working-directory: backend
