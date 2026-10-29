@@ -964,6 +964,75 @@ class AdminBroadcastRecipient(Base):
     )
 
 
+class FeedbackCampaign(Base):
+    __tablename__ = "feedback_campaigns"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    client_request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="queued", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("status IN ('queued','running','completed','stopped')", name="ck_feedback_campaign_status"),
+        Index("uq_feedback_active_campaign", sql_text("(true)"), unique=True, postgresql_where=sql_text("status IN ('queued','running')")),)
+
+
+class FeedbackRequest(Base):
+    __tablename__ = "feedback_requests"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    campaign_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("feedback_campaigns.id"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    invitation_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    prompt_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    error_type: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("campaign_id", "user_id", name="uq_feedback_campaign_user"),
+        CheckConstraint("status IN ('pending','sending','sent','waiting','received','declined','failed','expired','cancelled')", name="ck_feedback_request_status"),
+        Index("uq_feedback_active_user", "user_id", unique=True, postgresql_where=sql_text("status IN ('pending','sending','sent','waiting')")),
+        Index("ix_feedback_request_queue", "status", "created_at"),)
+
+
+class UserFeedback(Base):
+    __tablename__ = "user_feedback"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("feedback_requests.id"), unique=True, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    telegram_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    telegram_update_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    protected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    consent: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consent_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    seen_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    __table_args__ = (UniqueConstraint("telegram_chat_id", "telegram_message_id", name="uq_feedback_original_message"),
+        CheckConstraint("consent IN ('pending','allowed','private')", name="ck_feedback_consent"),)
+
+
+class FeedbackDelivery(Base):
+    __tablename__ = "feedback_deliveries"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("feedback_requests.id"), nullable=False)
+    feedback_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("user_feedback.id"))
+    target_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    dedup_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    message_id: Mapped[int | None] = mapped_column(BigInteger)
+    error_type: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("status IN ('pending','sending','sent','failed','cancelled')", name="ck_feedback_delivery_status"),
+        Index("ix_feedback_delivery_queue", "status", "created_at"),)
+
+
 class SupportTicket(Base, TimestampMixin):
     __tablename__ = "support_tickets"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

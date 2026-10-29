@@ -39,6 +39,14 @@ class MeOut(BaseModel):
     admin_access: dict = Field(default_factory=lambda: {"role": "user", "tabs": []})
 
 
+class NavigationTraceEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    from_: str = Field(alias="from", max_length=32, pattern=r"^[a-z-]+$")
+    to: str = Field(max_length=32, pattern=r"^[a-z-]+$")
+    phase: str = Field(max_length=32, pattern=r"^[a-z_]+$")
+    at: int = Field(ge=0)
+
+
 class ClientDiagnosticCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -66,6 +74,7 @@ class ClientDiagnosticCreate(BaseModel):
     image_height: int | None = Field(default=None, ge=0, le=100000)
     compression_error_type: str | None = Field(default=None, max_length=64)
     photo_index: int | None = Field(default=None, ge=1, le=10)
+    navigation_trace: list[NavigationTraceEntry] = Field(default_factory=list, max_length=12)
     client_time: str | None = Field(default=None, max_length=40)
 
 

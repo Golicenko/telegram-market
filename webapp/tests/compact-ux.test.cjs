@@ -46,7 +46,7 @@ test("library cards open authorized purchases rather than public product endpoin
 test("optional render coalesces same-frame responses but permits later fresh data",()=>{
   const code=app.slice(app.indexOf("let optionalRenderFrame = null;"),app.indexOf("async function loadOptionalData"));
   const frames=[];let renders=0,filters=0;
-  const context=vm.createContext({window:{requestAnimationFrame(fn){frames.push(fn);return frames.length;}},renderAll(){renders++;},updateFilterOptions(){filters++;}});
+  const context=vm.createContext({optionalLoaders:{regular(){}},state:{failedOptional:new Set()},updateSyncStatus(){},window:{requestAnimationFrame(fn){frames.push(fn);return frames.length;}},renderAll(){renders++;},updateFilterOptions(){filters++;}});
   vm.runInContext(code+"scheduleOptionalRender();scheduleOptionalRender();",context);
   assert.equal(frames.length,1); assert.equal(renders,0);
   frames.shift()(); assert.equal(renders,1);assert.equal(filters,1);

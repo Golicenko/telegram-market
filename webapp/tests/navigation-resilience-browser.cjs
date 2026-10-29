@@ -11,7 +11,7 @@ const root = path.resolve(__dirname, '..');
 const revision = process.env.NAV_BASELINE_REF || '';
 const baseline = Boolean(revision);
 const evidence = path.join(__dirname, 'evidence/perf-20261028', baseline ? 'before' : 'after');
-const selected = new Set((process.env.NAV_CASES || 'chains,details,stalls,resume,fragments,help').split(','));
+const selected = new Set((process.env.NAV_CASES || 'chains,details,stalls,resume,fragments,help,paint').split(','));
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 const files = new Map();
 const picture = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="240"><rect width="400" height="240" fill="#112638"/><path d="M70 150l40-55h145l55 55v35H70z" fill="#819bab"/><circle cx="125" cy="183" r="24" fill="#09131c"/><circle cx="270" cy="183" r="24" fill="#09131c"/></svg>';
@@ -168,6 +168,25 @@ async function chains(browser) {
   });
 }
 
+async function paint(browser) {
+  await runCase(browser, 'owner-chains-painted', async app => {
+    const sequences=[['market','profile','more','market'],['training','market','unique','market']];
+    for(let i=0;i<4;i++) for(const sequence of sequences) for(const view of sequence) {
+      await app.click(view,`paint-${i}`);
+      // A suspended animation in iOS must never make a whole page transparent.
+      await app.page.evaluate(()=>document.getAnimations().filter(a=>a.effect?.target?.matches('.view')).forEach(a=>{a.pause();a.currentTime=0;}));
+      const actual=await app.page.locator(`[data-view="${view}"]`).evaluate(node=>{
+        const s=getComputedStyle(node),r=node.getBoundingClientRect();
+        return {opacity:Number(s.opacity),display:s.display,height:r.height,top:r.top,inert:node.inert,scroll:scrollY,nav:getComputedStyle(document.querySelector('.bottom-nav')).visibility};
+      });
+      check(`paint ${i}/${view}: visible even with a suspended page animation`,actual.opacity===1&&actual.display!=='none'&&actual.height>0&&!actual.inert&&actual.nav==='visible',actual);
+    }
+    const sources=await app.page.locator('#marketCars img').evaluateAll(images=>images.map(i=>({src:i.src,decoding:i.decoding,loading:i.loading})));
+    check('catalogue uses bounded internal previews and asynchronous lazy decode',sources.length>0&&sources.every(i=>i.src.includes('preview=true')&&i.decoding==='async'&&i.loading==='lazy'));
+    await app.page.screenshot({path:path.join(evidence,'owner-chains-painted.png')});
+  });
+}
+
 async function details(browser) {
   for (const kind of ['success','404','owned']) await runCase(browser, `late-training-${kind}`, async app => {
     await app.click('training');
@@ -313,7 +332,7 @@ async function resume(browser) {
   let browser;
   try {
     browser = await chromium.launch({ ...(process.env.CI ? {} : { channel:'msedge' }), headless:true });
-    for (const [name, task] of [['chains',chains],['details',details],['stalls',stalls],['resume',resume],['fragments',fragments],['help',withdrawalHelp]]) if (selected.has(name)) await task(browser);
+    for (const [name, task] of [['chains',chains],['details',details],['stalls',stalls],['resume',resume],['fragments',fragments],['help',withdrawalHelp],['paint',paint]]) if (selected.has(name)) await task(browser);
     console.log(JSON.stringify({ mode:report.mode, checks:report.checks.length, violations:report.checks.filter(check => !check.passed) }));
   } finally {
     fs.writeFileSync(path.join(evidence, 'navigation-resilience.json'), JSON.stringify(report, null, 2));
