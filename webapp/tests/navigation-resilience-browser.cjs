@@ -1,7 +1,7 @@
 // Existing production frontend, isolated API/Telegram transport, no financial writes.
 // NAV_BASELINE_REF=9ea3e78 measures the frozen commit and records violated invariants.
 // Default mode is a strict regression gate against the current worktree.
-const { chromium } = require('playwright');
+const { chromium, webkit } = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -10,8 +10,9 @@ const { execFileSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const revision = process.env.NAV_BASELINE_REF || '';
 const baseline = Boolean(revision);
-const evidence = path.join(__dirname, 'evidence/perf-20261028', baseline ? 'before' : 'after');
-const selected = new Set((process.env.NAV_CASES || 'chains,details,stalls,resume,fragments,help,paint').split(','));
+const engine = process.env.NAV_ENGINE === 'webkit' ? 'webkit' : 'chromium';
+const evidence = path.join(__dirname, 'evidence', process.env.NAV_EVIDENCE_DIR || 'perf-20261028', (baseline ? 'before' : 'after') + (engine === 'webkit' ? '-webkit' : ''));
+const selected = new Set((process.env.NAV_CASES || 'chains,details,stalls,resume,fragments,help,paint,latency').split(','));
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 const files = new Map();
 const picture = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="240"><rect width="400" height="240" fill="#112638"/><path d="M70 150l40-55h145l55 55v35H70z" fill="#819bab"/><circle cx="125" cy="183" r="24" fill="#09131c"/><circle cx="270" cy="183" r="24" fill="#09131c"/></svg>';
@@ -165,6 +166,21 @@ async function chains(browser) {
     const identity = await app.page.evaluate(() => ({ owned:window.__ownedCard===document.getElementById('profileActiveCars').firstElementChild, training:window.__trainingCard===document.getElementById('trainingCards').firstElementChild, ownedAdded:window.__navFixture.ownedAdded-window.__beforeMetrics.ownedAdded, ownedRemoved:window.__navFixture.ownedRemoved-window.__beforeMetrics.ownedRemoved }));
     check('unchanged populated profile keeps its card DOM', identity.owned, identity);
     check('unchanged populated training keeps its card DOM', identity.training, identity);
+  });
+}
+
+async function latency(browser) {
+  await runCase(browser,'cached-visible-latency',async app=>{
+    await app.page.waitForFunction(()=>document.querySelectorAll('#trainingCards .training-card').length===12&&document.querySelector('#profileActiveCars').children.length===40);
+    for(let round=0;round<3;round++)for(const view of ['market','profile','training','unique','more','activity']) {
+      await app.click(view==='market'?'profile':'market','latency setup');
+      const start=performance.now();
+      await app.page.evaluate(view=>document.querySelector(view==='activity'?'[data-profile-tab="deals"]':`.bottom-nav [data-nav-target="${view}"]`).click(),view);
+      await app.page.waitForFunction(view=>{const node=document.querySelector(`[data-view="${view}"]`),style=getComputedStyle(node);return !node.hidden&&Number(style.opacity)>=.99&&node.getBoundingClientRect().height>0;},view);
+      await app.page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      report.timings.push({case:'cached-visible-latency',view,round,fullyVisibleWallMs:performance.now()-start});
+      check(`cached ${view}/${round} is actually painted`,(await app.visible()).join()===view);
+    }
   });
 }
 
@@ -331,8 +347,8 @@ async function resume(browser) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   let browser;
   try {
-    browser = await chromium.launch({ ...(process.env.CI ? {} : { channel:'msedge' }), headless:true });
-    for (const [name, task] of [['chains',chains],['details',details],['stalls',stalls],['resume',resume],['fragments',fragments],['help',withdrawalHelp],['paint',paint]]) if (selected.has(name)) await task(browser);
+    browser = engine === 'webkit' ? await webkit.launch({headless:true}) : await chromium.launch({ ...(process.env.CI ? {} : { channel:'msedge' }), headless:true });
+    for (const [name, task] of [['chains',chains],['details',details],['stalls',stalls],['resume',resume],['fragments',fragments],['help',withdrawalHelp],['paint',paint],['latency',latency]]) if (selected.has(name)) await task(browser);
     console.log(JSON.stringify({ mode:report.mode, checks:report.checks.length, violations:report.checks.filter(check => !check.passed) }));
   } finally {
     fs.writeFileSync(path.join(evidence, 'navigation-resilience.json'), JSON.stringify(report, null, 2));

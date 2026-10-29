@@ -178,7 +178,7 @@ test('a failed training cover is retried on the next equal render while healthy 
     product_type:'automatic',published:true,admin_id:'owner',availability:'available',price_af_coins:25,short_description:'Описание'}]};
   const render=loadFunction('renderTraining','buyNowFlow',{state,
     document:{createElement:node,createTextNode:text=>Object.assign(node('#text'),{textContent:text})},
-    elements:{trainingCards:cards,trainingEmpty:{}},absoluteMediaUrl:url=>url,
+    elements:{trainingCards:cards,trainingEmpty:{}},absoluteMediaUrl:url=>url,profileThumbnailUrl:url=>url,
     trainingTypeLabel:value=>value,trainingAvailabilityLabel:value=>value,formatNumber:value=>String(value),coin:()=>node('coin'),renderTrainingLibrary(){},
   });
   render();

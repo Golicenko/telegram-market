@@ -1699,7 +1699,7 @@ function handleClick(event) {
     elements.trainingCards.replaceChildren(...state.training.map((product) => {
       const card = document.createElement("article"); card.className = `training-card${product.pinned ? " is-pinned" : ""}${!product.published ? " is-draft" : ""}`;
       const open = document.createElement("button"); open.type = "button"; open.className = "training-card__open"; open.dataset.openTrainingProduct = product.id;
-      const media = document.createElement("div"); media.className = "training-card__media"; const image = document.createElement("img"); image.src = absoluteMediaUrl(product.cover_url); image.alt = product.title; image.loading = "lazy"; image.decoding = "async";
+      const media = document.createElement("div"); media.className = "training-card__media"; const image = document.createElement("img"); image.alt = product.title; image.loading = "lazy"; image.decoding = "async"; image.src = profileThumbnailUrl(product.cover_url);
       image.addEventListener("error", () => { state.trainingRenderSnapshot = null; }, { once: true });
       media.append(image);
       const badge = document.createElement("span"); badge.className = "premium-mark"; badge.textContent = product.pinned ? "PREMIUM · PINNED" : "PREMIUM";
@@ -3701,7 +3701,7 @@ async function hideCurrentConversation() {
     } catch (error) {
       // Keep the quote after an uncertain POST: retry uses the same server idempotency key.
       const message = error.status === 409 ? "Расчёт устарел или каталог изменился. Измените сумму и рассчитайте заново." : error.message;
-      if (error.status === 409) state.withdrawalQuote = null;
+      if (error.status === 409) { state.withdrawalQuote = null; output.textContent=message; }
       notify(message); button.textContent = state.withdrawalQuote ? "Повторить подтверждение" : "Рассчитать подарки";
     } finally { state.withdrawalBusy = false; controls.forEach(control => { control.disabled = false; }); }
   }
@@ -4649,6 +4649,7 @@ async function hideCurrentConversation() {
       stats.textContent=`Отправлено запросов: ${summary.sent} · Получено: ${summary.received} · Новых: ${summary.new} · С согласием: ${summary.allowed}`;
       document.querySelectorAll("[data-feedback-filter]").forEach(button=>button.classList.toggle("is-active",button.dataset.feedbackFilter===filter));
       const active=summary.campaigns.some(item=>["queued","running"].includes(item.status));
+      state.feedbackCampaignActive=active;
       document.querySelector("[data-feedback-start]").disabled=active||Boolean(state.feedbackStarting);
       document.getElementById("feedbackCampaigns").replaceChildren(...summary.campaigns.map(item=>{
         const row=document.createElement("article");row.className="support-ticket";
@@ -4666,7 +4667,7 @@ async function hideCurrentConversation() {
       }));
       if(!result.items.length)host.textContent="Отзывов по этому фильтру пока нет";
       for(const [value,label]of [[offset-30,"Назад"],[offset+30,"Далее"]]){if(value<0||(label==="Далее"&&!result.has_more))continue;const button=document.createElement("button");button.type="button";button.dataset.feedbackPage=String(value);button.textContent=label;host.append(button);}
-    } catch(error){stats.textContent=`Не удалось загрузить отзывы. ${error.message} Нажмите «Обновить».`;}
+    } catch(error){if(version===state.feedbackLoadVersion)stats.textContent=`Не удалось загрузить отзывы. ${error.message} Нажмите «Обновить».`;}
   }
 
   async function startFeedbackCampaign(button) {
@@ -4676,7 +4677,7 @@ async function hideCurrentConversation() {
       state.feedbackRequestId ||= createRequestId();
       await api.request("/admin/feedback/campaigns",{method:"POST",body:JSON.stringify({client_request_id:state.feedbackRequestId,confirmed:true})});
       state.feedbackRequestId=null;await loadAdminFeedback();
-    } catch(error){notify(error.message);}finally{state.feedbackStarting=false;button.disabled=false;}
+    } catch(error){notify(error.message);}finally{state.feedbackStarting=false;button.disabled=Boolean(state.feedbackCampaignActive);}
   }
 
   async function stopFeedbackCampaign(button) {

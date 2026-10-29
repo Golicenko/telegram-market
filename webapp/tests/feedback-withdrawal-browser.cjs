@@ -51,7 +51,8 @@ try{for(const width of [320,390,430]){
   assert.match(await page.locator('#feedbackReviews').textContent(),/<script>Не HTML<\/script>/);assert.equal(await page.locator('#feedbackReviews script').count(),0);
   await page.screenshot({path:path.join(evidence,`feedback-${width}.png`)});
   await page.locator('[data-feedback-start]').click();let dialog=page.locator('dialog[open]');await dialog.getByRole('button',{name:'Отмена',exact:true}).click();assert.equal(campaignKeys.length,0);
-  for(let i=0;i<2;i++){await page.locator('[data-feedback-start]').click();await dialog.getByRole('button',{name:'Да, начать сбор отзывов',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('[data-feedback-start]').disabled);}
+  for(let i=0;i<2;i++){await page.locator('[data-feedback-start]').click();await dialog.getByRole('button',{name:'Да, начать сбор отзывов',exact:true}).click();if(!i)await page.waitForFunction(()=>!document.querySelector('[data-feedback-start]').disabled);else await page.locator('[data-feedback-stop]').waitFor();}
+  assert.equal(await page.locator('[data-feedback-start]').isDisabled(),true,'an active campaign prevents starting another');
   assert.equal(campaignKeys.length,2);assert.equal(campaignKeys[0],campaignKeys[1]);
   await page.locator('[data-feedback-stop]').click();await dialog.getByRole('button',{name:'Да, остановить',exact:true}).click();await page.locator('[data-feedback-stop]').waitFor({state:'detached'});
   await page.locator('[data-feedback-seen]').click();await page.getByText('Отзывов по этому фильтру пока нет').waitFor();

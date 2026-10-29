@@ -7,7 +7,8 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text as sql_text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app import feedback
 from app.auth import get_current_user
@@ -233,3 +234,20 @@ async def test_feedback_migration_on_existing_schema_preserves_wallets():
             tables = await connection.scalar(select(func.count()).select_from(FeedbackCampaign))
             assert tables == 0
             assert await connection.scalar(select(Wallet.earned_balance).where(Wallet.user_id==uid)) == 11
+
+
+@pytest.mark.asyncio
+async def test_feedback_worker_uses_one_connection_even_with_pool_size_one(monkeypatch):
+    calls=transport(monkeypatch)
+    async with isolated_pg() as (engine, sessions):
+        admin,_=await seed(sessions);await campaign(sessions,admin)
+        async with engine.connect() as connection:
+            schema=await connection.scalar(sql_text("SELECT current_schema()"))
+        assert schema.startswith("referral_test_")
+        small=create_async_engine(engine.url,pool_size=1,max_overflow=0,pool_timeout=1,
+            connect_args={"server_settings":{"search_path":schema}})
+        try:
+            await asyncio.wait_for(feedback.deliver_one(async_sessionmaker(small,expire_on_commit=False)),5)
+            assert len(calls)==1
+        finally:
+            await small.dispose()

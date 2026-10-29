@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import exists, func, literal, or_, select, text as sql_text, update
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from . import bot
 from .auth import require_admin
@@ -246,16 +246,21 @@ def delivery_payload(delivery, request, feedback):
 async def deliver_one(sessions=SessionLocal):
     # A session-level advisory lease survives the claim commit and serializes
     # feedback sends across Railway replicas, independently of news broadcasts.
-    async with sessions() as lease:
-        if not await lease.scalar(sql_text("SELECT pg_try_advisory_lock(74901231)")):
+    # Keep one physical connection, but no idle transaction during Bot API I/O.
+    # Binding the short claim/ack sessions to it also works with pool_size=1.
+    async with sessions.kw["bind"].connect() as lease:
+        acquired = await lease.scalar(sql_text("SELECT pg_try_advisory_lock(74901231)"))
+        await lease.commit()
+        if not acquired:
             return False
         try:
-            sent = await _deliver_one(sessions)
+            sent = await _deliver_one(async_sessionmaker(bind=lease, expire_on_commit=False))
             if sent:
                 await asyncio.sleep(1.1)
             return sent
         finally:
             await lease.execute(sql_text("SELECT pg_advisory_unlock(74901231)"))
+            await lease.commit()
 
 
 async def _deliver_one(sessions):
@@ -297,10 +302,17 @@ async def _deliver_one(sessions):
         method, payload = ("sendMessage", {"chat_id": request.telegram_id, "text": INVITATION, "reply_markup": buttons(request.id)}) if request_id else delivery_payload(delivery, request, feedback)
         result = await bot.call_bot_api(method, payload)
         message_id = result["result"]["message_id"]
+        if type(message_id) is not int or message_id <= 0:
+            raise ValueError("invalid_message_id")
     except asyncio.CancelledError:
         raise
     except (HTTPException, ValueError, KeyError, TypeError) as error:
-        error_type = "protected_content" if isinstance(error, ValueError) else "telegram_delivery_failed"
+        detail = str(error.detail).casefold() if isinstance(error, HTTPException) else ""
+        error_type = ("protected_content" if isinstance(error, ValueError) and str(error) == "protected_content"
+            else "bot_blocked" if "blocked" in detail
+            else "rate_limited" if "retry after" in detail or "too many requests" in detail
+            else "forward_restricted" if "forward" in detail and ("can't" in detail or "cannot" in detail)
+            else "telegram_delivery_failed")
         logger.warning("feedback_delivery_failed request_id=%s kind=%s error_type=%s", request.id, "invitation" if request_id else delivery.kind, error_type)
     async with sessions() as session, session.begin():
         if request_id:
