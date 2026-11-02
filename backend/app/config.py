@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     vip_renewal_hours: int = Field(default=72, ge=1, le=8760)
     vip_expiry_notifications_enabled: bool = True
     training_delivery_cooldown_seconds: int = Field(default=300, ge=30, le=86400)
+    deal_manual_reminder_cooldown_seconds: int = Field(default=3600, ge=60, le=86400)
     seller_payout_percent: int = Field(default=100, ge=1, le=100)  # Legacy env accepted; car policy is fixed at 100%.
     training_seller_payout_percent: int = Field(default=70, ge=1, le=100)
     star_topup_min: int = Field(default=10, ge=1)

@@ -9,7 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.bot import BroadcastSendResult, deal_purchase_notification_payload, deal_transfer_reminder_payload, inactive_seller_admin_payload
-from app.models import AdminAction, Conversation, ConversationMessage, Deal, Listing, User, Wallet, WalletTransaction
+from app.models import AdminAction, Conversation, ConversationMessage, Deal, Listing, Notification, User, Wallet, WalletTransaction
 from app.schemas import DealDeliveryDetailsCreate
 from app.services import auto_cancel_unanswered_deal, save_deal_delivery_details, send_conversation_message, set_deal_status, unpublish_seller_active_listings
 from app import routes
@@ -38,6 +38,8 @@ class Session:
 
     async def scalar(self, _query):
         model = _query.column_descriptions[0]["entity"]
+        if model is Notification:
+            return None
         if model is Listing:
             return self.values[(Listing, self.deal.listing_id)]
         if model is Wallet:

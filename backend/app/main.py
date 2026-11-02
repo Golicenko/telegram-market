@@ -26,6 +26,8 @@ from .promotions import router as promotion_router, run_worker as run_promotion_
 from .training_analytics import router as training_analytics_router
 from .upload_guard import ImageUploadGuard
 from .feedback import router as feedback_router, run_feedback_worker
+from .deal_reminders import router as deal_reminder_router
+from .owner_finance import router as owner_finance_router
 
 
 settings = get_settings()
@@ -145,6 +147,8 @@ app.include_router(publication_router)
 app.include_router(promotion_router)
 app.include_router(training_analytics_router)
 app.include_router(feedback_router)
+app.include_router(deal_reminder_router)
+app.include_router(owner_finance_router)
 
 
 @app.get("/", include_in_schema=False)

@@ -877,6 +877,11 @@ async def notify_deal_transfer_buyer(deal_id: uuid.UUID, *, now: datetime | None
                 deal.buyer_transfer_reminder_status = "failed"
                 deal.buyer_transfer_reminder_error = "buyer_has_not_started_bot"
                 return
+            from .deal_reminders import manual_receipt_pause_until
+            pause_until = await manual_receipt_pause_until(session, deal, current_time)
+            if pause_until:
+                deal.buyer_transfer_reminder_scheduled_at = pause_until
+                return
             deal.buyer_transfer_reminder_status = "sending"
             deal.buyer_transfer_reminder_claimed_at = current_time
             deal.buyer_transfer_reminder_attempts += 1

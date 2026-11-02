@@ -34,7 +34,7 @@
   function mount() {
     const tabs = document.querySelector(".admin-tabs");
     if (!tabs || document.getElementById("adminOverview")) return;
-    for (const [key, title, id] of [["overview", "Обзор", "adminOverview"], ["analytics", "Аналитика", "adminAnalytics"], ["audit", "Журнал действий", "adminAudit"]]) {
+    for (const [key, title, id] of [["overview", "Обзор", "adminOverview"], ["analytics", "Аналитика", "adminAnalytics"], ["audit", "Журнал действий", "adminAudit"], ["finance", "Финансы", "adminFinance"]]) {
       const tab = node("button", title); tab.type = "button"; tab.dataset.adminTab = key;
       key === "overview" ? tabs.prepend(tab) : tabs.append(tab);
       const panel = node("section"); panel.dataset.adminPanel = key; panel.hidden = true;

@@ -14,15 +14,15 @@ const server = http.createServer((req,res)=>{
 });
 (async()=>{
   await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
-  const browser = await chromium.launch({headless:true,channel:"msedge"});
+  const browser = await chromium.launch({headless:true,...(!process.env.CI?{channel:"msedge"}:{})});
   try{
     for(const width of [320,360,390,430]){
       const page=await browser.newPage({viewport:{width,height:width===320?568:844},isMobile:true,hasTouch:true});
-      let accepts=0, transfers=0, receipts=0, failTransfer=true; const errors=[];
+      let accepts=0, transfers=0, receipts=0, reminders=0, failTransfer=true; const errors=[],badScopes=[],nextAllowed={};
       let user={id:"seller",telegram_id:2,first_name:"Seller",role:"user"};
       const wallet={available_balance:200,frozen_balance:0,total_earned:0};
       const listing={id:"car",seller_id:"seller",brand:"Car",model:"",description:"Test",images:[],price_af_coins:100,status:"reserved",listing_type:"regular"};
-      const deal={id:"deal",buyer_id:"buyer",seller_id:"seller",status:"paid",price_af_coins:100,buyer_game_id:"AB123456",buyer_server:"Test",preferred_delivery_time:"2026-09-07T19:00:00+03:00",delivery_timezone:"Europe/Moscow"};
+      const deal={id:"deal",buyer_id:"buyer",seller_id:"seller",status:"paid",price_af_coins:100,buyer_game_id:null,seller_delivery_deadline:new Date(Date.now()+20*3600000).toISOString(),buyer_server:"Test",preferred_delivery_time:"2026-09-07T19:00:00+03:00",delivery_timezone:"Europe/Moscow"};
       const conversation={id:"thread",conversation_type:"deal",listing,deal,counterparty:{id:"buyer",name:"Buyer",username:null,photo_url:null},offers:[]};
       page.on("pageerror",error=>errors.push(error.message));
       await page.addInitScript(()=>{
@@ -34,13 +34,22 @@ const server = http.createServer((req,res)=>{
       });
       await page.route(/^https:/,route=>route.abort());
       await page.route("**/api/**",async route=>{
-        const endpoint=new URL(route.request().url()).pathname.slice(4);let body=[];
+        const url=new URL(route.request().url()),endpoint=url.pathname.slice(4);let body=[];
         if(endpoint==="/me")body={user,wallet};
         else if(endpoint==="/profile")body={user,wallet,active_listings:[],sold_listings:[],purchases:[],active_deals:[deal],deals:[deal],deal_threads:[],conversations:[],wallet_transactions:[],withdrawals:[]};
         else if(endpoint==="/content/unseen")body={training:{unseen_count:0,marker:0},unique:{unseen_count:0,marker:0}};
         else if(endpoint==="/conversations/unread-summary")body={total_unread:0,conversations:[]};
         else if(endpoint==="/deals/deal")body={deal};
-        else if(endpoint==="/deals/deal/conversation" || endpoint==="/conversations/thread")body=conversation;
+        else if(endpoint==="/deals/deal/conversation")body=conversation;
+        else if(endpoint==="/conversations/thread"){
+          if(url.searchParams.get("deal_id")!=="deal")badScopes.push(url.search);
+          body=url.searchParams.get("deal_id")==="deal"?conversation:{...conversation,deal:null};
+        }
+        else if(endpoint==="/deals/deal/reminders")body={next_allowed_at:nextAllowed};
+        else if(endpoint.startsWith("/deals/deal/reminders/")){
+          reminders++;const kind=endpoint.split("/").at(-1);nextAllowed[kind]=new Date(Date.now()+3600000).toISOString();
+          assert.match(route.request().postDataJSON().request_id,/^[0-9a-f-]{36}$/);body={queued:true,next_allowed_at:nextAllowed};
+        }
         else if(endpoint==="/deals/deal/seller-contacted"){
           accepts++; await new Promise(resolve=>setTimeout(resolve,400));
           deal.status="seller_contacted";deal.seller_accepted_at=new Date().toISOString();body=deal;
@@ -60,12 +69,13 @@ const server = http.createServer((req,res)=>{
       await page.goto(base+"/?deal_id=deal");
       const accept=page.locator('[data-deal-action="seller-contacted"]');await accept.waitFor();
       assert.equal(await page.locator('[data-deal-action="transfer"]').count(),0);
-      assert.equal(await page.locator('.deal-progress li').count(),3);
-      assert(await page.getByRole('button',{name:'Нужна помощь',exact:true}).isVisible());
+      assert.equal(await page.locator('.seller-deal ol li').count(),3);
+      assert(await page.getByRole('button',{name:'Помощь по сделке',exact:true}).isVisible());
       for (const button of await page.locator('.deal-controls button:visible').all()) {
         const box=await button.boundingBox();assert(box.height>=44 && box.x>=0 && box.x+box.width<=width && box.y+box.height<=page.viewportSize().height, JSON.stringify({label:await button.textContent(),box,viewport:page.viewportSize()}));
       }
-      await page.getByRole('button',{name:'Нужна помощь',exact:true}).click();
+      await page.getByRole('button',{name:'Помощь по сделке',exact:true}).click();
+      await page.getByRole('button',{name:'Открыть поддержку',exact:true}).click();
       await page.locator('[data-view="support"]').waitFor({state:'visible'});
       assert.equal(await page.locator('#supportForm [name="deal_id"]').inputValue(),'deal');
       assert.equal(deal.status,'paid');assert.equal(accepts,0);assert.equal(transfers,0);
@@ -74,6 +84,13 @@ const server = http.createServer((req,res)=>{
       await accept.evaluate(el=>{el.click();el.click();});
       assert(await accept.isDisabled());
       await accept.waitFor({state:"hidden"});assert.equal(accepts,1);
+      assert.equal(await page.locator('[data-deal-action="transfer"]').count(),0);
+      const idReminder=page.locator('[data-deal-reminder=id]');await idReminder.waitFor();
+      await idReminder.evaluate(el=>{el.click();el.click();});
+      await page.waitForFunction(()=>document.querySelector('[data-deal-reminder=id]')?.disabled);assert.equal(reminders,1);
+      deal.buyer_game_id="AB123456";
+      await page.locator('[data-deal-action=transfer]').waitFor({timeout:15000}); // real background refresh, no reopen/reload
+      await page.locator('[data-copy-game-id]').click();assert.equal(await page.evaluate(()=>window.copiedId),"AB123456");
       assert.equal(await page.locator('[data-deal-action="cancel"]').count(),0);
       user={id:"buyer",telegram_id:1,first_name:"Buyer",role:"user"};
       await page.reload();
@@ -126,9 +143,12 @@ const server = http.createServer((req,res)=>{
       assert.equal(await page.evaluate(()=>document.body.style.position),"");
       assert.deepEqual(await page.evaluate(()=>window.testHaptics.filter(v=>v!=="light")),["error","success"]);
       await page.getByText("⏳ Ожидаем подтверждения покупателя",{exact:true}).waitFor();
+      await page.locator('[data-deal-reminder=receipt]').click();
+      await page.waitForFunction(()=>document.querySelector('[data-deal-reminder=receipt]')?.disabled);assert.equal(reminders,2);
       assert(await page.locator('[data-view="deal-chat"]').isVisible());
       await page.reload();
       await page.locator('[data-view="deal-chat"]').waitFor({state:"visible"});
+      assert(await page.locator('[data-deal-reminder=receipt]').isDisabled(),'cooldown restored from server');
       assert.equal(transfers,2);
       user={id:"buyer",telegram_id:1,first_name:"Buyer",role:"user"};
       deal.transfer_started_at=new Date(Date.now()-61000).toISOString();
@@ -156,7 +176,7 @@ const server = http.createServer((req,res)=>{
       assert.equal(receipts,1);assert.equal(transfers,2);
       await page.goto(base+"/?view=profile");
       await page.locator('[data-view="profile"]').waitFor({state:"visible"});
-      assert.deepEqual(errors,[]);
+      assert.deepEqual(errors,[]);assert.deepEqual(badScopes,[]);
       console.log(width+"px: seller/buyer cancel, Back/Escape/backdrop, copy ID, error/retry, loading/success, double tap, reload, no overflow OK");
       await page.close();
     }

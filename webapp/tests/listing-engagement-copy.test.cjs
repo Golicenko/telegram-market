@@ -32,5 +32,7 @@ test("purchase and deal copy uses clear human language", () => {
 
 test("compact engagement row cannot force horizontal scrolling", () => {
   assert.match(css, /\.car-engagement\{[^}]*display:flex/);
-  assert.match(css, /\.car-engagement__like\{[^}]*min-width:42px/);
+  assert.match(css, /\.car-engagement__like\{[^}]*min-width:48px/);
+  assert.match(app, /renderListingLike\(like, listing.liked_by_me, listing.likes_count\)/);
+  assert.match(app, /createElementNS\("http:\/\/www.w3.org\/2000\/svg", "svg"\)/);
 });

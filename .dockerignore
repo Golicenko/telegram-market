@@ -7,4 +7,5 @@ backend/**/__pycache__
 backend/uploads/*
 *.pyc
 .pytest_cache
+webapp/tests/evidence/
 work

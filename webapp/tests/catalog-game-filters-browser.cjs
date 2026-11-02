@@ -62,7 +62,7 @@ async function cardStyle(card) {
         { ...base, id: 'unique-cp2', listing_type: 'unique', game_version: 'car_parking_2' },
         { ...base, id: 'unique-unknown', listing_type: 'unique', game_version: null },
       ];
-      let financialRequests = 0;
+      let financialRequests = 0, likeRequests = 0;
       const clientDiagnostics = [];
       await context.route('**/api/**', async route => {
         const request = route.request(), url = new URL(request.url()), endpoint = url.pathname.slice(4);
@@ -76,7 +76,11 @@ async function cardStyle(card) {
         else if (endpoint === '/content/training/snapshot') body = { items: [], marker: 0 };
         else if (endpoint.endsWith('/mark-seen')) body = { unseen_count: 0, marker: 0 };
         else if (endpoint === '/conversations/unread-summary') body = { total_unread: 0, conversations: [] };
-        else if (endpoint.endsWith('/view')) body = { views_count: 0, likes_count: 0, liked_by_me: false };
+        else if (endpoint.endsWith('/view') || endpoint.endsWith('/like')) {
+          const row=[...regular,...unique].find(x=>x.id===endpoint.split('/')[2]);
+          if(endpoint.endsWith('/like')){likeRequests++;await new Promise(r=>setTimeout(r,100));row.liked_by_me=request.method()==='POST';row.likes_count=row.liked_by_me?1:0;}
+          body={views_count:0,likes_count:row?.likes_count||0,liked_by_me:Boolean(row?.liked_by_me)};
+        }
         else if (endpoint === '/diagnostics/client') clientDiagnostics.push(request.postDataJSON());
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
       });
@@ -151,6 +155,19 @@ async function cardStyle(card) {
       await nav('market'); await page.locator('#extraFiltersButton').click(); await page.locator('#resetFiltersButton').click(); await nav('unique');
       assert.equal(await page.locator('#uniqueGameFilter').inputValue(), 'car_parking_2');
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await nav('market');
+      const like=page.locator('#marketCars [data-listing-like=cp1-regular]');
+      assert.equal(await like.locator('svg').count(),1);
+      await like.evaluate(button=>{button.click();button.click();button.dispatchEvent(new MouseEvent('click',{bubbles:true}));});
+      await page.waitForFunction(()=>document.querySelector('#marketCars [data-listing-like=cp1-regular]').getAttribute('aria-pressed')==='true');
+      assert.equal(likeRequests,1);
+      assert(await page.locator('[data-view=market]').isVisible(),'like does not open listing');
+      await page.reload();await page.locator('#marketCars [data-listing-like=cp1-regular]').waitFor();
+      assert.equal(await like.getAttribute('aria-pressed'),'true','like survives app reload with server data');
+      await like.click();await page.waitForFunction(()=>document.querySelector('#marketCars [data-listing-like=cp1-regular]').getAttribute('aria-pressed')==='false');
+      assert.equal(likeRequests,2);assert.equal(await like.locator('span').textContent(),'0');
+      await page.locator('.header-avatar').click();assert(await page.locator('[data-view=profile]').isVisible(),'own avatar opens existing profile');
+      await nav('market');assert(await like.isVisible());
       assert.equal(financialRequests, 0); assert.deepEqual(errors, []); assert.deepEqual(clientDiagnostics, []);
       console.log(`PASS ${platform} ${width}: independent КП filters/all/CP1/CP2, price/brand/stats/reset, profile persistence, unchanged Market cards, Unique top badges/no overlap, outer VIP border`);
       await context.close();
