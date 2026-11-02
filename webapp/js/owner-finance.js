@@ -55,7 +55,7 @@
           for(const [title,values,note] of [
             ["Оборот",[s.turnover_af+" AF"],"Оплаченные автомобили и обучение до возвратов"],
             ["Доход платформы",[s.platform_income_af+" AF",s.publication_income_stars+" Stars"],"Разные единицы, не суммируются"],
-            ["Расходы и обязательства",[s.recorded_payout_stars+" Stars — выполненные выводы",s.bonus_issued_af+" AF — выданные бонусы"],"Остатки и резервы сейчас показаны ниже; внешние затраты не учтены"],
+            ["Расходы и обязательства",[s.recorded_payout_stars+" Stars — выполненные выводы",data.liabilities_now.non_bonus_af+" AF — текущие остатки и резервы"],"Дополнительно "+data.liabilities_now.bonus_credits_af+" бонусных AF сейчас; за период выдано "+s.bonus_issued_af+" AF бонусов. Внешние затраты не учтены"],
             ["Чистый результат",[s.net_profit===null?"Не рассчитан":s.net_profit],s.net_label],
           ]){const card=node("div",null,"admin-metric");card.append(node("h3",title));values.forEach(x=>card.append(node("strong",x)));card.append(node("span",note));grid.append(card);}
           content.append(grid,node("p","Зачислено владельцу за его продажи и обучение: "+s.owner_income_af+" AF. Это не вывод в реальные деньги."),

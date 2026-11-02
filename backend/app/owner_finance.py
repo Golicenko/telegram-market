@@ -179,6 +179,8 @@ async def report_data(session, owner_id, *, start=None, end=None, timezone="Euro
             "bonus_issued_af": total("bonus_issued", "AF"), "net_profit": None, "external_owner_receipts": None,
             "net_label": "Расчётная прибыль без неучтённых расходов: недостаточно данных о расходах"},
         "liabilities_now": {"wallets_af": {key: amount(value) for key, value in balances.items()},
+            "non_bonus_af": amount(sum(value for key, value in balances.items() if not key.startswith("bonus_"))),
+            "bonus_credits_af": amount(sum(value for key, value in balances.items() if key.startswith("bonus_"))),
             "withdrawals": {"count": pending.count, "reserved_af": amount(pending.af), "expected_fee_af": amount(pending.fees_af),
                 "expected_stars": pending.stars, "missing_fee_count": pending.missing_fee_count},
             "unfulfilled_publications_stars": pub_pending},

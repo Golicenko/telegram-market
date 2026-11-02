@@ -14,9 +14,9 @@ from app.admin_access import require_owner
 from app.auth import get_current_user
 from app.config import Settings, get_settings
 from app.database import get_session
-from app.models import (Deal, PublicationDraft, StarPayment, TrainingMaterial, TrainingProduct,
+from app.models import (Deal, Listing, PublicationDraft, StarPayment, TrainingMaterial, TrainingProduct,
                         User, Wallet, WalletTransaction, WithdrawalRequest)
-from app.services import (complete_deal, purchase_training_product, save_deal_delivery_details,
+from app.services import (complete_deal, purchase_listing, purchase_training_product, save_deal_delivery_details,
                           set_deal_status, wallet_snapshot, wallet_transaction)
 from test_referral_bonus_postgres import isolated_pg, signed_login
 from test_seller_orders_postgres import paid_order
@@ -66,6 +66,8 @@ async def test_real_settlements_revenue_units_refunds_and_readonly():
             (await session.get(Deal, deal.id)).transfer_started_at = datetime.now(UTC)-timedelta(seconds=61)
         async with sessions() as session:
             await complete_deal(session, buyer, deal.id)
+        async with sessions() as session:
+            await complete_deal(session, buyer, deal.id)  # idempotent replay must not double owner income
         other = await signed_login(sessions, 9750)
         async with sessions() as session, session.begin():
             wallet = await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))
@@ -78,6 +80,22 @@ async def test_real_settlements_revenue_units_refunds_and_readonly():
                 await session.flush()
                 session.add(TrainingMaterial(product_id=product.id, title="Test material", material_type="text", delivery_reference="Isolated test"))
                 products.append(product)
+            third_party_car = Listing(seller_id=other.id, game_version="car_parking_1", listing_type="regular",
+                status="active", brand="Other seller", model="Test", power_hp=1, max_speed_kph=1,
+                price_af_coins=21, description="Isolated other owner's sale")
+            session.add(third_party_car)
+        async with sessions() as session:
+            other_deal, _, _ = await purchase_listing(session, buyer, third_party_car.id)
+        async with sessions() as session:
+            await set_deal_status(session, other, other_deal.id, "seller_contacted")
+        async with sessions() as session:
+            await save_deal_delivery_details(session, buyer, other_deal.id, "TESTID")
+        async with sessions() as session:
+            await set_deal_status(session, other, other_deal.id, "transfer_in_progress")
+        async with sessions() as session, session.begin():
+            (await session.get(Deal, other_deal.id)).transfer_started_at = datetime.now(UTC)-timedelta(seconds=61)
+        async with sessions() as session:
+            await complete_deal(session, buyer, other_deal.id)
         purchases = []
         for product in products:
             async with sessions() as session:
@@ -88,6 +106,8 @@ async def test_real_settlements_revenue_units_refunds_and_readonly():
             vip = wallet_transaction(wallet, "listing_promotion", Decimal("-10"), *wallet_snapshot(wallet), "Fixture final VIP",
                 external_reference="isolated-final-vip")
             session.add(vip)
+            session.add(wallet_transaction(wallet, "vip_reservation", Decimal("-10"), *wallet_snapshot(wallet),
+                "Reservation is not additional VIP revenue", external_reference="isolated-vip-reserve"))
             # One receipt is linked to one published draft. It appears as a cash
             # receipt AND as recognized service revenue, never summed together.
             receipt = StarPayment(user_id=buyer.id, telegram_payment_charge_id="test-publication-charge",
@@ -96,10 +116,18 @@ async def test_real_settlements_revenue_units_refunds_and_readonly():
                 xtr_amount=100, af_coin_amount=100, status="credited", raw_payload={}, processed_at=datetime.now(UTC))
             test_receipt = StarPayment(user_id=buyer.id, telegram_payment_charge_id="test-excluded-charge",
                 xtr_amount=999, af_coin_amount=999, status="credited", raw_payload={"is_test": True}, processed_at=datetime.now(UTC))
-            session.add_all([receipt, topup, test_receipt])
+            pending_receipt = StarPayment(user_id=buyer.id, telegram_payment_charge_id="test-pending-publication",
+                xtr_amount=5, af_coin_amount=0, status="publication", raw_payload={}, processed_at=datetime.now(UTC))
+            returned_receipt = StarPayment(user_id=buyer.id, telegram_payment_charge_id="test-returned-publication",
+                xtr_amount=7, af_coin_amount=0, status="publication_refunded", raw_payload={}, processed_at=datetime.now(UTC))
+            session.add_all([receipt, topup, test_receipt, pending_receipt, returned_receipt])
             await session.flush()
             session.add(PublicationDraft(user_id=buyer.id, request_id=uuid.uuid4(), payload={}, price_stars=5,
                 payment_id=receipt.id, listing_id=listing.id, status="published"))
+            session.add(PublicationDraft(user_id=buyer.id, request_id=uuid.uuid4(), payload={}, price_stars=5,
+                payment_id=pending_receipt.id, status="paid"))
+            session.add(PublicationDraft(user_id=buyer.id, request_id=uuid.uuid4(), payload={}, price_stars=7,
+                payment_id=returned_receipt.id, status="refunded"))
             withdrawal = WithdrawalRequest(user_id=owner.id, amount=30, fee_af=9, payout_stars=15, payout_method="manual_gift",
                 details="Fixture", status="paid", paid_at=datetime.now(UTC))
             session.add(withdrawal)
@@ -112,9 +140,11 @@ async def test_real_settlements_revenue_units_refunds_and_readonly():
                 return await owner_finance.report_data(session, owner.id, all_time=True, **kwargs)
         result = await report(limit=2)
         summary = result["summary"]
-        assert summary["turnover_af"] == "150.00"  # car 100 + training 30 + training 20
+        assert summary["turnover_af"] == "171.00"  # two cars 100+21, training 30+20
         assert summary["publication_income_stars"] == "5.00"
-        assert summary["stars_received"] == "105.00"  # not 110, not 1104, not income
+        assert summary["stars_received"] == "117.00"  # no duplicated service receipt, no test payment
+        assert summary["stars_returned_from_receipts_cohort"] == "7.00"
+        assert result["liabilities_now"]["unfulfilled_publications_stars"] == 5
         assert summary["platform_income_af"] == owner_finance.amount(19 + sum(p.platform_commission for p in purchases))
         assert summary["owner_income_af"] == owner_finance.amount(deal.seller_payout + purchases[0].seller_payout)
         assert summary["recorded_payout_stars"] == "15.00" and summary["net_profit"] is None
