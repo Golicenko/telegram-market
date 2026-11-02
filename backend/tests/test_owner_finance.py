@@ -135,6 +135,11 @@ async def test_real_settlements_revenue_units_refunds_and_readonly():
             owner_wallet = await session.scalar(select(Wallet).where(Wallet.user_id == owner.id))
             session.add(wallet_transaction(owner_wallet, "withdrawal_paid", Decimal("-30"), *wallet_snapshot(owner_wallet),
                 "Isolated manual completion", withdrawal_id=withdrawal.id))
+            # An actual legacy settlement remains turnover without new deadline
+            # fields; a bare historical status without evidence does not.
+            (await session.get(Deal, deal.id)).seller_response_deadline = None
+            session.add(Deal(listing_id=third_party_car.id,buyer_id=buyer.id,seller_id=other.id,status="cancelled",
+                price_af_coins=21,frozen_amount=0,seller_payout=21,platform_commission=0))
         async def report(**kwargs):
             async with sessions() as session:
                 return await owner_finance.report_data(session, owner.id, all_time=True, **kwargs)
@@ -145,6 +150,7 @@ async def test_real_settlements_revenue_units_refunds_and_readonly():
         assert summary["stars_received"] == "117.00"  # no duplicated service receipt, no test payment
         assert summary["stars_returned_from_receipts_cohort"] == "7.00"
         assert result["liabilities_now"]["unfulfilled_publications_stars"] == 5
+        assert result["data_quality"]["unverified_car_orders"] == 1
         assert summary["platform_income_af"] == owner_finance.amount(19 + sum(p.platform_commission for p in purchases))
         assert summary["owner_income_af"] == owner_finance.amount(deal.seller_payout + purchases[0].seller_payout)
         assert summary["recorded_payout_stars"] == "15.00" and summary["net_profit"] is None

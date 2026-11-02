@@ -8,7 +8,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import Numeric, String, and_, cast, func, literal, select, text, union_all
+from sqlalchemy import Numeric, String, and_, cast, func, literal, or_, select, text, union_all
 
 from .admin_access import require_owner
 from .admin_operations import date_window
@@ -43,6 +43,18 @@ LABELS = {
 
 def amount(value):
     return format(Decimal(value or 0).quantize(Decimal("0.01")), "f")
+
+
+def car_payment_evidence():
+    wt = WalletTransaction
+    ledger = select(wt.id).where(wt.related_deal_id == Deal.id, or_(
+        and_(wt.user_id == Deal.buyer_id, wt.transaction_type == "protection_hold", wt.amount == -Deal.price_af_coins),
+        and_(wt.user_id == Deal.seller_id, wt.transaction_type == "sale_income", wt.amount == Deal.seller_payout),
+        and_(wt.user_id == Deal.buyer_id, wt.transaction_type.in_(("refund", "seller_timeout_refund", "dispute_refund")), wt.amount > 0),
+    )).exists()
+    # Legacy completed/refunded orders may predate deadline fields. Current
+    # single/cart checkout also persists a deadline in the paid transaction.
+    return or_(and_(Deal.frozen_amount > 0, Deal.seller_response_deadline.is_not(None)), ledger)
 
 
 def operations(owner_id):
@@ -85,7 +97,7 @@ def operations(owner_id):
         # Both single and cart checkout create one Deal with a persisted paid
         # snapshot and deadline. Legacy cart holds have no individual deal FK.
         row("car_turnover", Deal, Deal.created_at, Deal.price_af_coins, Deal.buyer_id,
-            Deal.status != "pending_payment", Deal.frozen_amount > 0, Deal.seller_response_deadline.is_not(None), category="turnover"),
+            Deal.status != "pending_payment", car_payment_evidence(), category="turnover"),
         row("training_turnover", training, training.created_at, training.price_af_coins, training.buyer_id,
             confirmed_purchase(), category="turnover"),
         pub,
@@ -118,7 +130,7 @@ def operations(owner_id):
 DEFINITIONS = [
     "Все суммы AF и Stars независимы. Пересчёта в евро нет. Пополнения — поступления и обязательства, не прибыль.",
     "30% — комиссия текущего вывода, не пополнения. В доход включена только сохранённая fee_af исполненного вывода с ledger-списанием; исторические NULL не восстановлены по новой формуле.",
-    "Оборот AF: оплаченные автомобили с серверным сроком и подтверждённые покупки обучения, до возвратов. Публикации Stars показаны отдельно.",
+    "Оборот AF: автомобили с атомарным платным snapshot/deadline либо подтверждающей ledger-записью (включая старые без deadline), и подтверждённые покупки обучения, до возвратов. Неподтверждённые старые заказы отмечены отдельно. Публикации Stars показаны отдельно.",
     "Доход платформы: выполненный VIP, опубликованные платные объявления, рассчитанные комиссии. Продажи владельца показаны отдельно и не прибавляются повторно к обороту.",
     "Обучение: оборот, доля платформы и зачисления авторам разделены. Если найден возврат обучения, его комиссия исключена до сверки (частичное распределение не выдумывается).",
     "График — текущая проекция признанного дохода по датам исходных операций, не банковский денежный поток. Для всего времени свыше 366 дней используются месяцы.",
@@ -171,6 +183,8 @@ async def report_data(session, owner_id, *, start=None, end=None, timezone="Euro
         PublicationDraft.payment_id.is_not(None), PublicationDraft.status.in_(("paid", "review", "refund_pending"))))
     unverified = await session.scalar(select(func.count()).select_from(TrainingPurchase).where(
         TrainingPurchase.created_at >= lower, TrainingPurchase.created_at < upper, ~confirmed_purchase()))
+    unverified_cars = await session.scalar(select(func.count()).select_from(Deal).where(
+        Deal.created_at >= lower, Deal.created_at < upper, Deal.status != "pending_payment", ~car_payment_evidence()))
     return {"timezone": timezone, "from_utc": lower, "until_utc_exclusive": upper, "generated_at": now,
         "summary": {"turnover_af": total("turnover", "AF"), "publication_income_stars": total("platform_income", "Stars"),
             "platform_income_af": total("platform_income", "AF"), "owner_income_af": total("owner_income", "AF"),
@@ -184,7 +198,7 @@ async def report_data(session, owner_id, *, start=None, end=None, timezone="Euro
             "withdrawals": {"count": pending.count, "reserved_af": amount(pending.af), "expected_fee_af": amount(pending.fees_af),
                 "expected_stars": pending.stars, "missing_fee_count": pending.missing_fee_count},
             "unfulfilled_publications_stars": pub_pending},
-        "data_quality": {"paid_withdrawals_without_fee": unknown_paid, "unverified_training_purchases": unverified},
+        "data_quality": {"paid_withdrawals_without_fee": unknown_paid, "unverified_training_purchases": unverified, "unverified_car_orders": unverified_cars},
         "sources": sources, "chart": {"grain": grain, "items": chart},
         "operations": [{**dict(row), "label": LABELS[row["kind"]], "amount": amount(row["amount"])} for row in rows[:limit]],
         "has_more": len(rows) > limit, "offset": offset, "limit": limit, "definitions": DEFINITIONS}
