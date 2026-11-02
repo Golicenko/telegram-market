@@ -14,7 +14,7 @@ const server = http.createServer((req,res)=>{
 });
 (async()=>{
   await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
-  const browser = await chromium.launch({headless:true,channel:"msedge"});
+  const browser = await chromium.launch({headless:true,...(!process.env.CI?{channel:"msedge"}:{})});
   try{
     for(const width of [320,360,390,430]){
       const page=await browser.newPage({viewport:{width,height:width===320?568:844},isMobile:true,hasTouch:true});
@@ -60,12 +60,13 @@ const server = http.createServer((req,res)=>{
       await page.goto(base+"/?deal_id=deal");
       const accept=page.locator('[data-deal-action="seller-contacted"]');await accept.waitFor();
       assert.equal(await page.locator('[data-deal-action="transfer"]').count(),0);
-      assert.equal(await page.locator('.deal-progress li').count(),3);
-      assert(await page.getByRole('button',{name:'Нужна помощь',exact:true}).isVisible());
+      assert.equal(await page.locator('.seller-deal ol li').count(),3);
+      assert(await page.getByRole('button',{name:'Помощь по сделке',exact:true}).isVisible());
       for (const button of await page.locator('.deal-controls button:visible').all()) {
         const box=await button.boundingBox();assert(box.height>=44 && box.x>=0 && box.x+box.width<=width && box.y+box.height<=page.viewportSize().height, JSON.stringify({label:await button.textContent(),box,viewport:page.viewportSize()}));
       }
-      await page.getByRole('button',{name:'Нужна помощь',exact:true}).click();
+      await page.getByRole('button',{name:'Помощь по сделке',exact:true}).click();
+      await page.getByRole('button',{name:'Открыть поддержку',exact:true}).click();
       await page.locator('[data-view="support"]').waitFor({state:'visible'});
       assert.equal(await page.locator('#supportForm [name="deal_id"]').inputValue(),'deal');
       assert.equal(deal.status,'paid');assert.equal(accepts,0);assert.equal(transfers,0);

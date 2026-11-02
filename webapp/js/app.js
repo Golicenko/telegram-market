@@ -625,6 +625,8 @@
 
 function handleClick(event) {
   const target = event.target;
+  if (target.closest("[data-deal-reminder]")) return void sendDealReminder(target.closest("button"));
+  if (target.closest("[data-chat-help]")) return void openChatHelp();
   const profileAction = target.closest(".profile-main-actions > button");
   if (profileAction) selectProfileAction(profileAction);
   if (target.closest("[data-reload-help]")) return void loadHelpRules(true);
@@ -921,6 +923,8 @@ function handleClick(event) {
     if (state.navigationTrace.length > 12) state.navigationTrace.shift();
     selectProfileAction();
     if (state.currentView === "deal-chat" && viewName !== "deal-chat") {
+      window.AutoFlowSellerDeal.stop();
+      document.body.classList.remove("seller-chat-open");
       saveChatDraft();
       state.chatOpening = (state.chatOpening || 0) + 1;
       releaseChatPresence();
@@ -1120,9 +1124,9 @@ function handleClick(event) {
   const messagePath = `/conversations/${conversationId}/messages?${messageQuery}`;
   const [messagesResult, dealResult] = await Promise.allSettled([
     api.request(messagePath),
-    api.request(`/conversations/${conversationId}`),
+    api.request(`/conversations/${conversationId}${dealId ? `?deal_id=${encodeURIComponent(dealId)}` : ""}`),
   ]);
-  if (state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId) return;
+  if (state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId || (state.currentConversation?.deal?.id || null) !== (dealId || null)) return;
   if (messagesResult.status === "rejected") {
     setChatConnection("Нет соединения. Переписка восстановится автоматически.");
     if (Number(messagesResult.reason?.status) === 409) return closeDealChat();
@@ -1133,7 +1137,7 @@ function handleClick(event) {
   if (!incoming.length && last) {
     messageQuery.delete("after");
     incoming = safeArray(await api.request(`/conversations/${conversationId}/messages?${messageQuery}`));
-    if (state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId) return;
+    if (state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId || (state.currentConversation?.deal?.id || null) !== (dealId || null)) return;
   }
   const messages = mergeChatMessages(state.messages, incoming);
   const dealDetails = dealResult.status === "fulfilled" ? dealResult.value : null;
@@ -1153,6 +1157,7 @@ function handleClick(event) {
   );
   if (refreshedDeal) state.currentConversation.deal = refreshedDeal;
   if (dealDetails) state.currentConversation = dealDetails;
+  if (dealChanged && ["completed","cancelled"].includes(refreshedDeal?.status)) void loadOptionalData(["profile"],{force:true,allowRecovery:false});
 
   if (oldLastMessageId !== newLastMessageId || dealChanged || offersChanged || JSON.stringify(messages) !== JSON.stringify(state.messages)) {
     state.messages = messages;
@@ -1580,7 +1585,7 @@ function handleClick(event) {
     like.className = `car-engagement__like${listing.liked_by_me ? " is-liked" : ""}`;
     like.dataset.listingLike = listing.id;
     like.setAttribute("aria-pressed", listing.liked_by_me ? "true" : "false");
-    like.textContent = `${listing.liked_by_me ? "♥" : "♡"} ${Number(listing.likes_count || 0)}`;
+    renderListingLike(like, listing.liked_by_me, listing.likes_count);
     const isOwner = state.me?.user.id === listing.seller_id;
     if (isOwner) {
       like.disabled = true;
@@ -1660,11 +1665,36 @@ function handleClick(event) {
     if (!listing || state.listingLikeRequests.has(id)) return;
     if (listing.seller_id === state.me?.user.id) return notify("Нельзя поставить лайк собственному объявлению");
     state.listingLikeRequests.add(id);
+    listingLikeButtons(id).forEach(button => { button.disabled = true; button.setAttribute("aria-busy", "true"); });
     try {
       const engagement = await api.request(`/listings/${id}/like`, { method: listing.liked_by_me ? "DELETE" : "POST" });
       applyListingEngagement(id, engagement);
     } catch (error) { notify(error.message); }
-    finally { state.listingLikeRequests.delete(id); }
+    finally {
+      state.listingLikeRequests.delete(id);
+      listingLikeButtons(id).forEach(button => { button.disabled = listing.seller_id === state.me?.user.id; button.removeAttribute("aria-busy"); });
+    }
+  }
+
+  function listingLikeButtons(id) {
+    const buttons = [...document.querySelectorAll(`[data-listing-like="${CSS.escape(String(id))}"]`)];
+    if (String(state.selectedListing?.id) === String(id)) buttons.push(elements.listingPageLike);
+    return buttons;
+  }
+
+  function renderListingLike(button, liked, count) {
+    const total = Math.max(0, Number(count) || 0);
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(svg.namespaceURI, "path");
+    path.setAttribute("d", "M7 10v11H3V10h4Zm3 11h8a2 2 0 0 0 2-1.6l1.5-7A2 2 0 0 0 19.5 10H14l1-5a2.5 2.5 0 0 0-2.5-3L7 10v11h3Z");
+    svg.append(path);
+    const value = document.createElement("span"); value.textContent = String(total);
+    button.replaceChildren(svg, value);
+    button.classList.add("car-engagement__like");
+    button.classList.toggle("is-liked", Boolean(liked));
+    button.setAttribute("aria-pressed", liked ? "true" : "false");
+    button.setAttribute("aria-label", `${liked ? "Убрать лайк" : "Нравится"} · ${total}`);
   }
 
   function applyListingEngagement(id, engagement) {
@@ -1687,9 +1717,7 @@ function handleClick(event) {
     }
     document.querySelectorAll(`[data-listing-views="${CSS.escape(String(id))}"]`).forEach((node) => { node.textContent = `👁 ${Number(engagement.views_count || 0)}`; });
     document.querySelectorAll(`[data-listing-like="${CSS.escape(String(id))}"]`).forEach((button) => {
-      button.classList.toggle("is-liked", Boolean(engagement.liked_by_me));
-      button.setAttribute("aria-pressed", engagement.liked_by_me ? "true" : "false");
-      button.textContent = `${engagement.liked_by_me ? "♥" : "♡"} ${Number(engagement.likes_count || 0)}`;
+      renderListingLike(button, engagement.liked_by_me, engagement.likes_count);
     });
   }
 
@@ -2246,8 +2274,7 @@ function handleClick(event) {
       `Статус: ${statusLabel(listing.status)}`,
     ].map((value) => { const item = document.createElement("span"); item.textContent = value; return item; }));
     elements.listingPageViews.textContent = `👁 ${Number(listing.views_count || 0)} просмотров`;
-    elements.listingPageLike.textContent = `${listing.liked_by_me ? "♥" : "♡"} ${Number(listing.likes_count || 0)} лайков`;
-    elements.listingPageLike.classList.toggle("is-liked", Boolean(listing.liked_by_me));
+    renderListingLike(elements.listingPageLike, listing.liked_by_me, listing.likes_count);
     const isOwner = listing.seller_id === state.me?.user.id;
     elements.listingPageLike.disabled = isOwner;
     elements.listingPageBuy.hidden = isOwner;
@@ -2825,6 +2852,7 @@ async function hideCurrentConversation() {
       state.previousView = state.currentView;
       renderConversation();
       await navigate("deal-chat");
+      void loadDealReminderState();
       document.getElementById("chatInput").focus({ preventScroll: true });
     }
     catch (error) { notify(error.message); }
@@ -2854,6 +2882,7 @@ async function hideCurrentConversation() {
       renderConversation();
       await navigate("deal-chat");
       try {
+        void loadDealReminderState();
         await markConversationRead(id, requestedDealId);
         if (state.currentConversation?.id === id && state.currentView === "deal-chat") await refreshOpenConversation();
       } catch (error) {
@@ -2876,6 +2905,11 @@ async function hideCurrentConversation() {
     const previousTop = elements.dealMessages.scrollTop;
     state.chatForceBottom = false;
     const other = details.counterparty;
+    const sellerView=details.deal?.seller_id===state.me.user.id;
+    document.body.classList.toggle("seller-chat-open",sellerView);
+    let help=document.getElementById("chatHelpButton");
+    if(!help){help=document.createElement("button");help.id="chatHelpButton";help.type="button";help.dataset.chatHelp="";help.textContent="?";help.className="chat-help";help.setAttribute("aria-label","Помощь по сделке");document.getElementById("chatHideButton").before(help);}
+    help.hidden=!sellerView;
     document.getElementById("chatName").textContent = other.name || "Пользователь";
     document.getElementById("chatActivity").textContent = [other.username ? `@${other.username}` : null, other.mini_app_last_active_at ? `в Mini App ${formatMessageTime(other.mini_app_last_active_at)}` : null].filter(Boolean).join(" · ") || "Активность неизвестна";
     const isDealThread = details.conversation_type === "deal";
@@ -2888,14 +2922,14 @@ async function hideCurrentConversation() {
     elements.chatListing.replaceChildren();
     elements.chatListing.hidden = !isDealThread;
     elements.chatListing.classList.toggle("is-without-image", isDealThread && !details.listing.images?.[0]);
-    if (isDealThread && details.listing.images?.[0]) { const image = document.createElement("img"); image.src = absoluteMediaUrl(details.listing.images[0]); image.alt = listingTitle(details.listing); elements.chatListing.append(image); }
+    if (isDealThread && details.listing.images?.[0]) { const image = document.createElement("img"); image.src = profileThumbnailUrl(details.listing.images[0]); image.alt = listingTitle(details.listing); elements.chatListing.append(image); }
     const listingCopy = document.createElement("div"); const title = document.createElement("strong"); title.textContent = listingTitle(details.listing);
     const priceValue = details.deal?.price_af_coins ?? details.accepted_price_af_coins ?? details.listing.price_af_coins;
     const price = document.createElement("small"); price.textContent = `${formatNumber(priceValue)} AF Coins`;
     const context = document.createElement("small"); context.textContent = `${listingGameLabel(details.listing)} · ${details.deal ? dealStatusLabel(details.deal.status) : "Объявление"} · передача ${deliveryTimeLabel(details.listing.delivery_time_estimate)}`;
     if (isDealThread) {
-      listingCopy.append(title, price, context);
-      const listingAction = document.createElement("span"); listingAction.textContent = "Открыть ›"; elements.chatListing.append(listingCopy, listingAction);
+      if(sellerView){context.textContent=`${listingGameLabel(details.listing)} · ${formatNumber(priceValue)} AF`;listingCopy.append(title,context);}else listingCopy.append(title,price,context);
+      const listingAction = document.createElement("span"); listingAction.textContent = sellerView?"›":"Открыть ›"; elements.chatListing.append(listingCopy, listingAction);
     }
     const renderedMessages = []; let previousDay = "";
     if (state.chatHasOlder) {
@@ -2968,6 +3002,11 @@ async function hideCurrentConversation() {
     const isBuyer = deal?.buyer_id === state.me.user.id;
     const hasDetails = Boolean(deal?.buyer_game_id);
     const requiresDetails = isBuyer && !hasDetails && ["paid", "seller_contacted"].includes(deal.status);
+    if(deal?.seller_id===state.me.user.id){
+      document.body.classList.remove("deal-details-required");
+      window.AutoFlowSellerDeal.render({panel,deal,formatNumber,nextAllowed:state.dealReminderState?.[deal.id]||{},isBusy:()=>Boolean(state.dealActionPending||state.dealReminderBusy?.has(deal.id)),hasMessages:state.messages.some(item=>item.message_type!=="system")});return;
+    }
+    window.AutoFlowSellerDeal.stop();panel.classList.remove("seller-deal","seller-deal--intro");
     document.body.classList.toggle("deal-details-required", requiresDetails);
     // Polling, receipts and incoming messages must not detach a focused input.
     // Keep the actual DOM node (including selection/composition and submit lock).
@@ -3067,6 +3106,45 @@ async function hideCurrentConversation() {
     }
   }
 
+  async function loadDealReminderState() {
+    const deal=state.currentConversation?.deal;
+    if(!deal||deal.seller_id!==state.me?.user.id)return;
+    state.dealReminderLoads ||= new Map();if(state.dealReminderLoads.has(deal.id))return state.dealReminderLoads.get(deal.id);
+    const task=api.request(`/deals/${deal.id}/reminders`).then(result=>{
+      state.dealReminderState ||= {};state.dealReminderState[deal.id]=result.next_allowed_at||{};
+      if(state.currentConversation?.deal?.id===deal.id&&state.currentView==="deal-chat")renderDealDeliveryPanel();
+    }).catch(error=>reportClientError("deal_reminder_state",error)).finally(()=>state.dealReminderLoads.delete(deal.id));
+    state.dealReminderLoads.set(deal.id,task);return task;
+  }
+
+  async function sendDealReminder(button) {
+    const deal=state.currentConversation?.deal,kind=button.dataset.dealReminder;
+    if(!deal||button.disabled||!["id","receipt"].includes(kind))return;
+    state.dealReminderBusy ||= new Set();if(state.dealReminderBusy.has(deal.id))return;
+    state.dealReminderBusy.add(deal.id);button.disabled=true;
+    const key=`${deal.id}:${kind}`;state.dealReminderKeys ||= {};state.dealReminderKeys[key] ||= createRequestId();
+    try{
+      const result=await api.request(`/deals/${deal.id}/reminders/${kind}`,{method:"POST",body:JSON.stringify({request_id:state.dealReminderKeys[key]})});
+      state.dealReminderState ||= {};state.dealReminderState[deal.id]=result.next_allowed_at;delete state.dealReminderKeys[key];
+      notify("Напоминание поставлено в очередь");
+    }catch(error){
+      if(error.status===429){state.dealReminderState ||= {};state.dealReminderState[deal.id] ||= {};state.dealReminderState[deal.id][kind]=new Date(Date.now()+(error.retryAfterMs||60000)).toISOString();delete state.dealReminderKeys[key];}
+      if(error.status===409&&state.currentConversation?.deal?.id===deal.id)void refreshOpenConversation();
+      notify(error.message);
+    }finally{state.dealReminderBusy.delete(deal.id);if(state.currentConversation?.deal?.id===deal.id)renderDealDeliveryPanel();}
+  }
+
+  function openChatHelp() {
+    const deal=state.currentConversation?.deal;if(!deal)return;
+    const dialog=document.createElement("dialog");dialog.className="modal seller-deal-help";
+    const title=document.createElement("h2");title.textContent="Помощь по сделке";dialog.append(title);
+    const add=(label,action)=>{const button=document.createElement("button");button.type="button";button.textContent=label;button.onclick=()=>{dialog.close();action();};dialog.append(button);};
+    add("Открыть поддержку",()=>openDealSupport(deal.id));
+    add("Как передать автомобиль",()=>{void navigate("help");const article=document.getElementById("help-deal");if(article){article.open=true;article.scrollIntoView({block:"start"});}});
+    if(deal.status==="paid"&&!deal.seller_accepted_at&&!deal.transfer_started_at)add("Отменить сделку",()=>{if(state.currentConversation?.deal?.id===deal.id)void runDealAction("cancel");});
+    add("Закрыть",()=>{});dialog.addEventListener("close",()=>dialog.remove(),{once:true});document.body.append(dialog);dialog.showModal();
+  }
+
   async function copyBuyerGameId(value, container = document.body) {
     try {
       let copied = false;
@@ -3114,6 +3192,7 @@ async function hideCurrentConversation() {
     if (!deal || ["completed", "cancelled"].includes(deal.status)) return;
     const isBuyer = deal.buyer_id === state.me.user.id;
     const isSeller = deal.seller_id === state.me.user.id;
+    if(isSeller)return;
     const hasDeliveryDetails = Boolean(deal.buyer_game_id);
     elements.dealDeliveryPanel.querySelectorAll(".seller-delivery-deadline,.deal-progress").forEach(item => item.remove());
     if (isSeller && ["paid", "seller_contacted", "transfer_in_progress"].includes(deal.status)) {
@@ -3209,7 +3288,7 @@ async function hideCurrentConversation() {
     if (action === "support") return openDealSupport(id);
     if (!["seller-contacted", "transfer", "confirm", "cancel"].includes(action)) return;
     state.dealActionPending = true;
-    elements.dealControls.querySelectorAll("button").forEach(button => { button.disabled = true; });
+    [elements.dealControls,elements.dealDeliveryPanel].forEach(box=>box.querySelectorAll("[data-deal-action]").forEach(button=>{button.disabled=true;}));
     const endpoint = action === "seller-contacted" ? "seller-contacted" : action === "transfer" ? "transfer" : action === "confirm" ? "confirm" : action === "cancel" ? "cancel" : "dispute";
     try {
       const submit = () => {
@@ -5529,7 +5608,7 @@ async function hideCurrentConversation() {
     document.querySelectorAll("[data-admin-panel]").forEach((panel) => { panel.hidden = panel.dataset.adminPanel !== tab; });
     if (!load) return;
     const loaders = {
-      overview: () => window.AutoFlowAdmin.overview(api), audit: () => window.AutoFlowAdmin.audit(api), analytics: () => window.AutoFlowAdmin.analytics(api),
+      overview: () => window.AutoFlowAdmin.overview(api), audit: () => window.AutoFlowAdmin.audit(api), analytics: () => window.AutoFlowAdmin.analytics(api), finance: () => window.AutoFlowFinance.render(api),
       users: () => Promise.all([loadAdminUsers(), loadAdminPlatformSummary()]), listings: loadAdminListings,
       deals: loadAdminDeals, withdrawals: loadAdminWithdrawals, support: loadAdminSupport, feedback: loadAdminFeedback,
       advertisement: loadAdvertisementAdmin, training: () => loadAdminTraining(state.adminTrainingFilter), broadcasts: loadAdminBroadcasts,
