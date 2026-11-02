@@ -22,6 +22,8 @@
       const poly=document.createElementNS(svg.namespaceURI,"polyline");
       poly.setAttribute("points",values.map((x,i)=>(5+i*290/Math.max(1,values.length-1))+","+(80-Number(x.amount)/max*70)).join(" "));
       poly.setAttribute("fill","none");poly.setAttribute("stroke",unit==="AF"?"#ffbd39":"#6aaaff");poly.setAttribute("stroke-width","2");svg.append(poly);box.append(svg);
+      // A one-day range has one point: a polyline alone would be invisible.
+      const dot=document.createElementNS(svg.namespaceURI,"circle");dot.setAttribute("cx",values.length===1?"5":"295");dot.setAttribute("cy",String(80-Number(values.at(-1).amount)/max*70));dot.setAttribute("r","3");dot.setAttribute("fill",unit==="AF"?"#ffbd39":"#6aaaff");svg.append(dot);
       const details=node("details");details.append(node("summary","Точные значения и даты"),table(["Дата",unit],values.map(x=>[x.day,x.amount])));box.append(details);
     }
     return box;

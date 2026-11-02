@@ -13,6 +13,7 @@ await page.evaluate(async()=>{
   AutoFlowAdmin.mount();document.querySelector('[data-admin-panel=finance]').hidden=false;await AutoFlowFinance.render(fixtureApi);
 });
 assert.equal(await page.locator('.finance-summary>.admin-metric').count(),4);
+assert.equal(await page.locator('.finance-chart svg circle').count(),1);
 assert(!(await page.locator('#adminFinance').innerText()).includes('undefined'));
 assert.match(await page.locator('.finance-summary').textContent(),/Не рассчитан/);
 assert.equal(await page.getByRole('link',{name:'Написать'}).getAttribute('href'),'tg://user?id=12345');
