@@ -87,7 +87,10 @@ async def test_paid_purchase_snapshot_restart_delivery_and_duplicate_requests(mo
         data = calls[0][1]
         assert data["photo"] == "https://market.example" + first_photo
         assert "BMW M5 F90" in data["caption"] and "100.00 AF" in data["caption"]
-        assert str(deal_id)[:8] in data["caption"] and "999" not in data["caption"]
+            assert str(deal_id)[:8] in data["caption"]
+            # A random order UUID may legitimately contain "999". Only the
+            # edited listing price/title must never replace the paid snapshot.
+            assert "Сумма: 999" not in data["caption"] and "Автомобиль: Changed" not in data["caption"]
         assert ("Car Parking 1" if game.endswith("1") else "Car Parking 2") in data["caption"]
         button = data["reply_markup"]["inline_keyboard"][0][0]
         assert button["text"] == "Открыть сделку"
