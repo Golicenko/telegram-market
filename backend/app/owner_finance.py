@@ -77,6 +77,10 @@ def operations(owner_id):
         wt.transaction_type == "withdrawal_paid", wt.amount == -WithdrawalRequest.amount,
         wt.user_id == WithdrawalRequest.user_id, WithdrawalRequest.status == "paid", WithdrawalRequest.fee_af.is_not(None),
         category="platform_income").join(WithdrawalRequest, WithdrawalRequest.id == wt.related_withdrawal_id)
+    referral_credit = row("referral_bonus", ReferralReward, ReferralReward.created_at, wt.amount, ReferralReward.user_id,
+        wt.user_id == ReferralReward.user_id, wt.amount == ReferralReward.amount,
+        wt.transaction_type.in_(("referral_milestone", "referral_commission")), category="bonus_issued"
+        ).join(wt, wt.id == ReferralReward.transaction_id)
     return union_all(
         # Both single and cart checkout create one Deal with a persisted paid
         # snapshot and deadline. Legacy cart holds have no individual deal FK.
@@ -106,8 +110,7 @@ def operations(owner_id):
             wt.transaction_type.in_(("refund", "seller_timeout_refund", "dispute_refund")), category="refund"),
         row("training_refund", wt, wt.created_at, wt.amount, wt.user_id, wt.related_training_purchase_id.is_not(None), wt.amount > 0,
             wt.transaction_type.in_(("training_refund", "training_purchase_refund")), category="refund"),
-        row("referral_bonus", ReferralReward, ReferralReward.created_at, ReferralReward.amount, ReferralReward.user_id,
-            category="bonus_issued"),
+        referral_credit,
         row("adjustment", wt, wt.created_at, wt.amount, wt.user_id, wt.transaction_type == "admin_adjustment", category="adjustment"),
     ).subquery("financial_operations")
 

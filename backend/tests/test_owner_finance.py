@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -14,7 +14,7 @@ from app.admin_access import require_owner
 from app.auth import get_current_user
 from app.config import Settings, get_settings
 from app.database import get_session
-from app.models import (PublicationDraft, StarPayment, TrainingMaterial, TrainingProduct,
+from app.models import (Deal, PublicationDraft, StarPayment, TrainingMaterial, TrainingProduct,
                         User, Wallet, WalletTransaction, WithdrawalRequest)
 from app.services import (complete_deal, purchase_training_product, save_deal_delivery_details,
                           set_deal_status, wallet_snapshot, wallet_transaction)
@@ -60,6 +60,10 @@ async def test_real_settlements_revenue_units_refunds_and_readonly():
             await save_deal_delivery_details(session, buyer, deal.id, "TESTID")
         async with sessions() as session:
             await set_deal_status(session, owner, deal.id, "transfer_in_progress")
+        async with sessions() as session, session.begin():
+            # Advance only the isolated fixture clock past the existing safety
+            # window; never weaken the production 60-second buyer guard.
+            (await session.get(Deal, deal.id)).transfer_started_at = datetime.now(UTC)-timedelta(seconds=61)
         async with sessions() as session:
             await complete_deal(session, buyer, deal.id)
         other = await signed_login(sessions, 9750)

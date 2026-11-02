@@ -33,8 +33,11 @@
     if(["paid","seller_contacted","transfer_in_progress","disputed"].includes(deal.status)&&!intro)panel.append(node("p",`🔒 ${formatNumber(deal.price_af_coins)} AF под защитой${deal.status==="transfer_in_progress"?"":" до подтверждения получения"}`,"seller-deal__escrow"));
     const deadlines=[deal.seller_delivery_deadline,!deal.seller_responded_at?deal.seller_response_deadline:null].filter(Boolean).map(value=>Date.parse(value)).filter(Number.isFinite);
     deadline=deadlines.length?Math.min(...deadlines):NaN;
+    const expiryNote=intro?node("p","Срок передачи истёк. Ожидаем обновления статуса сервером; при задержке откройте помощь."):null;
+    if(expiryNote){expiryNote.setAttribute("role","status");card.append(expiryNote);}
     const tick=()=>{
       const expired=Number.isFinite(deadline)&&deadline<=Date.now();
+      if(expiryNote)expiryNote.hidden=!expired;
       if(clock){const minutes=Math.max(0,Math.ceil((deadline-Date.now())/60000));clock.textContent=!Number.isFinite(deadline)?"Срок уточняется сервером":expired?"Срок истёк":`${Math.floor(minutes/60)} ч ${String(minutes%60).padStart(2,"0")} мин`;}
       actions.forEach(([el,action,reminder])=>{const cooldown=Date.parse(nextAllowed[action]||"")>Date.now();el.disabled=isBusy()||cooldown||(["id","transfer","seller-contacted"].includes(action)&&expired);el.title=reminder&&cooldown?"Напоминание уже отправлено; повтор будет доступен позже":"";});
     };
