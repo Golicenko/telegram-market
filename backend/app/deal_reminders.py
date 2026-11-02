@@ -31,10 +31,26 @@ async def reminder_state(session, deal):
     result = {}
     for kind in ("id", "receipt"):
         last = await session.scalar(select(func.max(DealEvent.created_at)).where(DealEvent.deal_id == deal.id, DealEvent.event_type == f"manual_{kind}_reminder"))
+        delivered = await session.scalar(select(func.max(Notification.delivery_sent_at)).where(
+            Notification.user_id == deal.buyer_id, Notification.notification_type == "deal_manual_reminder",
+            Notification.payload["deal_id"].astext == str(deal.id), Notification.payload["kind"].astext == kind))
+        last = max(filter(None, [utc(last), utc(delivered)]), default=None)
         if kind == "receipt" and deal.buyer_transfer_reminder_sent_at:
             last = max(filter(None, [utc(last), utc(deal.buyer_transfer_reminder_sent_at)]))
         result[kind] = utc(last) + gap if last else None
     return result
+
+
+async def manual_receipt_pause_until(session, deal, now):
+    """Caller owns the Deal lock; automatic messages respect the manual outbox."""
+    match = (Notification.user_id == deal.buyer_id, Notification.notification_type == "deal_manual_reminder",
+             Notification.payload["deal_id"].astext == str(deal.id), Notification.payload["kind"].astext == "receipt")
+    gap = timedelta(seconds=get_settings().deal_manual_reminder_cooldown_seconds)
+    pending = await session.scalar(select(Notification.id).where(*match, Notification.delivery_status.in_(("pending", "sending"))).limit(1))
+    if pending:
+        return now+gap
+    last = await session.scalar(select(func.max(Notification.delivery_sent_at)).where(*match))
+    return utc(last)+gap if last and utc(last)+gap > now else None
 
 
 async def seller_deal(session, actor, deal_id, lock=False):
@@ -72,11 +88,18 @@ async def request_reminder(session, actor, deal_id, kind, request_id):
             seconds = max(1, math.ceil((allowed-now).total_seconds()))
             raise HTTPException(429, "Напоминание уже отправлено. Повторите позже.", headers={"Retry-After": str(seconds)})
         automatic_queued = kind == "receipt" and deal.buyer_transfer_reminder_status in {"pending", "sending"} and deal.buyer_transfer_reminder_scheduled_at and utc(deal.buyer_transfer_reminder_scheduled_at) <= now + timedelta(seconds=30)
-        if not automatic_queued:
+        already_pending = await session.scalar(select(Notification.id).where(Notification.user_id == deal.buyer_id,
+            Notification.notification_type == "deal_manual_reminder", Notification.payload["deal_id"].astext == str(deal.id),
+            Notification.payload["kind"].astext == kind, Notification.delivery_status.in_(("pending", "sending"))).limit(1))
+        if not automatic_queued and not already_pending:
             session.add(Notification(user_id=deal.buyer_id, notification_type="deal_manual_reminder", delivery_status="pending",
                 title="Нужен игровой ID" if kind == "id" else "Проверьте получение автомобиля",
                 body="Продавец принял сделку и ожидает ваш игровой ID. Укажите ID в AutoFlow Market, чтобы получить автомобиль." if kind == "id" else "Продавец отметил передачу. Проверьте автомобиль на вашем ID и подтвердите получение только если он действительно получен. При проблеме откройте поддержку.",
                 payload={"deal_id": str(deal.id), "kind": kind}))
+        if kind == "receipt" and not automatic_queued and deal.buyer_transfer_reminder_status == "pending":
+            # Only notification scheduling, never the delivery/escrow deadline.
+            gap = timedelta(seconds=get_settings().deal_manual_reminder_cooldown_seconds)
+            deal.buyer_transfer_reminder_scheduled_at = max(utc(deal.buyer_transfer_reminder_scheduled_at) or now, now+gap)
         audit_deal(session, deal, f"manual_{kind}_reminder", actor.id, details={"automatic_already_queued": bool(automatic_queued)}, request_id=request_id)
         await session.flush()
         return {"queued": True, "replayed": False, "next_allowed_at": await reminder_state(session, deal)}

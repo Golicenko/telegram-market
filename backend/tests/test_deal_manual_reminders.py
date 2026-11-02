@@ -1,15 +1,15 @@
 import asyncio
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select, update
 
-from app.deal_reminders import request_reminder
+from app.deal_reminders import manual_receipt_pause_until, request_reminder
 from app.message_notifications import claim_delivery
-from app.models import DealEvent, Notification, Wallet, WalletTransaction
+from app.models import Deal, DealEvent, Notification, Wallet, WalletTransaction
 from app.services import save_deal_delivery_details, set_deal_status
 from test_referral_bonus_postgres import isolated_pg
 from test_seller_orders_postgres import paid_order
@@ -90,3 +90,38 @@ async def test_manual_reminder_notification_opens_the_exact_deal():
         assert job["params"]=={"deal_id":str(deal.id)}
         assert job["notification_type"]=="deal_manual_reminder"
         assert "игровой ID" in job["text"]
+
+
+@pytest.mark.asyncio
+async def test_pending_reuse_and_automatic_cooldown_after_actual_manual_delivery():
+    async with isolated_pg() as (_, sessions):
+        buyer,seller,listing,deal=await paid_order(sessions)
+        async with sessions() as session:
+            await set_deal_status(session,seller,deal.id,"seller_contacted")
+        async with sessions() as session:
+            await save_deal_delivery_details(session,buyer,deal.id,"AB123")
+        async with sessions() as session:
+            await set_deal_status(session,seller,deal.id,"transfer_in_progress")
+        now=datetime.now(UTC)
+        async with sessions() as session, session.begin():
+            stored=await session.get(Deal,deal.id)
+            stored.buyer_transfer_reminder_scheduled_at=now+timedelta(minutes=5)
+        async with sessions() as session:
+            await request_reminder(session,seller,deal.id,"receipt",uuid.uuid4())
+        # Isolated fixture ages the request while its message remains queued.
+        async with sessions() as session, session.begin():
+            await session.execute(update(DealEvent).where(DealEvent.event_type=="manual_receipt_reminder")
+                .values(created_at=now-timedelta(hours=2)))
+        async with sessions() as session:
+            await request_reminder(session,seller,deal.id,"receipt",uuid.uuid4())
+        async with sessions() as session:
+            assert await session.scalar(select(func.count()).select_from(Notification).where(Notification.notification_type=="deal_manual_reminder"))==1
+            stored=await session.get(Deal,deal.id)
+            assert await manual_receipt_pause_until(session,stored,now)>=now+timedelta(hours=1)
+        async with sessions() as session, session.begin():
+            await session.execute(update(Notification).where(Notification.notification_type=="deal_manual_reminder")
+                .values(delivery_status="sent",delivery_sent_at=now))
+        async with sessions() as session:
+            stored=await session.get(Deal,deal.id)
+            assert await manual_receipt_pause_until(session,stored,now+timedelta(minutes=50))==now+timedelta(hours=1)
+            assert await manual_receipt_pause_until(session,stored,now+timedelta(hours=2)) is None
