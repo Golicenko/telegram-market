@@ -17,7 +17,9 @@ class ImageUploadGuard:
         self.slots = asyncio.Semaphore(2)
 
     async def __call__(self, scope, receive, send):
-        photo_chat = bool(re.fullmatch(r"/api/conversations/[0-9a-fA-F-]{36}/photos/?", scope.get("path", "")))
+        # Bound the body even for malformed IDs, before FastAPI parses multipart
+        # and subsequently rejects the UUID. Invalid paths must not bypass limits.
+        photo_chat = bool(re.fullmatch(r"/api/conversations/[^/]+/photos/?", scope.get("path", "")))
         if scope["type"] != "http" or (scope.get("path", "").rstrip("/") != "/api/uploads" and not photo_chat) or scope.get("method") != "POST":
             return await self.app(scope, receive, send)
         limit = (min(get_settings().upload_max_bytes, 12*1024*1024) if photo_chat else get_settings().upload_max_bytes) + 128 * 1024

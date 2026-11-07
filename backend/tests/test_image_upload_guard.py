@@ -12,6 +12,7 @@ def guarded_app():
     app.add_middleware(ImageUploadGuard)
 
     @app.post("/api/uploads")
+    @app.post("/api/conversations/{conversation_id}/photos")
     async def upload(file: UploadFile = File(...)):
         return {"size": file.size}
 
@@ -32,7 +33,8 @@ async def test_body_limit_rejects_content_length_before_spooling(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chunked_overflow_is_413_and_closes_parser_spools(monkeypatch):
+@pytest.mark.parametrize("path", ["/api/uploads", "/api/conversations/not-a-uuid/photos"])
+async def test_chunked_overflow_is_413_and_closes_parser_spools(monkeypatch, path):
     from starlette import formparsers
     original = formparsers.SpooledTemporaryFile
     opened = []
@@ -48,10 +50,20 @@ async def test_chunked_overflow_is_413_and_closes_parser_spools(monkeypatch):
             yield b"x" * 10000
         yield b"\r\n--test--\r\n"
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=guarded_app()), base_url="http://test") as client:
-        response = await client.post("/api/uploads", content=chunks(), headers={"Content-Type": "multipart/form-data; boundary=test"})
+        response = await client.post(path, content=chunks(), headers={"Content-Type": "multipart/form-data; boundary=test"})
         assert response.status_code == 413, response.text
         assert opened and all(file.closed for file in opened)
         assert (await client.post("/api/uploads", files={"file": ("photo.jpg", b"small")})).status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conversation_id", ["00000000-0000-0000-0000-000000000000", "not-a-uuid"])
+async def test_chat_limit_applies_before_uuid_and_multipart_validation(monkeypatch, conversation_id):
+    monkeypatch.setattr("app.upload_guard.get_settings", lambda: SimpleNamespace(upload_max_bytes=64*1024*1024))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=guarded_app()), base_url="http://test") as client:
+        response=await client.post(f"/api/conversations/{conversation_id}/photos",content=b"",
+            headers={"Content-Length":str(13*1024*1024)})
+        assert response.status_code==413
 
 
 @pytest.mark.asyncio
