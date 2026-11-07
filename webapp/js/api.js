@@ -158,6 +158,8 @@
       timeoutMs = DEFAULT_TIMEOUT_MS,
       retries,
       retryDelayMs = DEFAULT_RETRY_DELAY_MS,
+      responseType = "json",
+      onResponse,
       ...fetchOptions
     } = options;
     const method = String(fetchOptions.method || "GET").toUpperCase();
@@ -211,6 +213,8 @@
             });
           }
           if (response.status === 204) return null;
+          onResponse?.(response);
+          if (responseType === "blob") return await response.blob();
           try { return await response.json(); }
           catch (error) {
             if (timedOut || externalSignal?.aborted || error?.name === "AbortError") throw error;
@@ -483,6 +487,7 @@
       metadata.upload_stage = "formdata";
       const body = new FormData();
       body.append("file", preparedFile, preparedFile.name || "photo.jpg");
+      for (const [key, value] of Object.entries(options.fields || {})) if (value != null) body.append(key, String(value));
       metadata.upload_stage = "fetch";
       const startedAt = performance.now();
       const timeoutMs = Number(options.timeoutMs || 90000);

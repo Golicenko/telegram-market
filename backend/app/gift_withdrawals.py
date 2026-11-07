@@ -14,6 +14,11 @@ WITHDRAWAL_FEE_PERCENT = 30
 WITHDRAWAL_NET = (Decimal(100) - WITHDRAWAL_FEE_PERCENT) / 100
 
 
+def insufficient_earned(available):
+    return HTTPException(402, {"code": "insufficient_withdrawable_af", "available_af": str(available or 0),
+        "message": f"Недостаточно AF Coins для вывода. Вам доступно для вывода: {available or 0} AF. Вывести можно только заработанные монеты."})
+
+
 async def available_gifts():
     token = get_settings().bot_token
     if not token:
@@ -55,7 +60,7 @@ def calculate_quote(budget, gifts):
                     plans[amount] = candidate
     payout = next((value for value in range(limit, 0, -1) if plans[value]), 0)
     if not payout:
-        raise HTTPException(400, "Недостаточно заработанных AF Coins для доступного подарка и комиссии 30%.")
+        raise HTTPException(400, {"code": "below_minimum_gift", "message": "Доступной суммы недостаточно для минимального Telegram-подарка с учётом комиссии 30%. Увеличьте сумму или накопите заработанные AF."})
     gross = (Decimal(payout) / WITHDRAWAL_NET).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
     counts = Counter(plans[payout])
     costs = {gift["id"]: gift["star_count"] for gift in gifts}
@@ -67,11 +72,15 @@ def calculate_quote(budget, gifts):
 
 
 async def preview_withdrawal(session, user, budget):
+    async with session.begin():
+        wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
+        if not wallet or wallet.earned_balance < budget:
+            raise insufficient_earned(wallet.earned_balance if wallet else 0)
     gifts = await available_gifts()
     async with session.begin():
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
         if not wallet or wallet.earned_balance < budget:
-            raise HTTPException(402, "Для вывода доступны только заработанные AF Coins. Уменьшите сумму.")
+            raise insufficient_earned(wallet.earned_balance if wallet else 0)
         values = calculate_quote(budget, gifts)
         quote = GiftWithdrawalQuote(user_id=user.id, budget=budget,
             gross_af=values["gross_af"], fee_af=values["fee_af"], payout_stars=values["payout_stars"],
@@ -104,7 +113,7 @@ async def reserve_gift_withdrawal(session, user, quote_id, details):
         if any(catalog.get(item["gift_id"]) != item["star_count"] for item in quote.gift_plan):
             raise HTTPException(409, "Каталог подарков изменился. Рассчитайте заявку заново.")
         if not wallet or wallet.earned_balance < quote.gross_af:
-            raise HTTPException(402, "Недостаточно заработанных AF Coins для подарков и комиссии.")
+            raise insufficient_earned(wallet.earned_balance if wallet else 0)
         before_available, before_frozen = wallet_snapshot(wallet)
         wallet.earned_balance = money(wallet.earned_balance - quote.gross_af)
         wallet.earned_frozen_balance = money(wallet.earned_frozen_balance + quote.gross_af)

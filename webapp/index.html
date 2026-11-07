@@ -6,19 +6,20 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-a639c634fb3f" />
-    <link rel="stylesheet" href="css/style.css?v=af-a639c634fb3f" />
+    <meta name="autoflow-build" content="af-192ecb0475db" />
+    <link rel="stylesheet" href="css/style.css?v=af-192ecb0475db" />
+    <script src="js/chat-media.js?v=af-192ecb0475db" defer></script>
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-a639c634fb3f" defer></script>
-    <script src="js/referrals.js?v=af-a639c634fb3f" defer></script>
-    <script src="js/deal-confirmation.js?v=af-a639c634fb3f" defer></script>
-    <script src="js/seller-deal.js?v=af-a639c634fb3f" defer></script>
-    <script src="js/owner-finance.js?v=af-a639c634fb3f" defer></script>
-    <script src="js/admin-operations.js?v=af-a639c634fb3f" defer></script>
-    <script src="js/analytics.js?v=af-a639c634fb3f" defer></script>
-    <script src="js/training-sales.js?v=af-a639c634fb3f" defer></script>
-    <script src="js/help.js?v=af-a639c634fb3f" defer></script>
-    <script src="js/app.js?v=af-a639c634fb3f" defer></script>
+    <script src="js/api.js?v=af-192ecb0475db" defer></script>
+    <script src="js/referrals.js?v=af-192ecb0475db" defer></script>
+    <script src="js/deal-confirmation.js?v=af-192ecb0475db" defer></script>
+    <script src="js/seller-deal.js?v=af-192ecb0475db" defer></script>
+    <script src="js/owner-finance.js?v=af-192ecb0475db" defer></script>
+    <script src="js/admin-operations.js?v=af-192ecb0475db" defer></script>
+    <script src="js/analytics.js?v=af-192ecb0475db" defer></script>
+    <script src="js/training-sales.js?v=af-192ecb0475db" defer></script>
+    <script src="js/help.js?v=af-192ecb0475db" defer></script>
+    <script src="js/app.js?v=af-192ecb0475db" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -302,6 +303,8 @@
         <section class="view form-view" data-view="withdraw" aria-labelledby="withdrawTitle" hidden>
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="withdrawTitle">Вывод средств</h1></div>
           <div class="withdraw-terms"><span>Срок обработки: <strong>до 24 часов</strong></span><span>Комиссия: <strong>30%</strong></span></div>
+          <div class="withdraw-balances" aria-live="polite"><div>Общий баланс<strong><span id="withdrawTotalBalance">—</span> AF</strong></div><div>Доступно для вывода<strong><span id="withdrawEarnedBalance">—</span> AF</strong></div></div><div id="withdrawBalanceStatus" role="status"></div>
+          <details class="withdraw-explanation"><summary>Почему доступно для вывода меньше AF?</summary><p>Выводить можно только заработанные AF Coins — например, полученные за продажу автомобилей. Монеты, которые вы пополнили самостоятельно, можно использовать для покупок внутри AutoFlow Market, но вывести их нельзя. Реферальные бонусы также не выводятся. Средства в резерве временно недоступны.</p></details>
           <form class="withdraw-form" id="withdrawForm"><label>Бюджет из заработанных AF Coins<input name="amount" type="number" inputmode="decimal" step="0.01" min="0.01" required /></label><label>Комментарий<textarea name="details" rows="2" maxlength="2000"></textarea></label><p>Администратор отправляет подарки Telegram вручную. Это подарки, а не пополнение личного баланса Stars. Комиссия уже включена в резерв.</p><div id="withdrawQuote" role="status" aria-live="polite"></div><button class="publish-button" type="submit">Рассчитать подарки</button></form>
         </section>
 

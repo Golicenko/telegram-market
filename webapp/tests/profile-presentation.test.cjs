@@ -73,11 +73,27 @@ test('missing Telegram fields produce an honest neutral identity, not reference 
 test('balance formatting still uses the existing available balance and only adapts its visual size', () => {
   const state={me:{wallet:{available_balance:'1324.74'}}}, nodes=[{},{}], flags=new Map();
   const render=loadFunction('renderBalance','renderUser',{state,document:{
+    getElementById:()=>null,
     querySelectorAll:()=>nodes,querySelector:()=>({classList:{toggle:(name,on)=>flags.set(name,on)}}),
   }});
   render(); assert(nodes.every(node=>node.textContent==='1324.74')); assert.equal(flags.get('is-large-balance'),false);
   state.me.wallet.available_balance='1234567890.12'; render();
   assert(nodes.every(node=>node.textContent==='1234567890.12')); assert.equal(flags.get('is-large-balance'),true);
+});
+
+test('withdrawal alone separates total available and earned AF, without adding two wallets', () => {
+  const state={me:{wallet:{available_balance:'100',purchased_balance:'70',earned_balance:'30',bonus_balance:'0',frozen_balance:'50'}}};
+  const nodes=new Map([['withdrawEarnedBalance',{}],['withdrawTotalBalance',{}]]),ordinary=[{},{}];
+  const render=loadFunction('renderBalance','renderUser',{state,formatNumber:value=>String(Number(value)),document:{
+    getElementById:id=>nodes.get(id),querySelectorAll:()=>ordinary,querySelector:()=>null,
+  }});
+  render();
+  assert.equal(nodes.get('withdrawTotalBalance').textContent,'100');
+  assert.equal(nodes.get('withdrawEarnedBalance').textContent,'30');
+  assert(ordinary.every(node=>node.textContent==='100.00'));
+  state.me.wallet={available_balance:'150',purchased_balance:'70',earned_balance:'80'};
+  render();assert.equal(nodes.get('withdrawTotalBalance').textContent,'150');assert.equal(nodes.get('withdrawEarnedBalance').textContent,'80');
+  state.withdrawBalanceLoading=true;render();assert.equal(nodes.get('withdrawEarnedBalance').textContent,'—');assert.equal(nodes.get('withdrawTotalBalance').textContent,'—');
 });
 
 function miniListingsPresentation() {

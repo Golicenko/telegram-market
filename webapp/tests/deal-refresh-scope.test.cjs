@@ -10,13 +10,11 @@ test('late response of another deal in the same conversation cannot replace sele
   assert(paths.every(p=>p.includes('deal_id=old')));
   assert.equal(state.currentConversation.deal.id,'new');assert.equal(rendered,0);assert.equal(read,0);
 });
-test('late full-message fallback is also discarded after switching deal scope',async()=>{
-  let release,ready;const reached=new Promise(resolve=>ready=resolve);
-  const state={currentView:'deal-chat',currentConversation:{id:'thread',deal:{id:'old'}},messages:[{id:'m'}]};
+test('empty incremental poll does not reload history; read receipts still update',async()=>{
+  const state={currentView:'deal-chat',currentConversation:{id:'thread',deal:{id:'old',status:'paid'}},messages:[{id:'m',is_read:false}]},paths=[];
   let rendered=0;
-  const run=vm.runInNewContext('('+implementation+')',{URLSearchParams,state,safeArray:x=>x,setChatConnection(){},
-    api:{request:path=>path.includes('/messages')?(path.includes('after=')?Promise.resolve([]):new Promise(resolve=>{release=resolve;ready();})):Promise.resolve({id:'thread',deal:{id:'old'}})},
-    renderConversation:()=>rendered++,markConversationRead(){throw Error('must not mark another scope');}});
-  const pending=run();await reached;state.currentConversation={id:'thread',deal:{id:'new'}};release([]);await pending;
-  assert.equal(state.currentConversation.deal.id,'new');assert.equal(rendered,0);
+  const run=vm.runInNewContext('('+implementation+')',{URLSearchParams,state,safeArray:x=>x,setChatConnection(){},mergeChatMessages:existing=>existing,
+    api:{request:async(path,options)=>{paths.push(path);options?.onResponse?.({headers:{get:()=> '["m"]'}});return path.includes('/messages')?[]:{id:'thread',deal:{id:'old',status:'paid'}};}},
+    renderConversation:()=>rendered++,markConversationRead:async()=>{}});
+  await run();assert.equal(paths.length,2);assert(paths[0].includes('after=m'));assert(state.messages[0].is_read);assert.equal(rendered,1);
 });

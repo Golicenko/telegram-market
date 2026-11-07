@@ -457,6 +457,9 @@ class ConversationMessageOut(ORMModel):
     sender_id: uuid.UUID
     body: str
     message_type: str
+    media_id: uuid.UUID | None = None
+    media_width: int | None = None
+    media_height: int | None = None
     client_message_id: uuid.UUID | None
 
     is_read: bool

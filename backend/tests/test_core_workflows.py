@@ -404,7 +404,8 @@ async def test_purchased_af_coins_cannot_be_withdrawn(monkeypatch):
     with pytest.raises(HTTPException) as error:
         await preview_withdrawal(FakeSession([wallet]), user, Decimal("30"))
     assert error.value.status_code == 402
-    assert "заработанные" in error.value.detail
+    assert error.value.detail["code"] == "insufficient_withdrawable_af"
+    assert "заработанные" in error.value.detail["message"]
 
 
 def time_to_datetime(timestamp: float):

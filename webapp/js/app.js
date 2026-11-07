@@ -886,6 +886,7 @@ function handleClick(event) {
   }
 
   async function goBack() {
+    if (window.AutoFlowChatMedia?.dismiss()) return;
     if (window.AutoFlowDealConfirmation.dismiss()) return;
     if (referralsPage?.dismiss()) return;
     const publicationModal = document.querySelector("dialog.publication-modal[open]");
@@ -924,6 +925,7 @@ function handleClick(event) {
     selectProfileAction();
     if (state.currentView === "deal-chat" && viewName !== "deal-chat") {
       window.AutoFlowSellerDeal.stop();
+      window.AutoFlowChatMedia?.leave();
       document.body.classList.remove("seller-chat-open");
       saveChatDraft();
       state.chatOpening = (state.chatOpening || 0) + 1;
@@ -965,6 +967,7 @@ function handleClick(event) {
     if (viewEvent) track(viewEvent);
     if (viewName === "more") loadReferralBanner();
     if (viewName === "deal-chat") updateChatViewport();
+    if (viewName === "withdraw") void loadWithdrawalBalance();
     updateFloatingChatVisibility();
     syncReferralHeader(viewName === "more");
     syncReferralsPage(viewName);
@@ -1117,29 +1120,32 @@ function handleClick(event) {
   if (!conversationId) return;
 
   const dealId = state.currentConversation?.deal?.id;
+  const opening = state.chatOpening;
+  const syncScope = `${conversationId}:${dealId || ""}:${opening}`;
+  if (state.chatSyncBusy === syncScope) return;
+  state.chatSyncBusy = syncScope;
+  try {
   const messageQuery = new URLSearchParams();
+  messageQuery.set("include_receipts", "true");
   if (dealId) messageQuery.set("deal_id", dealId);
   const last = state.messages.filter(item => !item.local_status).at(-1);
   if (last) messageQuery.set("after", last.id);
   const messagePath = `/conversations/${conversationId}/messages?${messageQuery}`;
+  let readIds = [];
   const [messagesResult, dealResult] = await Promise.allSettled([
-    api.request(messagePath),
+    api.request(messagePath, {onResponse: response => {try {readIds=JSON.parse(response.headers.get("X-Chat-Read-Ids") || "[]");}catch(_){}}}),
     api.request(`/conversations/${conversationId}${dealId ? `?deal_id=${encodeURIComponent(dealId)}` : ""}`),
   ]);
-  if (state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId || (state.currentConversation?.deal?.id || null) !== (dealId || null)) return;
+  if (state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId || (state.currentConversation?.deal?.id || null) !== (dealId || null) || state.chatOpening!==opening) return;
   if (messagesResult.status === "rejected") {
     setChatConnection("Нет соединения. Переписка восстановится автоматически.");
     if (Number(messagesResult.reason?.status) === 409) return closeDealChat();
     throw messagesResult.reason;
   }
   setChatConnection("");
-  let incoming = safeArray(messagesResult.value);
-  if (!incoming.length && last) {
-    messageQuery.delete("after");
-    incoming = safeArray(await api.request(`/conversations/${conversationId}/messages?${messageQuery}`));
-    if (state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId || (state.currentConversation?.deal?.id || null) !== (dealId || null)) return;
-  }
-  const messages = mergeChatMessages(state.messages, incoming);
+  const incoming = safeArray(messagesResult.value);
+  const readSet = new Set(readIds);
+  const messages = mergeChatMessages(state.messages, incoming).map(message=>readSet.has(message.id)&&!message.is_read?{...message,is_read:true}:message);
   const dealDetails = dealResult.status === "fulfilled" ? dealResult.value : null;
   if (dealResult.status === "rejected" && Number(dealResult.reason?.status) === 409) return closeDealChat();
   const offersChanged = dealDetails && JSON.stringify(dealDetails.offers) !== JSON.stringify(state.currentConversation.offers);
@@ -1165,20 +1171,25 @@ function handleClick(event) {
   }
 
   await markConversationRead(conversationId, dealId);
+  } finally { if(state.chatSyncBusy===syncScope)state.chatSyncBusy=null; }
 }
 
   async function markConversationRead(conversationId, dealId = null) {
-  if (document.hidden || state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId) return;
-  await api.request(`/conversations/${conversationId}/presence`, { method: "POST" });
+  if (document.hidden || state.currentView !== "deal-chat" || state.currentConversation?.id !== conversationId || (state.currentConversation?.deal?.id||null)!==(dealId||null)) return;
+  const scope = `${conversationId}:${dealId || ""}`;
+  if(state.chatPresenceScope!==scope || Date.now()-(state.chatPresenceSentAt||0)>15000){await api.request(`/conversations/${conversationId}/presence`, { method: "POST" });state.chatPresenceScope=scope;state.chatPresenceSentAt=Date.now();}
   if (!chatAtBottom()) return;
+  if (state.currentView!=="deal-chat" || state.currentConversation?.id!==conversationId || (state.currentConversation?.deal?.id||null)!==(dealId||null))return;
   const through = state.messages.filter(item => !item.local_status).at(-1)?.id;
   if (!through) return;
+  if(state.chatReadThrough===`${scope}:${through}`)return;
   const query = new URLSearchParams({ through_message_id: through });
   if (dealId) query.set("deal_id", dealId);
   await api.request(
     `/conversations/${conversationId}/read?${query}`,
     { method: "POST" }
   );
+  state.chatReadThrough=`${scope}:${through}`;
 
   const summary = await api.request("/conversations/unread-summary");
   state.unreadConversations = summary.conversations || [];
@@ -2874,7 +2885,7 @@ async function hideCurrentConversation() {
       const messages = messagesResult.status === "fulfilled" ? safeArray(messagesResult.value) : [];
       if (messagesResult.status === "rejected") reportClientError("conversation_messages_initial", messagesResult.reason);
       state.currentConversation = conversation;
-      state.messages = mergeChatMessages(messages, [...(state.chatOutbox?.values() || [])].filter(item => item.conversation_id === id));
+      state.messages = mergeChatMessages(messages, [...(state.chatOutbox?.values() || [])].filter(item => item.conversation_id === id && (item.deal_id || null) === (conversation.deal?.id || null)));
       state.chatHasOlder = messages.length === 100;
       document.getElementById("chatInput").value = state.chatDrafts?.[id] || "";
       state.chatForceBottom = true;
@@ -2901,6 +2912,9 @@ async function hideCurrentConversation() {
 
   function renderConversation() {
     const details = state.currentConversation; if (!details) return;
+    const scope = `${details.id || ""}:${details.deal?.id || ""}`;
+    if (elements.dealMessages.dataset.scope !== scope) { elements.dealMessages.replaceChildren(); elements.dealMessages.dataset.scope = scope; }
+    window.AutoFlowChatMedia?.mount({api,notify,scope,enabled:Boolean(details.id&&!details.archived_at&&!["completed","cancelled"].includes(details.deal?.status))});
     const atBottom = state.chatForceBottom || chatAtBottom();
     const previousTop = elements.dealMessages.scrollTop;
     state.chatForceBottom = false;
@@ -2932,6 +2946,8 @@ async function hideCurrentConversation() {
       const listingAction = document.createElement("span"); listingAction.textContent = sellerView?"›":"Открыть ›"; elements.chatListing.append(listingCopy, listingAction);
     }
     const renderedMessages = []; let previousDay = "";
+    const existingBubbles = new Map([...elements.dealMessages.querySelectorAll("[data-message-id]")].map(el=>[el.dataset.messageId,el]));
+    const existingDays = new Map([...elements.dealMessages.querySelectorAll("[data-message-day]")].map(el=>[el.dataset.messageDay,el]));
     if (state.chatHasOlder) {
       const older = document.createElement("button"); older.type = "button"; older.className = "chat-history-button";
       older.textContent = state.chatLoadingOlder ? "Загрузка…" : "Предыдущие сообщения";
@@ -2939,13 +2955,17 @@ async function hideCurrentConversation() {
     }
     state.messages.forEach((message) => {
       const day = new Date(message.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
-      if (day !== previousDay) { const divider = document.createElement("div"); divider.className = "message-day"; divider.textContent = day; renderedMessages.push(divider); previousDay = day; }
+      if (day !== previousDay) { const divider = existingDays.get(day) || document.createElement("div"); divider.className = "message-day"; divider.dataset.messageDay=day;divider.textContent = day; renderedMessages.push(divider); previousDay = day; }
       const isOffer = message.message_type === "offer";
+      const signature = JSON.stringify([message,isOffer?state.currentConversation.offers:null]);
+      const existing = existingBubbles.get(message.id);
+      if (existing?.dataset.signature === signature) { renderedMessages.push(existing); return; }
       const bubble = document.createElement("div"); bubble.className = `message${message.sender_id === state.me.user.id ? " is-own" : ""}${message.message_type === "system" ? " is-system" : ""}${isOffer ? " is-offer" : ""}`;
+      bubble.dataset.signature=signature;
       if (isOffer) renderOfferMessage(bubble, message);
-      else bubble.append(document.createTextNode(message.body));
+      else { if(message.message_type==="photo")bubble.append(window.AutoFlowChatMedia.image(message));bubble.append(document.createTextNode(message.body)); }
       bubble.dataset.messageId = message.id;
-      if (!isOffer && message.message_type !== "system") installMessageCopy(bubble, message.body);
+      if (!isOffer && message.message_type !== "system" && message.body) installMessageCopy(bubble, message.body);
       const meta = document.createElement("small"); meta.className = "message-meta"; const time = document.createElement("span"); time.textContent = formatMessageTime(message.created_at); meta.append(time);
       if (message.sender_id === state.me.user.id && message.message_type !== "system") { const receipt = document.createElement("span"); receipt.className = "message-receipt"; receipt.textContent = message.is_read ? "✓✓" : "✓"; receipt.title = message.is_read ? "Прочитано" : "Получено сервером"; meta.append(receipt); }
       if (message.local_status) {
@@ -2954,7 +2974,8 @@ async function hideCurrentConversation() {
       }
       bubble.append(meta); renderedMessages.push(bubble);
     });
-    elements.dealMessages.replaceChildren(...renderedMessages);
+    const keep=new Set(renderedMessages);for(const el of [...elements.dealMessages.children])if(!keep.has(el))el.remove();
+    let cursor=elements.dealMessages.firstChild;for(const el of renderedMessages){if(el===cursor)cursor=cursor.nextSibling;else elements.dealMessages.insertBefore(el,cursor);}
     renderDealDeliveryPanel();
     renderOffers();
     renderDealControls();
@@ -3379,10 +3400,21 @@ async function hideCurrentConversation() {
   async function sendChatMessage(event) {
     event.preventDefault();
     const input = document.getElementById("chatInput");
-    if (!state.currentConversation || !input.value.trim()) return;
+    if (!state.currentConversation || (!input.value.trim() && !window.AutoFlowChatMedia?.hasSelection())) return;
     const button = event.currentTarget.querySelector("button[type=submit]");
     if (button.disabled) return;
     const body = input.value.trim();
+    if(window.AutoFlowChatMedia?.hasSelection()){
+      button.disabled=true;
+      const conversation=state.currentConversation,photos=window.AutoFlowChatMedia.take();input.value="";saveChatDraft();resizeChatInput();
+      try{for(const [index,item]of photos.entries()){
+        const id=createRequestId(),pending={id,client_message_id:id,body:index===0?body:"",file:item.file,local_photo_url:item.url,media_width:4,media_height:3,
+          sender_id:state.me.user.id,created_at:new Date().toISOString(),message_type:"photo",local_status:"sending",conversation_id:conversation.id,listing_id:conversation.listing.id,deal_id:conversation.deal?.id||null};
+        state.chatOutbox ||= new Map();state.chatOutbox.set(id,pending);
+        if(state.currentView==="deal-chat"&&state.currentConversation?.id===conversation.id&&(state.currentConversation?.deal?.id||null)===(pending.deal_id||null)){state.messages.push(pending);state.chatForceBottom=true;renderConversation();}
+        await transmitChatMessage(pending);
+      }}finally{button.disabled=false;}return;
+    }
     const clientMessageId = createRequestId();
     button.disabled = true;
     const conversation = state.currentConversation;
@@ -3398,22 +3430,25 @@ async function hideCurrentConversation() {
   async function transmitChatMessage(pending) {
     if (pending.inFlight) return;
     pending.inFlight = true; pending.local_status = "sending";
-    const isCurrent = () => pending.conversation_id ? state.currentConversation?.id === pending.conversation_id : state.currentConversation?.listing.id === pending.listing_id;
+    const isCurrent = () => state.currentView==="deal-chat" && (pending.conversation_id ? state.currentConversation?.id === pending.conversation_id && (state.currentConversation?.deal?.id||null)===(pending.deal_id||null) : state.currentConversation?.listing.id === pending.listing_id);
     if (isCurrent()) renderConversation();
     try {
       const endpoint = pending.conversation_id ? `/conversations/${pending.conversation_id}/messages` : `/conversations/listing/${pending.listing_id}/messages`;
       const { body, client_message_id: clientMessageId, deal_id: dealId } = pending;
-      const message = await api.request(endpoint, {
+      const message = pending.file ? await api.upload(pending.file, `/conversations/${pending.conversation_id}/photos`, {maxBytes:12*1024*1024,sourceMaxBytes:12*1024*1024,fields:{body,client_message_id:clientMessageId,deal_id:dealId}}) : await api.request(endpoint, {
         method: "POST",
         body: JSON.stringify({ body, client_message_id: clientMessageId, deal_id: dealId }),
       });
       state.chatOutbox.delete(pending.client_message_id);
       if (isCurrent()) {
+        setChatConnection("");
         if (!state.currentConversation.id) await openConversation(message.conversation_id);
         else { state.messages = mergeChatMessages(state.messages, [message]); renderConversation(); }
       }
+      if(pending.local_photo_url)URL.revokeObjectURL(pending.local_photo_url);
     } catch (error) {
       pending.local_status = "failed";
+      if(!state.chatOutbox.has(pending.client_message_id))return; // polling already confirmed this command
       if (isCurrent()) { renderConversation(); setChatConnection("Сообщение не отправлено. Нажмите «Повторить»."); }
     } finally { pending.inFlight = false; }
   }
@@ -3421,7 +3456,7 @@ async function hideCurrentConversation() {
   function mergeChatMessages(existing, incoming) {
     const keys = new Set(incoming.map(item => item.client_message_id).filter(Boolean));
     const byId = new Map(existing.filter(item => !item.local_status || !keys.has(item.client_message_id)).map(item => [item.id, item]));
-    incoming.forEach(item => { byId.set(item.id, item); if (item.client_message_id) state.chatOutbox?.delete(item.client_message_id); });
+    incoming.forEach(item => { byId.set(item.id, item); if (item.client_message_id) {const pending=state.chatOutbox?.get(item.client_message_id);if(pending?.local_photo_url)URL.revokeObjectURL(pending.local_photo_url);state.chatOutbox?.delete(item.client_message_id);} });
     return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
   }
 
@@ -3444,6 +3479,7 @@ async function hideCurrentConversation() {
   async function loadOlderChatMessages() {
     if (state.chatLoadingOlder || !state.currentConversation?.id) return;
     const id = state.currentConversation.id;
+    const dealId=state.currentConversation.deal?.id||null,opening=state.chatOpening;
     const first = state.messages.find(item => !item.local_status);
     if (!first) return;
     state.chatLoadingOlder = true;
@@ -3451,10 +3487,10 @@ async function hideCurrentConversation() {
     if (state.currentConversation.deal?.id) query.set("deal_id", state.currentConversation.deal.id);
     try {
       const older = await api.request(`/conversations/${id}/messages?${query}`);
-      if (state.currentConversation?.id !== id || state.currentView !== "deal-chat") return;
+      if (state.currentConversation?.id !== id || state.currentView !== "deal-chat" || (state.currentConversation?.deal?.id||null)!==dealId || state.chatOpening!==opening) return;
       const box = elements.dealMessages; const height = box.scrollHeight; const top = box.scrollTop;
       state.chatHasOlder = older.length === 100; state.messages = mergeChatMessages(older, state.messages);
-      renderConversation(); requestAnimationFrame(() => { box.scrollTop = top + box.scrollHeight - height; });
+      renderConversation(); if(state.currentConversation?.id===id&&state.chatOpening===opening)box.scrollTop=top+box.scrollHeight-height;
     } catch (error) { setChatConnection("Не удалось загрузить историю. Попробуйте ещё раз."); }
     finally { state.chatLoadingOlder = false; const button = elements.dealMessages.querySelector(".chat-history-button"); if (button) { button.disabled = false; button.textContent = "Предыдущие сообщения"; } }
   }
@@ -3719,6 +3755,13 @@ async function hideCurrentConversation() {
       const history = document.createElement("button"); history.type = "button"; history.dataset.paymentHistory = ""; history.textContent = "История операций";
       elements.paymentResult.append(balance, done, history);
     }
+  }
+
+  async function loadWithdrawalBalance() {
+    const generation=state.navigationVersion;state.withdrawBalanceLoading=true;renderBalance();
+    const status=document.getElementById("withdrawBalanceStatus");status.textContent="Обновляем баланс…";
+    try{const me=await api.request("/me");if(state.currentView!=="withdraw"||state.navigationVersion!==generation)return;state.me=me;state.withdrawBalanceLoading=false;renderBalance();status.textContent="";}
+    catch(error){if(state.currentView!=="withdraw"||state.navigationVersion!==generation)return;status.textContent="Не удалось обновить баланс. ";const retry=document.createElement("button");retry.type="button";retry.textContent="Повторить";retry.onclick=()=>void loadWithdrawalBalance();status.append(retry);}
   }
 
   function renderWithdrawalQuote(quote, budget) {
@@ -5808,6 +5851,9 @@ async function hideCurrentConversation() {
   }
 
   function renderBalance() {
+    const earnedNode = document.getElementById("withdrawEarnedBalance");
+    if (earnedNode) earnedNode.textContent = state.withdrawBalanceLoading?"—":formatNumber(state.me?.wallet.earned_balance ?? 0);
+    const totalNode=document.getElementById("withdrawTotalBalance");if(totalNode)totalNode.textContent=state.withdrawBalanceLoading?"—":formatNumber(state.me?.wallet.available_balance??0);
     const value = Number(state.me?.wallet.available_balance || 0).toFixed(2);
     document.querySelectorAll("[data-balance]").forEach((node) => { node.textContent = value; });
     document.querySelector(".profile-wallet")?.classList.toggle("is-large-balance", value.length > 9);
