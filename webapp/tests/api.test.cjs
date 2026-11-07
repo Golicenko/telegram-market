@@ -72,7 +72,7 @@ test('photo previews inspect bounded PNG/WebP headers and never decode oversized
   const {api}=loadApi(()=>{throw Error('inspection must not fetch');});
   const png=Buffer.alloc(24);png.set([137,80,78,71]);png.writeUInt32BE(64,16);png.writeUInt32BE(48,20);
   assert.deepEqual(Array.from(await api.previewDimensions(new Blob([png]))),[64,48]);
-  png.writeUInt32BE(50000,16);assert.equal(await api.previewDimensions(new Blob([png])),null);
+  png.writeUInt32BE(50000,16);png.writeUInt32BE(50000,20);assert.equal(await api.previewDimensions(new Blob([png])),null);
   for(const kind of ['VP8X','VP8L','VP8 ']){
     const header=Buffer.alloc(30);header.write('RIFF',0);header.write('WEBP',8);header.write(kind,12);
     if(kind==='VP8X'){header.writeUIntLE(63,24,3);header.writeUIntLE(47,27,3);}
