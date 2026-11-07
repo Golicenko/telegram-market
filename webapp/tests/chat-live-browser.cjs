@@ -62,6 +62,9 @@ const out=path.join(__dirname,'evidence/chat-20261107');fs.mkdirSync(out,{recurs
       await buyer.locator('[data-view=deal-chat]').waitFor({state:'visible'});
       await buyer.locator('.chat-photo').last().evaluate(el=>el.scrollIntoView({block:'center'}));
       await buyer.waitForFunction(()=>{const img=[...document.querySelectorAll('.chat-photo img')].at(-1);return img?.src.startsWith('blob:')&&img.naturalWidth>0;});
+      // Existing app Back protection ignores a second tap for 450ms. These are
+      // separate user visits, not an intentional double-Back test.
+      await buyer.waitForTimeout(500);
     }
     await seller.locator('[data-deal-action=transfer]').click();const confirm=seller.locator('dialog.deal-confirmation');await confirm.waitFor();
     await seller.waitForFunction(()=>!document.querySelector('.deal-confirmation .publish-button')?.disabled);
