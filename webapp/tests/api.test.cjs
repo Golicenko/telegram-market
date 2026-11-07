@@ -49,6 +49,41 @@ function jsonResponse(payload, status = 200) {
   };
 }
 
+test('private photo blobs retain signed auth, never parse as JSON, and keep receipt headers out of fetch options', async () => {
+  const blob=new Blob(['private jpeg'],{type:'image/jpeg'});let captured,receipt;
+  const {api}=loadApi(async (_url,options)=>{captured=options;return {
+    ok:true,status:200,headers:{get:()=> '["read-id"]'},blob:async()=>blob,json:async()=>{throw Error('not JSON');},
+  };},'signed-test-data');
+  assert.equal(await api.request('/conversations/test/photos/id?preview=true',{responseType:'blob',onResponse:r=>receipt=r.headers.get('X-Chat-Read-Ids')}),blob);
+  assert.equal(captured.headers['X-Telegram-Init-Data'],'signed-test-data');assert.equal(receipt,'["read-id"]');
+  assert.equal(captured.responseType,undefined);assert.equal(captured.onResponse,undefined);
+});
+
+test('private photo multipart preserves the retry identity and exact deal scope', async () => {
+  let form;
+  const {api}=loadApi(async (_url,options)=>{form=options.body;return jsonResponse({id:'persisted-message',message_type:'photo'},201);},'signed-test-data');
+  const file=new Blob(['not decoded by client'],{type:'image/heif'});
+  const message=await api.upload(file,'/conversations/test/photos',{fields:{client_message_id:'stable-nonce',deal_id:'exact-deal',body:''}});
+  assert.equal(message.id,'persisted-message');assert.equal(form.get('client_message_id'),'stable-nonce');
+  assert.equal(form.get('deal_id'),'exact-deal');assert.equal(form.get('body'),'');assert(form.get('file'));
+});
+
+test('photo previews inspect bounded PNG/WebP headers and never decode oversized or unknown rasters', async () => {
+  const {api}=loadApi(()=>{throw Error('inspection must not fetch');});
+  const png=Buffer.alloc(24);png.set([137,80,78,71]);png.writeUInt32BE(64,16);png.writeUInt32BE(48,20);
+  assert.deepEqual(Array.from(await api.previewDimensions(new Blob([png]))),[64,48]);
+  png.writeUInt32BE(50000,16);assert.equal(await api.previewDimensions(new Blob([png])),null);
+  for(const kind of ['VP8X','VP8L','VP8 ']){
+    const header=Buffer.alloc(30);header.write('RIFF',0);header.write('WEBP',8);header.write(kind,12);
+    if(kind==='VP8X'){header.writeUIntLE(63,24,3);header.writeUIntLE(47,27,3);}
+    if(kind==='VP8L'){header[20]=0x2f;header.writeUInt32LE(63+(47<<14),21);}
+    if(kind==='VP8 '){header.set([0x9d,1,0x2a],23);header.writeUInt16LE(64,26);header.writeUInt16LE(48,28);}
+    assert.deepEqual(Array.from(await api.previewDimensions(new Blob([header]))),[64,48],kind);
+  }
+  assert.equal(await api.previewDimensions(new Blob(['<svg>not a raster</svg>'])),null);
+  assert.equal(await api.previewDimensions(new Blob(['unknown HEIF, handled by server'])),null);
+});
+
 for (const status of [400, 401, 402, 403, 404, 409, 413, 415, 422, 429, 500, 502, 503, 504]) {
   test(`HTTP ${status} has actionable Russian text and retains diagnostic status without leaking internals`, async () => {
     const {api} = loadApi(async () => jsonResponse({detail: 'Traceback SQLAlchemy SELECT * FROM users secret'}, status));

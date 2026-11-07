@@ -37,12 +37,14 @@ from test_seller_orders_postgres import paid_order
 def photo(fmt="PNG", size=(64, 48)):
     output = BytesIO()
     image = Image.new("RGB", size, "navy")
-    image.save(output, fmt)
+    metadata = Image.Exif()
+    metadata[315] = "private test metadata"
+    image.save(output, fmt, **({"exif": metadata} if fmt == "JPEG" else {}))
     return output.getvalue()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
+@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP", "HEIF"])
 async def test_signed_photo_atomic_replay_private_read_and_text_history(fmt):
     async with isolated_pg() as (_, sessions):
         buyer, seller, _, deal = await paid_order(sessions)

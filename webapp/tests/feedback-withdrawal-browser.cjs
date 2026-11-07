@@ -7,7 +7,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 (async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await chromium.launch({...process.env.CI?{}:{channel:'msedge'},headless:true});
 try{for(const width of [320,390,430]){
   const page=await browser.newPage({viewport:{width,height:844},isMobile:true,hasTouch:true});const errors=[],quotes=[],reserves=[],campaignKeys=[];let seen=false,active=false;
-  const pending=new Map(),user={id:'admin-fixture',telegram_id:900,first_name:'Тест администратора',role:'admin'},wallet={available_balance:100,earned_balance:100,purchased_balance:0,bonus_balance:0,frozen_balance:0};
+  const pending=new Map(),user={id:'admin-fixture',telegram_id:900,first_name:'Тест администратора',role:'admin'},wallet={available_balance:170,earned_balance:100,purchased_balance:70,bonus_balance:0,frozen_balance:0};
   page.on('pageerror',e=>errors.push(e.message));
   await page.addInitScript(()=>{window.Telegram={WebApp:{initData:'fixture-only',platform:'ios',ready(){},expand(){},onEvent(){},BackButton:{show(){},hide(){},onClick(){}}}};});
   await page.route(/^https:/,r=>r.abort());
@@ -36,6 +36,7 @@ try{for(const width of [320,390,430]){
   await page.goto(`http://127.0.0.1:${server.address().port}`);await page.waitForFunction(()=>document.getElementById('startupStatus').hidden);
   await page.locator('.bottom-nav [data-nav-target=profile]').click();await page.locator('[data-open-withdraw]').first().click();
   const input=page.locator('#withdrawForm [name=amount]'),output=page.locator('#withdrawQuote');
+  await page.waitForFunction(()=>document.getElementById('withdrawTotalBalance').textContent==='170'&&document.getElementById('withdrawEarnedBalance').textContent==='100');
   await input.fill('30');while(!pending.has('30'))await sleep(20);
   await input.fill('40');while(!pending.has('40'))await sleep(20);
   pending.get('40')();await page.waitForFunction(()=>document.getElementById('withdrawQuote').textContent.includes('25 Stars'));

@@ -27,10 +27,20 @@ from test_seller_orders_postgres import paid_order
     os.environ.get("RUN_CHAT_BROWSER") != "1", reason="Dedicated CI browser step"
 )
 @pytest.mark.parametrize("width", [320, 390, 430])
-async def test_live_chat_photos(width):
+async def test_live_chat_photos(width, monkeypatch):
     root = Path(__file__).resolve().parents[2]
     async with isolated_pg() as (_, sessions):
         buyer, seller, _, deal = await paid_order(sessions)
+        # Existing ID-update background notification must use this disposable
+        # schema too. Only Telegram transport is replaced, never business data.
+        monkeypatch.setattr("app.routes.SessionLocal", sessions)
+
+        async def test_transport(*_args, **_kwargs):
+            return True
+
+        monkeypatch.setattr(
+            "app.routes.send_deal_purchase_notification", test_transport
+        )
         app = client_app(sessions)
         app.include_router(router)
         app.include_router(reminders_router)

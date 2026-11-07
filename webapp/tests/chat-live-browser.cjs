@@ -41,6 +41,7 @@ const out=path.join(__dirname,'evidence/chat-20261107');fs.mkdirSync(out,{recurs
     await buyer.waitForFunction(()=>document.querySelectorAll('.message .chat-photo').length===3,null,{timeout:25000});
     await seller.waitForFunction(()=>document.querySelectorAll('.message .chat-photo').length===3,null,{timeout:25000});
     assert.equal(new Set(ids).size,3);assert(uploads>=3&&uploads<=4);assert(nonce);
+    await buyer.locator('.chat-photo').first().scrollIntoViewIfNeeded();
     await buyer.locator('.chat-photo img').first().waitFor();
     await buyer.waitForFunction(()=>document.querySelector('.chat-photo img')?.src.startsWith('blob:'));
     await buyer.locator('.chat-photo').first().click();
@@ -51,7 +52,7 @@ const out=path.join(__dirname,'evidence/chat-20261107');fs.mkdirSync(out,{recurs
     await buyer.evaluate(()=>window.testBack());await viewer.waitFor({state:'detached'});assert(await buyer.locator('[data-view=deal-chat]').isVisible());
     await buyer.evaluate(()=>{window.firstPhoto=document.querySelector('.message .chat-photo').parentElement;});
     await seller.locator('#chatInput').fill('Новое сообщение после фото');await seller.locator('#chatForm button[type=submit]').click();
-    await buyer.getByText('Новое сообщение после фото',{exact:true}).waitFor({timeout:20000});
+    await buyer.locator('.message').filter({hasText:'Новое сообщение после фото'}).waitFor({timeout:20000});
     assert(await buyer.evaluate(()=>window.firstPhoto.isConnected),'unchanged photo bubble kept in DOM');
     await seller.locator('[data-deal-action=transfer]').click();const confirm=seller.locator('dialog.deal-confirmation');await confirm.waitFor();
     await seller.waitForFunction(()=>!document.querySelector('.deal-confirmation .publish-button')?.disabled);

@@ -31,10 +31,12 @@
     if(files.length>4)notify("Можно выбрать до 4 фотографий за один раз");
     for(const file of files.slice(0,4)){
       if(!file.size||file.size>12*1024*1024){notify("Каждое фото должно быть не больше 12 МБ");continue;}
-      const item={file,url:URL.createObjectURL(file)};selected.push(item);
-      const tile=node("div"),image=node("img");image.src=item.url;image.alt="Предпросмотр";const label=node("small",file.name);
+      const item={file,url:URL.createObjectURL(file),previewable:false};selected.push(item);
+      const tile=node("div"),image=node("img");image.alt="Предпросмотр";const label=node("small",file.name);
       image.onerror=()=>{image.hidden=true;label.textContent="Предпросмотр недоступен; файл проверит сервер";};
       tile.append(image,label,button("×",()=>{URL.revokeObjectURL(item.url);selected=selected.filter(x=>x!==item);tile.remove();document.getElementById("chatInput").required=!selected.length;},"Убрать фотографию"));previewHost.append(tile);
+      // Do not decode an unbounded phone raster just to show a small preview.
+      api.previewDimensions(file).then(size=>{if(!selected.includes(item))return;if(size){item.previewable=true;image.src=item.url;}else{image.hidden=true;label.textContent="Фото проверит сервер; предпросмотр после отправки";}}).catch(()=>{image.hidden=true;});
     }
     document.getElementById("chatInput").required=!selected.length;
   }
@@ -61,7 +63,7 @@
     const box=button("",()=>{},"Открыть фотографию");box.className="chat-photo";
     const img=node("img");img.alt="Фотография в переписке";img.decoding="async";img.loading="lazy";
     img.style.aspectRatio=(message.media_width||4)+"/"+(message.media_height||3);
-    if(message.local_photo_url){img.src=message.local_photo_url;box.onclick=()=>{};}
+    if(message.local_photo_url){if(message.local_photo_previewable!==false)img.src=message.local_photo_url;else{img.hidden=true;box.textContent="Фото проверяется сервером…";}box.onclick=()=>{};}
     else{
       const path="/conversations/"+message.conversation_id+"/photos/"+message.media_id;
       img.dataset.photoPath=path+"?preview=true";

@@ -18,3 +18,22 @@ test('empty incremental poll does not reload history; read receipts still update
     renderConversation:()=>rendered++,markConversationRead:async()=>{}});
   await run();assert.equal(paths.length,2);assert(paths[0].includes('after=m'));assert(state.messages[0].is_read);assert.equal(rendered,1);
 });
+
+test('concurrent incremental polls coalesce; reopening the same deal rejects an old response',async()=>{
+  const state={currentView:'deal-chat',currentConversation:{id:'thread',deal:{id:'d'}},messages:[],chatOpening:1},waiting=[];
+  let renders=0;
+  const run=vm.runInNewContext('('+implementation+')',{URLSearchParams,state,safeArray:x=>x,api:{request:()=>new Promise(resolve=>waiting.push(resolve))},renderConversation:()=>renders++});
+  const first=run();await run();assert.equal(waiting.length,2);
+  state.chatOpening=2;waiting[0]([]);waiting[1]({id:'thread',deal:{id:'d',status:'cancelled'}});await first;
+  assert.equal(renders,0);assert.equal(state.chatSyncBusy,null);
+});
+
+test('late old-history failure does not overwrite another chat or its loading flag',async()=>{
+  const first=app.indexOf('async function loadOlderChatMessages()'),last=app.indexOf('function installMessageCopy',first);
+  const state={currentView:'deal-chat',chatOpening:1,currentConversation:{id:'old',deal:{id:'deal-old'}},messages:[{id:'first'}]};
+  let reject,errors=0;
+  const run=vm.runInNewContext('('+app.slice(first,last).trim()+')',{URLSearchParams,state,api:{request:()=>new Promise((_resolve,r)=>reject=r)},setChatConnection:()=>errors++});
+  const pending=run();state.chatOpening=2;state.currentConversation={id:'new',deal:{id:'deal-new'}};state.chatOlderScope='new-scope';
+  reject(Error('old request failed'));await pending;
+  assert.equal(errors,0);assert.equal(state.chatOlderScope,'new-scope');assert.equal(state.chatLoadingOlder,true);
+});

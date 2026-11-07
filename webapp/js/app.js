@@ -2859,6 +2859,7 @@ async function hideCurrentConversation() {
       const conversation = await api.request(`/conversations/listing/${listingId}`, { method: "POST" });
       if (conversation.id) return await openConversation(conversation.id, conversation, state.currentView);
       state.currentConversation = conversation;
+      state.chatLoadingOlder=false;state.chatOlderScope=null;
       state.messages = [];
       state.previousView = state.currentView;
       renderConversation();
@@ -2885,6 +2886,7 @@ async function hideCurrentConversation() {
       const messages = messagesResult.status === "fulfilled" ? safeArray(messagesResult.value) : [];
       if (messagesResult.status === "rejected") reportClientError("conversation_messages_initial", messagesResult.reason);
       state.currentConversation = conversation;
+      state.chatLoadingOlder=false;state.chatOlderScope=null;
       state.messages = mergeChatMessages(messages, [...(state.chatOutbox?.values() || [])].filter(item => item.conversation_id === id && (item.deal_id || null) === (conversation.deal?.id || null)));
       state.chatHasOlder = messages.length === 100;
       document.getElementById("chatInput").value = state.chatDrafts?.[id] || "";
@@ -3408,7 +3410,7 @@ async function hideCurrentConversation() {
       button.disabled=true;
       const conversation=state.currentConversation,photos=window.AutoFlowChatMedia.take();input.value="";saveChatDraft();resizeChatInput();
       try{for(const [index,item]of photos.entries()){
-        const id=createRequestId(),pending={id,client_message_id:id,body:index===0?body:"",file:item.file,local_photo_url:item.url,media_width:4,media_height:3,
+        const id=createRequestId(),pending={id,client_message_id:id,body:index===0?body:"",file:item.file,local_photo_url:item.url,local_photo_previewable:item.previewable,media_width:4,media_height:3,
           sender_id:state.me.user.id,created_at:new Date().toISOString(),message_type:"photo",local_status:"sending",conversation_id:conversation.id,listing_id:conversation.listing.id,deal_id:conversation.deal?.id||null};
         state.chatOutbox ||= new Map();state.chatOutbox.set(id,pending);
         if(state.currentView==="deal-chat"&&state.currentConversation?.id===conversation.id&&(state.currentConversation?.deal?.id||null)===(pending.deal_id||null)){state.messages.push(pending);state.chatForceBottom=true;renderConversation();}
@@ -3480,9 +3482,12 @@ async function hideCurrentConversation() {
     if (state.chatLoadingOlder || !state.currentConversation?.id) return;
     const id = state.currentConversation.id;
     const dealId=state.currentConversation.deal?.id||null,opening=state.chatOpening;
+    const scope=`${id}:${dealId||""}:${opening}`;
+    const current=()=>state.currentConversation?.id===id&&state.currentView==="deal-chat"&&(state.currentConversation?.deal?.id||null)===dealId&&state.chatOpening===opening;
     const first = state.messages.find(item => !item.local_status);
     if (!first) return;
     state.chatLoadingOlder = true;
+    state.chatOlderScope=scope;
     const query = new URLSearchParams({ before: first.id });
     if (state.currentConversation.deal?.id) query.set("deal_id", state.currentConversation.deal.id);
     try {
@@ -3491,8 +3496,8 @@ async function hideCurrentConversation() {
       const box = elements.dealMessages; const height = box.scrollHeight; const top = box.scrollTop;
       state.chatHasOlder = older.length === 100; state.messages = mergeChatMessages(older, state.messages);
       renderConversation(); if(state.currentConversation?.id===id&&state.chatOpening===opening)box.scrollTop=top+box.scrollHeight-height;
-    } catch (error) { setChatConnection("Не удалось загрузить историю. Попробуйте ещё раз."); }
-    finally { state.chatLoadingOlder = false; const button = elements.dealMessages.querySelector(".chat-history-button"); if (button) { button.disabled = false; button.textContent = "Предыдущие сообщения"; } }
+    } catch (error) { if(current())setChatConnection("Не удалось загрузить историю. Попробуйте ещё раз."); }
+    finally { if(state.chatOlderScope===scope){state.chatLoadingOlder=false;state.chatOlderScope=null;if(current()){const button=elements.dealMessages.querySelector(".chat-history-button");if(button){button.disabled=false;button.textContent="Предыдущие сообщения";}}} }
   }
 
   function installMessageCopy(bubble, text) {
