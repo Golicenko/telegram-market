@@ -37,3 +37,14 @@ test('late old-history failure does not overwrite another chat or its loading fl
   reject(Error('old request failed'));await pending;
   assert.equal(errors,0);assert.equal(state.chatOlderScope,'new-scope');assert.equal(state.chatLoadingOlder,true);
 });
+
+test('older history and reopening preserve unconfirmed outbox photos until a server acknowledgement',()=>{
+  const first=app.indexOf('function mergeChatMessages('),last=app.indexOf('function chatAtBottom(',first);
+  const pending={id:'nonce',client_message_id:'nonce',local_status:'failed',local_photo_url:'blob:local',created_at:'2026-11-07T10:00:00Z'};
+  const state={chatOutbox:new Map([['nonce',pending]])},revoked=[];
+  const merge=vm.runInNewContext('('+app.slice(first,last).trim()+')',{state,URL:{revokeObjectURL:url=>revoked.push(url)}});
+  let messages=merge([{id:'old',created_at:'2026-11-07T09:00:00Z'}],[pending]);
+  assert.equal(state.chatOutbox.get('nonce'),pending);assert.deepEqual(revoked,[]);assert.equal(messages.length,2);
+  messages=merge(messages,[{id:'server-id',client_message_id:'nonce',created_at:pending.created_at}]);
+  assert.equal(state.chatOutbox.size,0);assert.deepEqual(revoked,['blob:local']);assert.equal(messages.length,2);assert.equal(messages[1].id,'server-id');
+});

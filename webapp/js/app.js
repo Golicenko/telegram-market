@@ -3456,9 +3456,9 @@ async function hideCurrentConversation() {
   }
 
   function mergeChatMessages(existing, incoming) {
-    const keys = new Set(incoming.map(item => item.client_message_id).filter(Boolean));
+    const keys = new Set(incoming.filter(item=>!item.local_status).map(item => item.client_message_id).filter(Boolean));
     const byId = new Map(existing.filter(item => !item.local_status || !keys.has(item.client_message_id)).map(item => [item.id, item]));
-    incoming.forEach(item => { byId.set(item.id, item); if (item.client_message_id) {const pending=state.chatOutbox?.get(item.client_message_id);if(pending?.local_photo_url)URL.revokeObjectURL(pending.local_photo_url);state.chatOutbox?.delete(item.client_message_id);} });
+    incoming.forEach(item => { byId.set(item.id, item); if (!item.local_status && item.client_message_id) {const pending=state.chatOutbox?.get(item.client_message_id);if(pending?.local_photo_url)URL.revokeObjectURL(pending.local_photo_url);state.chatOutbox?.delete(item.client_message_id);} });
     return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
   }
 

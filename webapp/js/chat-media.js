@@ -67,6 +67,7 @@
     else{
       const path="/conversations/"+message.conversation_id+"/photos/"+message.media_id;
       img.dataset.photoPath=path+"?preview=true";
+      img.onerror=()=>{box.classList.add("has-error");img.alt="Фото не загрузилось. Нажмите, чтобы повторить";delete img.dataset.loaded;const record=cache.get(img.dataset.photoPath);if(record?.url)URL.revokeObjectURL(record.url);cache.delete(img.dataset.photoPath);};
       box.onclick=()=>{if(box.classList.contains("has-error")){loadThumbnail(img);return;}openViewer(path);};
       if(observer)observer.observe(img);else requestAnimationFrame(()=>loadThumbnail(img));
     }
@@ -77,6 +78,7 @@
     const dialog=node("dialog",null,"chat-photo-viewer");viewer=dialog;dialog.setAttribute("aria-label","Просмотр фотографии");
     const controls=node("div",null,"chat-photo-viewer__controls"),canvas=node("div",null,"chat-photo-canvas"),img=node("img"),status=node("p","Загрузка фотографии…");
     img.alt="Фотография";img.draggable=false;canvas.append(img,status);dialog.append(controls,canvas);document.body.append(dialog);
+    img.onload=()=>status.remove();img.onerror=()=>{status.textContent="Не удалось открыть фото. Закройте просмотр и попробуйте ещё раз.";canvas.append(status);};
     let scale=1,dx=0,dy=0,previous=null,url=null;const points=new Map(),controller=root.AbortController?new AbortController():null,captured=scope;
     const draw=()=>{const x=Math.max(0,(img.clientWidth*scale-canvas.clientWidth)/2),y=Math.max(0,(img.clientHeight*scale-canvas.clientHeight)/2);dx=Math.max(-x,Math.min(x,dx));dy=Math.max(-y,Math.min(y,dy));img.style.transform="translate("+dx+"px,"+dy+"px) scale("+scale+")";};
     const zoom=value=>{scale=Math.max(1,Math.min(5,value));draw();};
@@ -88,7 +90,7 @@
     canvas.addEventListener("wheel",event=>{event.preventDefault();zoom(scale*(event.deltaY<0?1.15:1/1.15));},{passive:false});
     dialog.addEventListener("close",()=>{controller?.abort();if(url)URL.revokeObjectURL(url);if(viewer===dialog)viewer=null;dialog.remove();},{once:true});
     dialog.showModal();
-    try{const blob=await api.request(path+"?preview=false",{responseType:"blob",signal:controller?.signal,retries:0});if(!dialog.open||scope!==captured)return;url=URL.createObjectURL(blob);img.src=url;status.remove();}
+    try{const blob=await api.request(path+"?preview=false",{responseType:"blob",signal:controller?.signal,retries:0});if(!dialog.open||scope!==captured)return;url=URL.createObjectURL(blob);img.src=url;}
     catch(error){if(dialog.open){status.textContent="Не удалось загрузить фото. Закройте просмотр и попробуйте ещё раз.";}}
   }
   root.AutoFlowChatMedia={mount,leave,dismiss,image,take,hasSelection:()=>selected.length>0};
