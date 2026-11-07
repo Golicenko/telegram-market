@@ -59,7 +59,8 @@ const out=path.join(__dirname,'evidence/chat-20261107');fs.mkdirSync(out,{recurs
       await buyer.locator('.bottom-nav [data-nav-target=profile]').click();
       await buyer.locator('[data-profile-tab=deals]').click();
       await buyer.locator('[data-open-deal-thread][data-deal-id="'+deal+'"]').click();
-      await buyer.locator('.chat-photo').last().scrollIntoViewIfNeeded();
+      await buyer.locator('[data-view=deal-chat]').waitFor({state:'visible'});
+      await buyer.locator('.chat-photo').last().evaluate(el=>el.scrollIntoView({block:'center'}));
       await buyer.waitForFunction(()=>{const img=[...document.querySelectorAll('.chat-photo img')].at(-1);return img?.src.startsWith('blob:')&&img.naturalWidth>0;});
     }
     await seller.locator('[data-deal-action=transfer]').click();const confirm=seller.locator('dialog.deal-confirmation');await confirm.waitFor();
