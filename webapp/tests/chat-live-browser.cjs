@@ -58,6 +58,7 @@ const out=path.join(__dirname,'evidence/chat-20261107');fs.mkdirSync(out,{recurs
     await seller.waitForFunction(()=>!document.querySelector('.deal-confirmation .publish-button')?.disabled);
     await confirm.getByRole('button',{name:'Да, передал',exact:true}).click();await confirm.waitFor({state:'detached'});
     assert.equal(await seller.locator('.seller-deal__progress i.is-done').count(),3);
+    assert.equal(await seller.locator('#dealControls').isVisible(),false,'no empty footer frame after seller actions');
     assert.match(await seller.locator('.seller-deal').textContent(),/Ожидаем подтверждения покупателя/);
     await seller.screenshot({path:path.join(out,'compact-transferred-'+width+'.png')});
     for(const page of [seller,buyer])assert(!(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)));

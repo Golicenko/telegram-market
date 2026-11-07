@@ -978,6 +978,7 @@ body.seller-chat-open .seller-deal p.seller-deal__escrow{margin:12px auto 0;font
 body.seller-chat-open .deal-delivery.seller-deal{max-height:42%;padding:0 6px 5px;flex:0 0 auto}
 body.seller-chat-open .deal-delivery.seller-deal--intro{display:block;flex:0 0 auto;max-height:42%}
 body.seller-chat-open .seller-deal--intro~.messages{flex:1 1 auto;max-height:none}
+body.seller-chat-open .deal-controls:empty{display:none}
 body.seller-chat-open .seller-deal .seller-deal__card{padding:7px 9px;border-radius:9px;max-width:none}
 body.seller-chat-open .seller-deal h2{font-size:14px;line-height:1.25}
 body.seller-chat-open .seller-deal--intro h2{display:inline;text-align:left;font-size:14px}
