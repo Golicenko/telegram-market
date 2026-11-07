@@ -67,7 +67,7 @@
     else{
       const path="/conversations/"+message.conversation_id+"/photos/"+message.media_id;
       img.dataset.photoPath=path+"?preview=true";
-      img.onerror=()=>{box.classList.add("has-error");img.alt="Фото не загрузилось. Нажмите, чтобы повторить";delete img.dataset.loaded;const record=cache.get(img.dataset.photoPath);if(record?.url)URL.revokeObjectURL(record.url);cache.delete(img.dataset.photoPath);};
+      img.onerror=()=>{if(!img.isConnected)return;box.classList.add("has-error");img.alt="Фото не загрузилось. Нажмите, чтобы повторить";delete img.dataset.loaded;const record=cache.get(img.dataset.photoPath);if(record?.url)URL.revokeObjectURL(record.url);cache.delete(img.dataset.photoPath);};
       box.onclick=()=>{if(box.classList.contains("has-error")){loadThumbnail(img);return;}openViewer(path);};
       if(observer)observer.observe(img);else requestAnimationFrame(()=>loadThumbnail(img));
     }

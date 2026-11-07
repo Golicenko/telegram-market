@@ -926,6 +926,9 @@ function handleClick(event) {
     if (state.currentView === "deal-chat" && viewName !== "deal-chat") {
       window.AutoFlowSellerDeal.stop();
       window.AutoFlowChatMedia?.leave();
+      // Media URLs/observers are released on leaving; do not reuse detached
+      // thumbnail state when opening the very same conversation again.
+      elements.dealMessages.dataset.scope="";
       document.body.classList.remove("seller-chat-open");
       saveChatDraft();
       state.chatOpening = (state.chatOpening || 0) + 1;

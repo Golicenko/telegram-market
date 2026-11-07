@@ -54,6 +54,14 @@ const out=path.join(__dirname,'evidence/chat-20261107');fs.mkdirSync(out,{recurs
     await seller.locator('#chatInput').fill('Новое сообщение после фото');await seller.locator('#chatForm button[type=submit]').click();
     await buyer.locator('.message').filter({hasText:'Новое сообщение после фото'}).waitFor({timeout:20000});
     assert(await buyer.evaluate(()=>window.firstPhoto.isConnected),'unchanged photo bubble kept in DOM');
+    for(let reopen=0;reopen<2;reopen++){
+      await buyer.locator('[data-view=deal-chat] [data-back]').click();
+      await buyer.locator('.bottom-nav [data-nav-target=profile]').click();
+      await buyer.locator('[data-profile-tab=deals]').click();
+      await buyer.locator('[data-open-deal-thread][data-deal-id="'+deal+'"]').click();
+      await buyer.locator('.chat-photo').last().scrollIntoViewIfNeeded();
+      await buyer.waitForFunction(()=>{const img=[...document.querySelectorAll('.chat-photo img')].at(-1);return img?.src.startsWith('blob:')&&img.naturalWidth>0;});
+    }
     await seller.locator('[data-deal-action=transfer]').click();const confirm=seller.locator('dialog.deal-confirmation');await confirm.waitFor();
     await seller.waitForFunction(()=>!document.querySelector('.deal-confirmation .publish-button')?.disabled);
     await confirm.getByRole('button',{name:'Да, передал',exact:true}).click();await confirm.waitFor({state:'detached'});
@@ -63,6 +71,6 @@ const out=path.join(__dirname,'evidence/chat-20261107');fs.mkdirSync(out,{recurs
     await seller.screenshot({path:path.join(out,'compact-transferred-'+width+'.png')});
     for(const page of [seller,buyer])assert(!(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)));
     assert.deepEqual(errors,[]);
-    console.log(width+'px: signed seller/buyer, compact states, private photos x3, lost-response replay, viewer/zoom/Back, DOM reuse, escrow held PASS');
+    console.log(width+'px: signed seller/buyer, compact states, private photos x3, lost-response replay, viewer/zoom/Back, DOM reuse, reopen twice, escrow held PASS');
   }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});
