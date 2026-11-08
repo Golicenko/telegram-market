@@ -33,6 +33,9 @@ jobs:
         with:
           node-version: '22'
       - run: pip install -r backend/requirements-dev.txt
+      - name: Private photo authorization, limits and migration safety
+        run: python -m pytest -q tests/test_private_chat_photos.py
+        working-directory: backend
       - run: python -m pytest -q
         working-directory: backend
       - run: node --test webapp/tests/*.test.cjs
@@ -40,6 +43,11 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts --package-lock=false playwright@1.62.1
           npx playwright install --with-deps chromium
+      - name: Private chat photos, signed participants and real isolated PostgreSQL
+        run: python -m pytest -q -s tests/test_chat_media_browser_postgres.py
+        working-directory: backend
+        env:
+          RUN_CHAT_BROWSER: '1'
       - name: VIP renewal and mobile keyboard regression (fixtures only)
         run: node webapp/tests/vip-renewal-keyboard-browser.cjs
       - name: Independent game filters and unique badges on mobile layouts (fixtures only)

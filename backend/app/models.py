@@ -518,6 +518,20 @@ class Conversation(Base, TimestampMixin):
     )
 
 
+class PrivateChatImage(Base):
+    """Not exposed by public UploadedImage/media routes."""
+    __tablename__ = "private_chat_images"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
+    owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    preview: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (CheckConstraint("width > 0 AND height > 0", name="ck_private_chat_image_dimensions"),)
+
+
 class ConversationMessage(Base):
     __tablename__ = "conversation_messages"
 
@@ -572,6 +586,9 @@ class ConversationMessage(Base):
         nullable=True,
     )
     client_message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    media_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("private_chat_images.id", ondelete="RESTRICT"), unique=True)
+    media_width: Mapped[int | None] = mapped_column(Integer)
+    media_height: Mapped[int | None] = mapped_column(Integer)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -581,11 +598,13 @@ class ConversationMessage(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "message_type IN ('text','system','offer')",
+            "message_type IN ('text','system','offer','photo')",
             name="ck_conversation_message_type",
         ),
         UniqueConstraint("conversation_id", "sender_id", "client_message_id", name="uq_conversation_message_client_id"),
         Index("ix_messages_chat_cursor", "conversation_id", "created_at", "id"),
+        Index("ix_messages_photo_rate", "conversation_id", "sender_id", "created_at", postgresql_where=sql_text("message_type = 'photo'")),
+        CheckConstraint("(message_type = 'photo' AND media_id IS NOT NULL AND media_width IS NOT NULL AND media_height IS NOT NULL AND media_width > 0 AND media_height > 0) OR (message_type != 'photo' AND media_id IS NULL)", name="ck_message_photo"),
     )
 
 class PriceOffer(Base, TimestampMixin):

@@ -347,7 +347,7 @@ async def conversation_details(
     elif message_scope in {"ordinary", "dialog"}:
         message_filter.extend((
             ConversationMessage.deal_id.is_(None),
-            ConversationMessage.message_type == "text",
+            ConversationMessage.message_type.in_(("text", "photo")),
         ))
     last_message = await session.scalar(
         select(ConversationMessage).where(*message_filter).order_by(ConversationMessage.created_at.desc()).limit(1)
@@ -381,7 +381,7 @@ async def conversation_details(
         "offers": [PriceOfferOut.model_validate(item) for item in offers],
         "created_at": conversation.created_at,
         "last_message_at": last_message.created_at if last_message else None,
-        "last_message": last_message.body if last_message else None,
+        "last_message": (last_message.body or ("Фотография" if last_message.message_type == "photo" else "")) if last_message else None,
         "unread_count": unread_count,
     }
 
@@ -2509,7 +2509,7 @@ async def list_conversations(user: User = Depends(get_current_user), session: As
         .where(
             ConversationMessage.conversation_id == Conversation.id,
             ConversationMessage.deal_id.is_(None),
-            ConversationMessage.message_type == "text",
+            ConversationMessage.message_type.in_(("text", "photo")),
         )
         .correlate(Conversation)
         .scalar_subquery()
@@ -2635,10 +2635,12 @@ async def get_conversation(
 @router.get("/conversations/{conversation_id}/messages", response_model=list[ConversationMessageOut])
 async def get_conversation_messages(
     conversation_id: uuid.UUID,
+    response: Response = None,
     deal_id: uuid.UUID | None = Query(default=None),
     before: uuid.UUID | None = Query(default=None),
     after: uuid.UUID | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=100),
+    include_receipts: bool = False,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -2656,11 +2658,16 @@ async def get_conversation_messages(
     elif conversation.conversation_type == "deal" and conversation.deal_id:
         pass  # Dedicated thread includes the earlier offer and negotiation.
     elif conversation.conversation_type == "dialog":
-        query = query.where(ConversationMessage.deal_id.is_(None), ConversationMessage.message_type == "text")
+        query = query.where(ConversationMessage.deal_id.is_(None), ConversationMessage.message_type.in_(("text", "photo")))
     else:
         query = query.where(ConversationMessage.deal_id.is_(None))
     if before and after:
         raise HTTPException(422, "Укажите только один курсор")
+    if include_receipts and response is not None:
+        ids = (await session.scalars(query.with_only_columns(ConversationMessage.id).where(
+            ConversationMessage.sender_id == user.id, ConversationMessage.is_read.is_(True))
+            .order_by(ConversationMessage.created_at.desc(), ConversationMessage.id.desc()).limit(100))).all()
+        response.headers["X-Chat-Read-Ids"] = json.dumps(list(map(str, ids)))
     if before or after:
         cursor = await session.scalar(query.where(ConversationMessage.id == (before or after)))
         if not cursor:
@@ -2713,7 +2720,7 @@ async def mark_conversation_as_read(
     elif conversation.conversation_type == "deal" and conversation.deal_id:
         pass
     elif conversation.conversation_type == "dialog":
-        read_filters.extend((ConversationMessage.deal_id.is_(None), ConversationMessage.message_type == "text"))
+        read_filters.extend((ConversationMessage.deal_id.is_(None), ConversationMessage.message_type.in_(("text", "photo"))))
     else:
         read_filters.append(ConversationMessage.deal_id.is_(None))
     await session.execute(
@@ -3887,7 +3894,7 @@ async def profile(user: User = Depends(get_current_user), session: AsyncSession 
         .where(
             ConversationMessage.conversation_id == Conversation.id,
             ConversationMessage.deal_id.is_(None),
-            ConversationMessage.message_type == "text",
+            ConversationMessage.message_type.in_(("text", "photo")),
         )
         .correlate(Conversation)
         .scalar_subquery()

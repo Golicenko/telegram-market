@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from typing import Awaitable, Callable
 
 from fastapi import HTTPException
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1322,6 +1322,7 @@ async def send_conversation_message(
     body: str,
     client_message_id: uuid.UUID,
     deal_id: uuid.UUID | None = None,
+    *, photo: dict | None = None,
 ) -> tuple[ConversationMessage, User, bool]:
     async with session.begin():
         snapshot = await session.get(Conversation, conversation_id)
@@ -1352,7 +1353,20 @@ async def send_conversation_message(
         recipient_id = conversation.seller_id if sender.id == conversation.buyer_id else conversation.buyer_id
         recipient = await session.get(User, recipient_id)
         if existing:
+            if photo and existing.message_type != "photo":
+                raise HTTPException(409, "Этот идентификатор уже использован текстовым сообщением")
             return existing, recipient, False
+        media = None
+        if photo:
+            from .models import PrivateChatImage
+            count = await session.scalar(select(func.count()).select_from(ConversationMessage).where(
+                ConversationMessage.conversation_id == conversation.id, ConversationMessage.sender_id == sender.id,
+                ConversationMessage.message_type == "photo", ConversationMessage.created_at >= datetime.now(UTC)-timedelta(minutes=1)))
+            if count >= 10:
+                raise HTTPException(429, "Не более 10 фотографий в минуту в одном чате", headers={"Retry-After": "60"})
+            media = PrivateChatImage(id=uuid.uuid4(), conversation_id=conversation.id, owner_id=sender.id, **photo)
+            session.add(media)
+            await session.flush()
         now = datetime.now(UTC)
         deal = None
         if deal_id:
@@ -1386,7 +1400,8 @@ async def send_conversation_message(
             record_seller_response(conversation, now)
         message = ConversationMessage(
             id=uuid.uuid4(), conversation_id=conversation.id, deal_id=deal_id, sender_id=sender.id, body=body.strip(),
-            message_type="text", client_message_id=client_message_id,
+            message_type="photo" if media else "text", client_message_id=client_message_id,
+            media_id=media.id if media else None, media_width=media.width if media else None, media_height=media.height if media else None,
         )
         session.add(message)
         if deal:
@@ -1402,7 +1417,7 @@ async def send_conversation_message(
             recipient_id,
             "conversation_message",
             "Новое сообщение",
-            body.strip()[:240],
+            (body.strip() or "Фотография")[:240],
             {"conversation_id": str(conversation.id), "listing_id": str(conversation.listing_id), "message_id": str(message.id)},
         )
         await session.flush()

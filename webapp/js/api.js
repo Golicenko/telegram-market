@@ -158,6 +158,8 @@
       timeoutMs = DEFAULT_TIMEOUT_MS,
       retries,
       retryDelayMs = DEFAULT_RETRY_DELAY_MS,
+      responseType = "json",
+      onResponse,
       ...fetchOptions
     } = options;
     const method = String(fetchOptions.method || "GET").toUpperCase();
@@ -211,6 +213,8 @@
             });
           }
           if (response.status === 204) return null;
+          onResponse?.(response);
+          if (responseType === "blob") return await response.blob();
           try { return await response.json(); }
           catch (error) {
             if (timedOut || externalSignal?.aborted || error?.name === "AbortError") throw error;
@@ -338,7 +342,19 @@
         offset += length;
       }
     }
+    // WebP dimension fields: https://developers.google.com/speed/webp/docs/riff_container
+    if(bytes.length>=30 && String.fromCharCode(...bytes.slice(0,4))==='RIFF' && String.fromCharCode(...bytes.slice(8,12))==='WEBP'){
+      const kind=String.fromCharCode(...bytes.slice(12,16));
+      if(kind==='VP8X')return [1+bytes[24]+(bytes[25]<<8)+(bytes[26]<<16),1+bytes[27]+(bytes[28]<<8)+(bytes[29]<<16)];
+      if(kind==='VP8L'&&bytes[20]===0x2f){const bits=view.getUint32(21,true);return [1+(bits&0x3fff),1+((bits>>>14)&0x3fff)];}
+      if(kind==='VP8 '&&bytes[23]===0x9d&&bytes[24]===1&&bytes[25]===0x2a)return [view.getUint16(26,true)&0x3fff,view.getUint16(28,true)&0x3fff];
+    }
     return null;
+  }
+
+  async function previewDimensions(file){
+    const bytes=new Uint8Array(await file.slice(0,256*1024).arrayBuffer()),size=rasterDimensions(bytes);
+    return size&&size[0]>0&&size[1]>0&&size[0]*size[1]<=16000000?size:null;
   }
 
   function uploadWithProgress(path, body, options, metadata) {
@@ -483,6 +499,7 @@
       metadata.upload_stage = "formdata";
       const body = new FormData();
       body.append("file", preparedFile, preparedFile.name || "photo.jpg");
+      for (const [key, value] of Object.entries(options.fields || {})) if (value != null) body.append(key, String(value));
       metadata.upload_stage = "fetch";
       const startedAt = performance.now();
       const timeoutMs = Number(options.timeoutMs || 90000);
@@ -496,5 +513,5 @@
     }
   }
 
-  window.AutoFlowApi = Object.freeze({ request, resource, upload, ApiError, baseUrl: API_BASE });
+  window.AutoFlowApi = Object.freeze({ request, resource, upload, previewDimensions, ApiError, baseUrl: API_BASE });
 })();

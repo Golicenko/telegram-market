@@ -28,6 +28,7 @@ from .upload_guard import ImageUploadGuard
 from .feedback import router as feedback_router, run_feedback_worker
 from .deal_reminders import router as deal_reminder_router
 from .owner_finance import router as owner_finance_router
+from .chat_media import router as chat_media_router
 
 
 settings = get_settings()
@@ -136,6 +137,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Chat-Read-Ids"],
 )
 app.add_middleware(ImageUploadGuard)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
@@ -149,6 +151,7 @@ app.include_router(training_analytics_router)
 app.include_router(feedback_router)
 app.include_router(deal_reminder_router)
 app.include_router(owner_finance_router)
+app.include_router(chat_media_router)
 
 
 @app.get("/", include_in_schema=False)
