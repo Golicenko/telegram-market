@@ -88,6 +88,8 @@ def validate_public(payload):
         payload.password.get_secret_value(),
     )
     public = payload.title + "\n" + payload.description
+    if len(payload.title.strip()) < 2 or len(payload.description.strip()) < 5:
+        raise HTTPException(422, "Заполните название и описание без пустых пробелов")
     if not payload.owns_account or not payload.no_personal_mail_required:
         raise HTTPException(
             422,
@@ -161,9 +163,26 @@ async def publish(session, user, payload):
                 or existing.brand != payload.title.strip()
                 or existing.description != payload.description.strip()
                 or existing.price_af_coins != payload.price_af_coins
+                or existing.game_version != payload.game_version
+                or existing.video_asset_id != payload.video_asset_id
             ):
                 raise HTTPException(
                     409, "Идентификатор уже связан с другим объявлением"
+                )
+            image = await session.scalar(
+                select(ListingImage.url).where(
+                    ListingImage.listing_id == existing.id, ListingImage.position == 0
+                )
+            )
+            secret = await session.get(AccountSecret, existing.id)
+            if image != payload.image_url or (
+                secret
+                and secret.ciphertext
+                and unseal(f"listing:{existing.id}", secret.key_id, secret.ciphertext)
+                != values
+            ):
+                raise HTTPException(
+                    409, "Идентификатор уже связан с другими данными объявления"
                 )
             return existing
         await validate_listing_media(session, [payload.image_url], user.id)
