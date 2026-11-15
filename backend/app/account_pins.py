@@ -125,7 +125,10 @@ async def validate_checkout(session, telegram_id, payload, currency, amount, que
         return False, "Счёт не найден"
     async with session.begin():
         order = await session.scalar(
-            select(AccountPin).where(AccountPin.id == order_id).with_for_update()
+            select(AccountPin)
+            .where(AccountPin.id == order_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
         item = await session.get(Listing, order.listing_id) if order else None
@@ -176,7 +179,10 @@ async def receive_payment(session, telegram_id, payment):
             select(Listing).where(Listing.id == snapshot.listing_id).with_for_update()
         )
         order = await session.scalar(
-            select(AccountPin).where(AccountPin.id == order_id).with_for_update()
+            select(AccountPin)
+            .where(AccountPin.id == order_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
         if not user or order.user_id != user.id:
