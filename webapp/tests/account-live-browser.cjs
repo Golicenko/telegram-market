@@ -46,7 +46,7 @@ const out=path.join(__dirname,'evidence/account-autodelivery');fs.mkdirSync(out,
     // Never save a screenshot with plaintext credentials.
     await popup.getByRole('button',{name:'Показать / скрыть',exact:true}).click();
     const geometry=await popup.boundingBox();assert(geometry.x>=0&&geometry.x+geometry.width<=width+1);
-    await buyer.evaluate(()=>window.testBack());await popup.waitFor({state:'detached'});
+    await buyer.evaluate(()=>window.testBack());await buyer.locator('dialog.account-modal').waitFor({state:'detached'});
     assert.equal(await buyer.locator('input[name=password]').count(),0);
     assert.equal(await buyer.evaluate(()=>JSON.stringify(localStorage).includes('DO-NOT-LOG')),false);
     await buyer.waitForTimeout(1100);await buyer.getByRole('button',{name:'🔐 Открыть аккаунт',exact:true}).first().click();

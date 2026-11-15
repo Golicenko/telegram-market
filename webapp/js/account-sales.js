@@ -2,19 +2,24 @@
   "use strict";
   const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
   function create({ api, notify, refresh, openCar, support, userId, reloadDeal, topup }) {
-    let current = null, explained = false;
+    let current = null, explained = false, savedOverflow = "";
+    const dialogs = new Set();
     function modal(title) {
       const dialog = node("dialog", null, "modal account-modal");
       const heading = node("h2", title), close = button("×", () => dialog.close(), "ghost-button");
       close.setAttribute("aria-label", "Закрыть"); close.classList.add("account-modal__close");
       dialog.append(close, heading); document.body.append(dialog);
-      const previousOverflow = document.body.style.overflow; document.body.style.overflow = "hidden";
-      const previous = current; current = dialog;
+      if (!dialogs.size) savedOverflow = document.body.style.overflow;
+      dialogs.add(dialog); document.body.style.overflow = "hidden"; current = dialog;
+      const erase = () => dialog.querySelectorAll("input").forEach(field => { field.value = ""; });
+      const nativeClose = dialog.close.bind(dialog);
+      dialog.close = (...args) => { erase(); return nativeClose(...args); };
+      dialog.addEventListener("cancel", event => { if (dialog.dataset.busy) event.preventDefault(); else erase(); });
       dialog.addEventListener("close", () => {
-        dialog.querySelectorAll("input").forEach(field => { field.value = ""; });
+        erase(); dialogs.delete(dialog);
         dialog.querySelectorAll("video").forEach(video => { video.pause(); video.removeAttribute("src"); video.load(); });
-        document.body.style.overflow = previousOverflow;
-        if (current === dialog) current = previous?.open ? previous : null;
+        document.body.style.overflow = dialogs.size ? "hidden" : savedOverflow;
+        if (current === dialog) current = [...dialogs].reverse().find(item => item.open) || null;
         dialog.remove();
       }, { once: true });
       dialog.showModal(); return dialog;
@@ -89,7 +94,12 @@
             const upload = await api.request("/account-videos", { method: "POST", body: JSON.stringify({ content_type: contentType, size_bytes: file.size }), retries: 0 });
             status.textContent = "Загрузка видео в хранилище…";
             // Deliberately no Telegram auth headers on the external upload.
-            const result = await fetch(upload.upload_url, { method: "PUT", body: file, headers: { "Content-Type": upload.content_type }, credentials: "omit", referrerPolicy: "no-referrer" });
+            const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 300000);
+            const cancelUpload = button("Прервать загрузку", () => controller.abort()); dialog.append(cancelUpload);
+            let result;
+            try { result = await fetch(upload.upload_url, { method: "PUT", body: file, headers: { "Content-Type": upload.content_type }, credentials: "omit", referrerPolicy: "no-referrer", signal: controller.signal }); }
+            catch (_) { throw new Error(controller.signal.aborted ? "Загрузка видео прервана или истёк срок ожидания. Данные формы сохранены; можно повторить." : "Не удалось загрузить видео. Проверьте сеть и повторите."); }
+            finally { clearTimeout(timeout); cancelUpload.remove(); }
             if (!result.ok) throw new Error("Видео не загрузилось. Проверьте сеть и повторите.");
             const checked = await api.request(`/account-videos/${upload.id}/complete`, { method: "POST", retries: 0 }); videoId = checked.id;
           }
