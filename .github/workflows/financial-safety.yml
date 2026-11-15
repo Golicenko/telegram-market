@@ -48,6 +48,11 @@ jobs:
         working-directory: backend
         env:
           RUN_CHAT_BROWSER: '1'
+      - name: Account purchase, private credentials and shared settlement (isolated PostgreSQL)
+        run: python -m pytest -q -s tests/test_account_browser_postgres.py
+        working-directory: backend
+        env:
+          RUN_ACCOUNT_BROWSER: '1'
       - name: VIP renewal and mobile keyboard regression (fixtures only)
         run: node webapp/tests/vip-renewal-keyboard-browser.cjs
       - name: Independent game filters and unique badges on mobile layouts (fixtures only)

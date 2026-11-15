@@ -14,6 +14,8 @@ def utc(value):
 
 
 def paid_order_body(deal, listing):
+    if getattr(deal, "product_kind", "car") == "account":
+        return f"👤 Ваш аккаунт купили!\n{listing.brand}\nЗаказ №{str(deal.id)[:8]}\nСтоимость: {deal.price_af_coins} AF\nАвтовыдача выполнена. Ожидаем подтверждения покупателя."
     game = {"car_parking_1":"Car Parking 1", "car_parking_2":"Car Parking 2"}.get(listing.game_version, "")
     # Listing names are unbounded; keep all essential fields within a photo caption.
     name = " ".join(filter(None, (listing.brand, listing.model)))

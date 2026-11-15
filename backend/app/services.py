@@ -353,6 +353,8 @@ async def create_listing(
 
 
 async def charge_listing_promotion(session: AsyncSession, actor: User, listing: Listing) -> None:
+    if listing.product_kind == "account":
+        raise HTTPException(409, "Для аккаунтов используется отдельный тариф VIP в Stars")
     settings = get_settings()
     now = datetime.now(UTC)
     if listing.seller_id != actor.id:
@@ -408,6 +410,8 @@ async def promote_listing(session: AsyncSession, actor: User, listing_id: uuid.U
         listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
         if not listing or listing.status != "active":
             raise HTTPException(status_code=404, detail="Active listing not found")
+        if listing.product_kind == "account":
+            raise HTTPException(409, "VIP аккаунта оплачивается отдельно: 5 Stars на 24 часа")
         await charge_listing_promotion(session, actor, listing)
     return listing
 
@@ -417,6 +421,8 @@ async def update_listing(session: AsyncSession, actor: User, listing_id: uuid.UU
         listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
         if not listing or listing.status == "deleted":
             raise HTTPException(status_code=404, detail="Listing not found")
+        if listing.product_kind == "account":
+            raise HTTPException(409, "Редактируйте аккаунт через его защищённую форму")
         if actor.role != "admin" and (listing.seller_id != actor.id or listing.listing_type != "regular"):
             raise HTTPException(status_code=403, detail="You cannot edit this listing")
         if listing.status == "reserved":
@@ -453,6 +459,11 @@ async def delete_listing(session: AsyncSession, actor: User, listing_id: uuid.UU
             raise HTTPException(status_code=409, detail="Listing with an active deal cannot be deleted")
         listing.status = "deleted"
         listing.deleted_at = datetime.now(UTC)
+        if listing.product_kind == "account":
+            from .models import AccountSecret
+            secret = await session.get(AccountSecret, listing.id)
+            if secret:
+                secret.ciphertext = None
         await session.execute(delete(CartItem).where(CartItem.listing_id == listing.id))
         if actor.role == "admin":
             session.add(AdminAction(admin_id=actor.id, action="delete_listing", target_type="listing", target_id=listing.id))
@@ -466,6 +477,8 @@ async def set_listing_publication(session: AsyncSession, admin: User, listing_id
         listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update().execution_options(populate_existing=True))
         if not listing or listing.status in {"deleted", "sold", "reserved"}:
             raise HTTPException(status_code=409, detail="Listing publication state cannot be changed")
+        if published and listing.product_kind == "account" and listing.status != "active":
+            raise HTTPException(409, "Повторная публикация аккаунта требует новых данных доступа и проверки лимита")
         if published and listing.status != "active" and listing.listing_type == "regular":
             from .publication_quota import require_free_slot
             await require_free_slot(session, seller)
@@ -1240,7 +1253,8 @@ async def get_or_create_deal_conversation(
         deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
         if not deal or actor.id not in {deal.buyer_id, deal.seller_id}:
             raise HTTPException(status_code=404, detail="Deal not found")
-        if deal.status not in ACTIVE_DEAL_STATUSES:
+        from .account_sales import accessible
+        if deal.status not in ACTIVE_DEAL_STATUSES and not accessible(deal):
             raise HTTPException(status_code=409, detail="Чат доступен только для активной оплаченной сделки")
         listing = await session.get(Listing, deal.listing_id)
         if not listing:
@@ -1268,6 +1282,8 @@ async def save_deal_delivery_details(
         deal = await session.scalar(select(Deal).where(Deal.id == deal_id).with_for_update())
         if not deal or deal.buyer_id != buyer.id:
             raise HTTPException(status_code=404, detail="Сделка не найдена")
+        if deal.product_kind == "account":
+            raise HTTPException(409, "Аккаунты выдаются автоматически, игровой ID не требуется")
         if deal.status not in {"paid", "seller_contacted"} or deal.transfer_started_at:
             raise HTTPException(status_code=409, detail="Для этой сделки данные передачи уже нельзя изменить")
         listing = await session.get(Listing, deal.listing_id)
@@ -1592,6 +1608,8 @@ async def checkout_cart(session: AsyncSession, buyer: User) -> tuple[list[Deal],
         )
         by_id = {item.id: item for item in listings}
         ordered = [by_id[item_id] for item_id in listing_ids if item_id in by_id]
+        if any(item.product_kind == "account" for item in ordered):
+            raise HTTPException(409, "Аккаунты покупаются отдельно через защищённую карточку")
         if len(ordered) != len(listing_ids) or any(item.status != "active" for item in ordered):
             raise HTTPException(status_code=409, detail="One or more items have already been sold")
         if any(item.seller_id == buyer.id for item in ordered):
@@ -1738,6 +1756,11 @@ async def _purchase_locked_listing(
     if listing.status != "active" or listing.deleted_at is not None:
         raise HTTPException(status_code=409, detail="Объявление уже недоступно")
 
+    account_values = None
+    if listing.product_kind == "account":
+        from .account_sales import prepare_purchase
+        account_values = await prepare_purchase(session, listing)
+
     agreed_price, conversation = await _effective_listing_price(session, buyer, listing)
     wallet = await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id).with_for_update())
     available = wallet.available_balance if wallet else Decimal("0")
@@ -1819,12 +1842,15 @@ async def _purchase_locked_listing(
         )
     )
     seller = await session.get(User, listing.seller_id)
+    if account_values is not None:
+        from .account_sales import deliver_locked
+        await deliver_locked(session, deal, account_values)
     if seller:
         await create_notification(
             session,
             seller.id,
             "deal_created",
-            "Вашу машину купили",
+            "Ваш аккаунт купили" if account_values is not None else "Вашу машину купили",
             paid_order_body(deal, listing),
             await paid_order_payload(session, deal, listing),
         )
@@ -2013,6 +2039,8 @@ async def set_deal_status(session: AsyncSession, actor: User, deal_id: uuid.UUID
             raise HTTPException(status_code=404, detail="Deal not found")
         if actor.id not in {deal.buyer_id, deal.seller_id}:
             raise HTTPException(status_code=403, detail="Вы не являетесь участником сделки")
+        if deal.product_kind == "account" and next_status != "disputed":
+            raise HTTPException(409, "Аккаунт выдаётся автоматически. Ручная передача недоступна")
         if next_status in {"seller_contacted", "transfer_in_progress"} and actor.id != deal.seller_id:
             raise HTTPException(status_code=403, detail="Only the seller can change this status")
         if next_status in {"seller_contacted", "transfer_in_progress"} and (deal.cancelled_at or deal.completed_at or deal.buyer_confirmed_at):
@@ -2103,11 +2131,13 @@ async def create_deal_support_case(
         if not listing or not buyer or not seller:
             raise HTTPException(status_code=409, detail="Контекст сделки повреждён")
         clean_screenshot_url = screenshot_url.strip()
-        if not clean_screenshot_url:
+        if not clean_screenshot_url and deal.product_kind != "account":
             raise HTTPException(
                 status_code=422,
                 detail="Прикрепите хотя бы один скриншот, чтобы мы могли разобраться в ситуации.",
             )
+        from .support_media import validate_attachment
+        await validate_attachment(session, clean_screenshot_url, author.id)
         ticket = await session.scalar(
             select(SupportTicket).where(
                 SupportTicket.deal_id == deal.id,
@@ -2197,13 +2227,18 @@ async def lock_deal_and_listing(session: AsyncSession, deal_id: uuid.UUID):
     return deal, listing
 
 
-async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) -> Deal:
+async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID, *, account_confirmation: bool = False) -> Deal:
     async with session.begin():
         deal, listing = await lock_deal_and_listing(session, deal_id)
         if not deal:
             raise HTTPException(status_code=404, detail="Deal not found")
         if deal.buyer_id != buyer.id:
             raise HTTPException(status_code=403, detail="Только покупатель может подтвердить получение")
+        if deal.product_kind == "account":
+            from .models import AccountGrant
+            grant = await session.get(AccountGrant, deal.id)
+            if not account_confirmation or not grant or not grant.first_opened_at:
+                raise HTTPException(409, "Откройте данные и подтвердите проверку доступа в карточке аккаунта")
         # Returning the committed result is safe after a lost response/retry.
         # Admin-completed deals are not buyer-confirmation replays.
         if deal.status == "completed" and deal.buyer_confirmed_at and deal.completed_at:
@@ -2245,9 +2280,9 @@ async def complete_deal(session: AsyncSession, buyer: User, deal_id: uuid.UUID) 
         listing.sold_at = now
         listing.reserved_by_deal_id = None
         session.add(wallet_transaction(buyer_wallet, "purchase_completed", Decimal("0"), buyer_avail_before, buyer_frozen_before, "Покупка завершена", deal_id=deal.id))
-        session.add(wallet_transaction(seller_wallet, "sale_income", deal.seller_payout, seller_avail_before, seller_frozen_before, f"Продажа автомобиля: продавцу начислено {deal.seller_payout} AF Coins", deal_id=deal.id))
+        session.add(wallet_transaction(seller_wallet, "sale_income", deal.seller_payout, seller_avail_before, seller_frozen_before, f"Продажа {'аккаунта' if deal.product_kind == 'account' else 'автомобиля'}: продавцу начислено {deal.seller_payout} AF Coins", deal_id=deal.id))
         session.add(wallet_transaction(buyer_wallet, "platform_commission", -deal.platform_commission, buyer_wallet.available_balance, buyer_wallet.frozen_balance, f"Комиссия продажи: {deal.platform_commission} AF Coins", deal_id=deal.id))
-        await create_notification(session, deal.seller_id, "deal_completed", "Сделка завершена", f"Покупатель подтвердил получение автомобиля. Начислено {deal.seller_payout} AF Coins", {"deal_id": str(deal.id)})
+        await create_notification(session, deal.seller_id, "deal_completed", "Сделка завершена", f"Покупатель подтвердил получение {'аккаунта' if deal.product_kind == 'account' else 'автомобиля'}. Начислено {deal.seller_payout} AF Coins", {"deal_id": str(deal.id)})
     return deal
 
 

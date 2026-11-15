@@ -29,6 +29,9 @@ from .feedback import router as feedback_router, run_feedback_worker
 from .deal_reminders import router as deal_reminder_router
 from .owner_finance import router as owner_finance_router
 from .chat_media import router as chat_media_router
+from .account_sales import run_cleanup as run_account_cleanup
+from .account_pins import router as account_sales_router
+from .support_media import router as support_media_router
 
 
 settings = get_settings()
@@ -65,6 +68,7 @@ def set_frontend_cache_headers(request: Request, response) -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     recovery_tasks = [
+        asyncio.create_task(run_startup_job("account_secret_cleanup", run_account_cleanup)),
         asyncio.create_task(run_startup_job("telegram_webhook", configure_telegram_webhook)),
         asyncio.create_task(run_startup_job("training_recovery", recover_training_background_jobs)),
         asyncio.create_task(run_startup_job("deal_notification_recovery", recover_deal_purchase_notifications)),
@@ -152,6 +156,8 @@ app.include_router(feedback_router)
 app.include_router(deal_reminder_router)
 app.include_router(owner_finance_router)
 app.include_router(chat_media_router)
+app.include_router(account_sales_router)
+app.include_router(support_media_router)
 
 
 @app.get("/", include_in_schema=False)

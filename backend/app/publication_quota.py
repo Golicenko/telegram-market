@@ -13,6 +13,7 @@ async def active_listing_count(session, seller_id):
     ))
     return int(await session.scalar(select(func.count()).select_from(Listing).where(
         Listing.seller_id == seller_id, Listing.listing_type == "regular",
+        Listing.product_kind == "car",
         or_(and_(Listing.status.in_(("active", "reserved")), Listing.deleted_at.is_(None)), held_sale),
     )) or 0)
 
