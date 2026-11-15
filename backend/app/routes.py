@@ -1582,11 +1582,13 @@ async def list_listings(
     max_price: Decimal | None = Query(default=None, ge=0),
     min_power: int | None = Query(default=None, gt=0),
     min_speed: int | None = Query(default=None, gt=0),
-    product_kind: str | None = Query(default=None, pattern="^(car|account)$"),
-    game_version: str | None = Query(default=None, pattern="^car_parking_[12]$"),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    product_kind: str | None = None,
+    game_version: str | None = None,
 ):
+    if product_kind not in {None, "car", "account"} or game_version not in {None, "car_parking_1", "car_parking_2"}:
+        raise HTTPException(422, "Неизвестный фильтр товара или игры")
     if min_price is not None and max_price is not None and min_price > max_price:
         raise HTTPException(status_code=422, detail="Цена от не может быть больше цены до")
     await expire_promotions(session)
