@@ -114,6 +114,7 @@
             if (["failed", "cancelled", "expired"].includes(checked.status)) throw new Error(checked.error || "Обработка остановлена. Выберите видео или повторите загрузку.");
             if (Date.now() > deadline) throw new Error("Обработка продолжается. Повторите проверку позже.");
             videoStatus.textContent = checked.status === "processing" ? `Готовим совместимое видео 480p: ${checked.progress || 0}%` : "Видео в очереди обработки…";
+            if (checked.status === "processing") progress.value = checked.progress || 0; else progress.removeAttribute("value");
             await new Promise(resolve => setTimeout(resolve, 1500));
             checked = await api.request(`/account-videos/${upload.id}/status`, { retries: 0, signal: controller.signal });
           }

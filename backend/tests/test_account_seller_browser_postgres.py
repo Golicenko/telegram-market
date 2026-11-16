@@ -65,7 +65,9 @@ async def test_real_seller_form_upload_process_publish_and_buyer_chat(
             await signed_login(sessions, 5752),
         )
         async with sessions() as session, session.begin():
-            wallet = await session.scalar(select(Wallet).where(Wallet.user_id == buyer.id))
+            wallet = await session.scalar(
+                select(Wallet).where(Wallet.user_id == buyer.id)
+            )
             wallet.purchased_balance = 200
 
         app = client_app(sessions)
@@ -117,7 +119,10 @@ async def test_real_seller_form_upload_process_publish_and_buyer_chat(
                 items = list((await session.scalars(select(Listing))).all())
                 assert len(items) == 1
                 item = items[0]
-                assert item.product_kind == "account" and item.game_version == "car_parking_2"
+                assert (
+                    item.product_kind == "account"
+                    and item.game_version == "car_parking_2"
+                )
                 assert item.seller_id == seller.id and item.price_af_coins == 100
                 assert item.pinned is False
                 video = await session.get(AccountVideo, item.video_asset_id)
@@ -127,23 +132,53 @@ async def test_real_seller_form_upload_process_publish_and_buyer_chat(
                 assert video.processing_meta["progress"] == 100
                 assert 29 <= video.processing_meta["duration"] <= 31
                 assert volume.object_path(video.processed_key).is_file()
-                assert await session.scalar(select(func.count()).select_from(AccountVideo)) == 1
-                image = await session.scalar(select(ListingImage).where(ListingImage.listing_id == item.id))
+                assert (
+                    await session.scalar(select(func.count()).select_from(AccountVideo))
+                    == 1
+                )
+                image = await session.scalar(
+                    select(ListingImage).where(ListingImage.listing_id == item.id)
+                )
                 assert image.url.startswith("/api/media/")
                 secret = await session.get(AccountSecret, item.id)
-                assert secret.ciphertext and b"seller-ui@example.test" not in secret.ciphertext
+                assert (
+                    secret.ciphertext
+                    and b"seller-ui@example.test" not in secret.ciphertext
+                )
                 assert b"seller-ui-private-password" not in secret.ciphertext
-                deal = await session.scalar(select(Deal).where(Deal.listing_id == item.id))
-                assert deal.buyer_id == buyer.id and deal.status == "transfer_in_progress"
+                deal = await session.scalar(
+                    select(Deal).where(Deal.listing_id == item.id)
+                )
+                assert (
+                    deal.buyer_id == buyer.id and deal.status == "transfer_in_progress"
+                )
                 grant = await session.get(AccountGrant, deal.id)
-                assert grant.ciphertext and b"seller-ui-private-password" not in grant.ciphertext
-                assert await session.scalar(select(func.count()).select_from(ConversationMessage)) >= 1
-                assert await session.scalar(select(func.count()).select_from(AccountPin)) == 0
-                assert await session.scalar(
-                    select(func.count()).select_from(WalletTransaction).where(
-                        WalletTransaction.transaction_type.in_(("account_publication", "sale_income"))
+                assert (
+                    grant.ciphertext
+                    and b"seller-ui-private-password" not in grant.ciphertext
+                )
+                assert (
+                    await session.scalar(
+                        select(func.count()).select_from(ConversationMessage)
                     )
-                ) == 0, "First publication is free and buyer has not confirmed settlement"
+                    >= 1
+                )
+                assert (
+                    await session.scalar(select(func.count()).select_from(AccountPin))
+                    == 0
+                )
+                assert (
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(WalletTransaction)
+                        .where(
+                            WalletTransaction.transaction_type.in_(
+                                ("account_publication", "sale_income")
+                            )
+                        )
+                    )
+                    == 0
+                ), "First publication is free and buyer has not confirmed settlement"
         finally:
             if process and process.returncode is None:
                 process.kill()

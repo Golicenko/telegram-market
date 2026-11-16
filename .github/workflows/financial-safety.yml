@@ -58,7 +58,7 @@ jobs:
       - name: Install real media encoder for video playback verification
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Private volume video, signed buyer, real decoding, seeking and 2x/5x playback
-        run: python -m pytest -q -s tests/test_account_video_browser.py tests/test_account_video_postgres.py tests/test_account_video_processing.py tests/test_account_seller_browser_postgres.py
+        run: python -m pytest -q -s tests/test_account_video_browser.py tests/test_account_video_postgres.py tests/test_account_video_processing.py tests/test_account_video_cleanup_postgres.py tests/test_account_seller_browser_postgres.py
         working-directory: backend
         env:
           RUN_ACCOUNT_VIDEO_BROWSER: '1'

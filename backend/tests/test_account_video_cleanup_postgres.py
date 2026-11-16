@@ -378,3 +378,142 @@ async def test_cleanup_resumes_durable_delete_after_worker_restart(
         # Completed cleanup stays idempotent after yet another restart.
         await processing.cleanup_once(sessions)
         assert volume.object_path(playback).is_file() == linked
+
+
+@pytest.mark.asyncio
+async def test_worker_reclaims_stale_processing_claim_but_not_live_claim(
+    tmp_path, monkeypatch
+):
+    from test_account_video_processing import binaries, generate
+
+    async with isolated_pg() as (_, sessions):
+        ffmpeg, ffprobe = binaries()
+        settings = Settings(
+            bot_token="",
+            account_video_volume_dir=str(tmp_path),
+            account_video_storage="volume",
+            ffmpeg_binary=ffmpeg,
+            ffprobe_binary=ffprobe,
+        )
+        monkeypatch.setattr(processing, "get_settings", lambda: settings)
+        monkeypatch.setattr(volume, "get_settings", lambda: settings)
+        owner, stale_id, live_id = (uuid.uuid4() for _ in range(3))
+        now = datetime.now(UTC)
+        tiny = generate(tmp_path / "tiny.mp4", seconds=1, width=320, height=180)
+        old_claim, live_claim = uuid.uuid4().hex, uuid.uuid4().hex
+        async with sessions() as session, session.begin():
+            session.add(
+                User(id=owner, telegram_id=99005, first_name="Claim test", role="user")
+            )
+            await session.flush()
+            for video_id, stamp, claim in (
+                (stale_id, now - timedelta(minutes=21), old_claim),
+                (live_id, now, live_claim),
+            ):
+                key = f"volume:videos/{video_id.hex}/" + "a" * 64
+                source = volume.object_path(key)
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_bytes(tiny.read_bytes())
+                session.add(
+                    AccountVideo(
+                        id=video_id,
+                        owner_id=owner,
+                        object_key=key,
+                        content_type="video/mp4",
+                        size_bytes=source.stat().st_size,
+                        ready=False,
+                        processing_status="processing",
+                        processing_meta={
+                            "started_at": stamp.isoformat(),
+                            "claim": claim,
+                            "attempts": 1,
+                            "progress": 20,
+                        },
+                        created_at=now - timedelta(minutes=22),
+                    )
+                )
+        assert await processing.process_one(sessions) is True
+        async with sessions() as session:
+            recovered = await session.get(AccountVideo, stale_id)
+            live = await session.get(AccountVideo, live_id)
+            assert recovered.ready and recovered.processing_status == "ready"
+            assert recovered.processing_meta["claim"] != old_claim
+            assert recovered.processing_meta["attempts"] == 2
+            assert recovered.processing_meta["progress"] == 100
+            assert recovered.processed_key in recovered.processing_meta["output_keys"]
+            assert volume.object_path(recovered.processed_key).is_file()
+            assert live.processing_status == "processing" and not live.ready
+            assert live.processing_meta["claim"] == live_claim
+            assert live.processing_meta["attempts"] == 1
+            assert live.processed_key is None
+        # A non-stale in-flight worker remains the sole owner of its claim.
+        assert await processing.process_one(sessions) is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_real_optimize_cannot_publish_or_orphan_output(
+    tmp_path, monkeypatch
+):
+    from app.account_video import cancel_video
+    from test_account_video_processing import binaries, generate
+
+    async with isolated_pg() as (_, sessions):
+        ffmpeg, ffprobe = binaries()
+        settings = Settings(
+            bot_token="",
+            account_video_volume_dir=str(tmp_path),
+            account_video_storage="volume",
+            ffmpeg_binary=ffmpeg,
+            ffprobe_binary=ffprobe,
+        )
+        monkeypatch.setattr(processing, "get_settings", lambda: settings)
+        monkeypatch.setattr(volume, "get_settings", lambda: settings)
+        owner, video_id = uuid.uuid4(), uuid.uuid4()
+        key = f"volume:videos/{video_id.hex}/" + "a" * 64
+        source = volume.object_path(key)
+        source.parent.mkdir(parents=True, exist_ok=True)
+        tiny = generate(tmp_path / "tiny.mp4", seconds=1, width=320, height=180)
+        source.write_bytes(tiny.read_bytes())
+        async with sessions() as session, session.begin():
+            user = User(
+                id=owner, telegram_id=99006, first_name="Cancel race test", role="user"
+            )
+            session.add(user)
+            await session.flush()
+            session.add(
+                AccountVideo(
+                    id=video_id,
+                    owner_id=owner,
+                    object_key=key,
+                    content_type="video/mp4",
+                    size_bytes=source.stat().st_size,
+                    ready=False,
+                    processing_status="queued",
+                )
+            )
+        original_optimize = processing.optimize
+        cancelled = []
+
+        async def optimize_then_cancel(*args, **kwargs):
+            # Deterministic race window, using the real FFmpeg implementation
+            # and the real cancellation command rather than a fake encoder.
+            result = await original_optimize(*args, **kwargs)
+            async with sessions() as session:
+                response = await cancel_video(video_id, user=user, session=session)
+                assert response["status"] == "cancelled"
+            cancelled.append(video_id)
+            return result
+
+        monkeypatch.setattr(processing, "optimize", optimize_then_cancel)
+        assert await processing.process_one(sessions) is True
+        assert cancelled == [video_id]
+        async with sessions() as session:
+            row = await session.get(AccountVideo, video_id)
+            assert row.processing_status == "cancelled" and not row.ready
+            assert row.processed_key is None
+            assert not row.processing_meta.get("output_keys")
+        # The guard runs before copying/persisting output, so the private
+        # storage contains the source only, with no orphan MP4 or .part file.
+        files = [path for path in volume.volume_root().rglob("*") if path.is_file()]
+        assert files == [source]
+        assert await processing.process_one(sessions) is False
