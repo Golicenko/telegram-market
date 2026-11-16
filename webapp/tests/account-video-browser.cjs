@@ -61,6 +61,7 @@ const out=path.join(__dirname,'evidence/account-video');
   await page.locator('dialog').evaluate(el=>Promise.all(el.getAnimations().map(animation=>animation.finished)));
   await page.screenshot({path:path.join(out,`receipt-warning-${width}.png`),fullPage:true});
   await page.getByRole('button',{name:'Вернуться к проверке',exact:true}).click();
+  await page.locator('dialog').waitFor({state:'detached'}); // Native close is queued, not synchronous DOM removal.
   assert.equal(await page.evaluate(()=>videoRequests),1,'Cancel must not confirm or change money');
   assert.equal(await page.locator('dialog').count(),0);
   assert.deepEqual(errors,[]);await context.close();
