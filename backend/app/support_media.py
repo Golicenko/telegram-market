@@ -108,7 +108,13 @@ async def ticket_photo(
         except ValueError:
             raise HTTPException(404, "Снимок не найден") from None
         image = await session.get(UploadedImage, image_id)
-        if not image or (image.support_private and image.owner_id != ticket.author_id):
+        participants = {
+            ticket.author_id,
+            ticket.user_id,
+            ticket.buyer_id,
+            ticket.seller_id,
+        }
+        if not image or (image.support_private and image.owner_id not in participants):
             raise HTTPException(404, "Снимок не найден")
         content = image.data
     elif source.path.startswith("/uploads/"):

@@ -284,6 +284,7 @@ async def test_private_support_upload_and_authorized_full_photo():
             await signed_login(sessions, 5501),
             await signed_login(sessions, 5502),
         )
+        buyer = await signed_login(sessions, 5503)
         app = client_app(sessions)
         app.include_router(support_router)
         async with httpx.AsyncClient(
@@ -299,8 +300,10 @@ async def test_private_support_upload_and_authorized_full_photo():
             image_id = uuid.UUID(url.rsplit("/", 1)[1])
             async with sessions() as session, session.begin():
                 ticket = SupportTicket(
-                    author_id=author.id,
-                    user_id=author.id,
+                    author_id=buyer.id,
+                    user_id=buyer.id,
+                    buyer_id=buyer.id,
+                    seller_id=author.id,
                     topic="other",
                     status="open",
                     screenshot_url=url,
@@ -308,6 +311,7 @@ async def test_private_support_upload_and_authorized_full_photo():
                 session.add(ticket)
             path = f"/api/support/tickets/{ticket.id}/photo?preview=false"
             assert (await client.get(path, headers=headers(author))).status_code == 200
+            assert (await client.get(path, headers=headers(buyer))).status_code == 200
             assert (
                 await client.get(path, headers=headers(stranger))
             ).status_code == 404
