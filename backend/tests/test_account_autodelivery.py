@@ -58,6 +58,7 @@ def configuration(monkeypatch):
     settings = Settings(
         bot_token="",
         account_sales_enabled=True,
+        account_video_processing_enabled=False,  # Legacy/container fixture; real FFmpeg tests opt in.
         account_secret_keys={"v1": base64.b64encode(b"x" * 32).decode()},
         account_secret_active_key="v1",
     )

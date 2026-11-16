@@ -27,7 +27,7 @@ const out=path.join(__dirname,'evidence/account-autodelivery');fs.mkdirSync(out,
     await buyer.locator('#purchaseModalAction').click();
     await buyer.locator('[data-view=deal-chat]').waitFor({state:'visible'});
     await buyer.locator('#successOverlay').waitFor({state:'hidden'});
-    assert.equal(await buyer.evaluate(()=>testPurchaseOverlayOpened),false,'Purchase must not show a blocking success overlay');
+    assert.equal(await buyer.evaluate(()=>testPurchaseOverlayOpened),true,'Server-confirmed account purchase must reuse success animation');
     assert.equal(await buyer.getByRole('button',{name:'🔐 Открыть аккаунт',exact:true}).count(),1,'Only the header opens credentials');
     assert.equal(await buyer.locator('#dealMessages .account-delivery-card').count(),0);
     assert.doesNotMatch(await buyer.locator('#dealMessages').innerText(),/Ваш аккаунт готов|защищённой карточке/);

@@ -12,8 +12,9 @@ test("successful purchase opens the exact backend deal id", () => {
   assert.match(app, /finishListingPurchase\(deal\)/);
   assert.match(app, /openDealConversation\(deal\.id\)/);
   const completion=app.slice(app.indexOf('async function finishListingPurchase'),app.indexOf('function showPurchaseSuccess'));
-  assert.doesNotMatch(completion,/showPurchaseSuccess\(/);
-  assert.match(completion,/successOverlay\.hidden = true/);
+  assert.match(completion,/showPurchaseSuccess\("✓ Покупка успешна!"/);
+  assert.match(completion,/!state\.purchaseSuccessDeals\.has\(deal\.id\)/);
+  assert.doesNotMatch(completion,/await.*setTimeout|await.*showPurchaseSuccess/);
   assert.doesNotMatch(app.slice(app.indexOf("async function checkout"), app.indexOf("async function submitListing")), /deals\[0\]/);
 });
 

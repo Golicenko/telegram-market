@@ -11,6 +11,24 @@
 .account-form .account-autodelivery-info__help { flex:0 0 44px; width:44px; height:44px; min-height:44px; padding:0; display:grid; place-items:center; border:1px solid #60748b; border-radius:50%; background:#112238; color:#e8f0fa; font-size:20px; font-weight:750; }
 .account-autodelivery-help p { font-size:16px; line-height:1.55; }
 .account-form { display:grid; gap:14px; min-width:0; }
+.account-editor { width:100%; min-width:0; padding-bottom:24px; }
+.account-editor .account-form { max-width:none; }
+.account-editor .account-form label { font-size:14px; }
+.account-editor .account-form small,.account-editor .security-note { font-size:12px; line-height:1.45; }
+.account-editor progress { width:100%; height:8px; accent-color:#ffba31; }
+.account-quota { display:grid; gap:5px; padding:12px 0; border-block:1px solid #27394d; color:#bdcadd; font-size:14px; }
+.account-quota strong { color:#edf3fb; }
+.account-vip.switch-row { display:flex; align-items:center; gap:12px; }
+.account-vip span { flex:1; }.account-vip small { display:block; margin-top:6px; }
+.account-vip input { width:24px!important; height:24px!important; }
+.account-media.listing-page__media { display:block; overflow:visible; aspect-ratio:auto; background:#07111d; }
+.account-media > #listingPageImage,.account-gallery-photo { display:block; width:100%; max-height:390px; aspect-ratio:16/9; object-fit:contain; }
+.account-media > #listingPageImage[hidden] { display:none; }
+.account-media .account-video { padding:0; margin:0; }
+.account-gallery-nav { display:flex; justify-content:center; align-items:center; gap:14px; min-height:44px; padding:4px; }
+.account-gallery-nav button { min-height:44px; border:0; background:transparent; color:#bac9da; font-size:14px; }
+.account-gallery-nav button[aria-pressed=true] { color:#ffbd3d; }
+.account-gallery-nav span { font-size:12px; color:#a4b4c9; }
 .account-form label { display:grid; gap:8px; color:#dce5f2; }
 .account-form label:has(input[type=checkbox]) { grid-template-columns:24px 1fr; align-items:start; }
 .account-form label:has(input[type=checkbox]) input { grid-column:1; grid-row:1; width:22px; height:22px; }

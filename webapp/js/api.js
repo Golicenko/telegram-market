@@ -513,5 +513,23 @@
     }
   }
 
-  window.AutoFlowApi = Object.freeze({ request, resource, upload, previewDimensions, ApiError, baseUrl: API_BASE });
+  function uploadAccountVideo(target, file, options = {}) {
+    const internal = target.upload_transport === "miniapp";
+    if (internal && !/^\/account-videos\/[a-f0-9-]+\/content$/.test(target.upload_url)) return Promise.reject(new Error("Некорректный адрес загрузки"));
+    const url = internal ? API_BASE + target.upload_url : target.upload_url;
+    if (!internal && new URL(url).protocol !== "https:") return Promise.reject(new Error("Небезопасное хранилище видео"));
+    return new Promise((resolve, reject) => {
+      const xhr = new window.XMLHttpRequest(); xhr.open("PUT", url, true); xhr.timeout = 300000;
+      if (internal) Object.entries(authHeaders()).forEach(([key,value]) => xhr.setRequestHeader(key,value));
+      xhr.setRequestHeader("Content-Type", target.content_type);
+      const abort = () => xhr.abort(), cleanup = () => options.signal?.removeEventListener("abort", abort);
+      xhr.upload.onprogress = event => { if (event.lengthComputable) options.onProgress?.(Math.min(100, Math.round(100 * event.loaded / event.total))); };
+      xhr.onload = () => { cleanup(); if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error(`Видео не загружено (${xhr.status}). Повторите попытку.`)); };
+      xhr.onerror = xhr.ontimeout = () => { cleanup(); reject(new Error("Не удалось загрузить видео. Проверьте соединение.")); };
+      xhr.onabort = () => { cleanup(); reject(new Error("Загрузка отменена")); };
+      if (options.signal?.aborted) return reject(new Error("Загрузка отменена"));
+      options.signal?.addEventListener("abort", abort, { once: true }); xhr.send(file);
+    });
+  }
+  window.AutoFlowApi = Object.freeze({ request, resource, upload, uploadAccountVideo, previewDimensions, ApiError, baseUrl: API_BASE });
 })();

@@ -59,6 +59,44 @@ test('authenticated binary video PUT preserves the caller MIME and raw body', as
   assert.equal(captured.body,body);
 });
 
+for(const transport of ['miniapp','s3'])test(`video XHR ${transport} reports actual upload progress and scopes authorization`,async()=>{
+  let captured;const values=[];
+  class VideoXHR {
+    constructor(){captured=this;this.headers={};this.upload={};this.withCredentials=false;}
+    open(method,url){this.method=method;this.url=url;}
+    setRequestHeader(key,value){this.headers[key]=value;}
+    send(body){this.body=body;this.upload.onprogress({lengthComputable:true,loaded:5,total:20});this.upload.onprogress({lengthComputable:true,loaded:20,total:20});this.status=200;this.onload();}
+  }
+  const {api}=loadApi(async()=>{throw Error('fetch must not be used');},'signed-test-video',{XMLHttpRequest:VideoXHR});
+  const body=new Blob(['video'],{type:'video/mp4'}),target={upload_transport:transport,upload_url:transport==='miniapp'?'/account-videos/00000000-0000-4000-a000-000000000005/content':'https://storage.example/signed-put',content_type:'video/mp4'};
+  await api.uploadAccountVideo(target,body,{onProgress:value=>values.push(value)});
+  assert.deepEqual(values,[25,100]);assert.equal(captured.method,'PUT');assert.equal(captured.body,body);assert.equal(captured.headers['Content-Type'],'video/mp4');
+  assert.equal(captured.headers['X-Telegram-Init-Data'],transport==='miniapp'?'signed-test-video':undefined);
+  assert.equal(captured.withCredentials,false);assert.equal(captured.timeout,300000);
+  assert.equal(captured.url,transport==='miniapp'?'https://autoflow.example/api'+target.upload_url:target.upload_url);
+});
+
+test('video XHR cancellation rejects once and cannot continue to complete/publish',async()=>{
+  let xhr,sent=0;
+  class VideoXHR {
+    constructor(){xhr=this;this.headers={};this.upload={};}
+    open(){}setRequestHeader(){}send(){sent++;}abort(){this.onabort();}
+  }
+  const {api}=loadApi(async()=>{},'signed-test-video',{XMLHttpRequest:VideoXHR}),controller=new AbortController();
+  const target={upload_transport:'miniapp',upload_url:'/account-videos/00000000-0000-4000-a000-000000000005/content',content_type:'video/mp4'};
+  const request=api.uploadAccountVideo(target,new Blob(['video']),{signal:controller.signal});controller.abort();
+  await assert.rejects(request,/Загрузка отменена/);assert.equal(sent,1);assert(xhr);
+  await assert.rejects(api.uploadAccountVideo(target,new Blob(['video']),{signal:controller.signal}),/Загрузка отменена/);assert.equal(sent,1);
+});
+
+test('video upload never sends auth to an arbitrary URL through the internal transport',async()=>{
+  let constructed=0;class VideoXHR{constructor(){constructed++;}}
+  const {api}=loadApi(async()=>{},'signed-test-video',{XMLHttpRequest:VideoXHR});
+  await assert.rejects(api.uploadAccountVideo({upload_transport:'miniapp',upload_url:'https://attacker.example/content'},new Blob(['video'])),/Некорректный адрес/);
+  await assert.rejects(api.uploadAccountVideo({upload_transport:'s3',upload_url:'http://storage.example/content'},new Blob(['video'])),/Небезопасное хранилище/);
+  assert.equal(constructed,0);
+});
+
 test('private photo blobs retain signed auth, never parse as JSON, and keep receipt headers out of fetch options', async () => {
   const blob=new Blob(['private jpeg'],{type:'image/jpeg'});let captured,receipt;
   const {api}=loadApi(async (_url,options)=>{captured=options;return {

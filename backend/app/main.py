@@ -32,6 +32,7 @@ from .owner_finance import router as owner_finance_router
 from .chat_media import router as chat_media_router
 from .account_sales import run_cleanup as run_account_cleanup
 from .account_pins import router as account_sales_router
+from .account_video_processing import run_worker as run_account_video_worker
 from .support_media import router as support_media_router
 
 
@@ -70,6 +71,7 @@ def set_frontend_cache_headers(request: Request, response) -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     recovery_tasks = [
+        asyncio.create_task(run_startup_job("account_video_processing", run_account_video_worker)),
         asyncio.create_task(run_startup_job("account_secret_cleanup", run_account_cleanup)),
         asyncio.create_task(run_startup_job("telegram_webhook", configure_telegram_webhook)),
         asyncio.create_task(run_startup_job("training_recovery", recover_training_background_jobs)),

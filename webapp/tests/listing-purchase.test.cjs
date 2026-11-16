@@ -8,13 +8,32 @@ const source = fs.readFileSync(path.join(__dirname, "..", "js", "app.js"), "utf8
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const css = fs.readFileSync(path.join(__dirname, "..", "css", "style.css"), "utf8");
 
-for (const kind of ['car','account']) test(`${kind} purchase opens its chat without a success overlay`,async()=>{
+for (const kind of ['car','account']) test(`${kind} purchase reuses success animation once and opens the exact chat without a timer delay`,async()=>{
   const events=[];
   const context={state:{purchaseFlow:{}},elements:{purchaseModal:{open:true,close(){events.push('close');}},successOverlay:{hidden:false}},
-    refreshMarketplace:async()=>events.push('refresh'),openDealConversation:async id=>events.push(id),showPurchaseSuccess(){throw Error('Blocking overlay must not be shown');}};
+    refreshMarketplace:async()=>events.push('refresh'),openDealConversation:async id=>events.push(id),showPurchaseSuccess(title,text,duration){events.push({title,text,duration});}};
   vm.runInNewContext(source.slice(source.indexOf('async function finishListingPurchase'),source.indexOf('function showPurchaseSuccess')),context);
   await context.finishListingPurchase({id:'exact-paid-deal',product_kind:kind});
-  assert.deepEqual(events,['close','refresh','exact-paid-deal']);assert.equal(context.elements.successOverlay.hidden,true);assert.equal(context.state.purchaseFlow,null);
+  assert.deepEqual(events,['close','refresh',{title:'✓ Покупка успешна!',text:'Открываем чат сделки',duration:800},'exact-paid-deal']);assert.equal(context.state.purchaseFlow,null);
+  await context.finishListingPurchase({id:'exact-paid-deal',product_kind:kind});
+  assert.equal(events.filter(event=>typeof event==='object').length,1,'Repeated completion must not replay success');
+  await context.finishListingPurchase({id:'another-paid-deal',product_kind:kind});
+  await context.finishListingPurchase({id:'exact-paid-deal',product_kind:kind});
+  assert.equal(events.filter(event=>typeof event==='object').length,2,'Returning to an earlier completed request must stay deduplicated');
+});
+
+test('failed/cancelled/refunded purchase states never show success',async()=>{
+  let shown=0;const context={state:{},elements:{purchaseModal:{open:false}},refreshMarketplace:async()=>{},openDealConversation:async()=>{},showPurchaseSuccess(){shown++;}};
+  vm.runInNewContext(source.slice(source.indexOf('async function finishListingPurchase'),source.indexOf('function showPurchaseSuccess')),context);
+  for(const status of ['cancelled','failed','refunded'])await context.finishListingPurchase({id:status,status,product_kind:'account'});
+  assert.equal(shown,0);
+});
+
+test('market refresh failure cannot delay or cancel the committed purchase chat',async()=>{
+  let opened=false,reported=false;const context={state:{},elements:{purchaseModal:{open:false}},refreshMarketplace:async()=>{throw Error('offline');},openDealConversation:async()=>{opened=true;},showPurchaseSuccess(){},reportClientError(){reported=true;}};
+  vm.runInNewContext(source.slice(source.indexOf('async function finishListingPurchase'),source.indexOf('function showPurchaseSuccess')),context);
+  await context.finishListingPurchase({id:'paid-after-network-error',status:'paid'});await Promise.resolve();
+  assert.equal(opened,true);assert.equal(reported,true);
 });
 
 test("regular and unique cards expose the same server-backed purchase action", () => {

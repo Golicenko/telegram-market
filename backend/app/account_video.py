@@ -3,13 +3,14 @@
 import asyncio
 import logging
 import uuid
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 import boto3
 from botocore.config import Config
 from fastapi import Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, func
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 from starlette.responses import FileResponse
@@ -76,6 +77,10 @@ async def begin_video(
     session: AsyncSession = Depends(get_session),
 ):
     ready()
+    from .account_video_processing import tools_ready
+
+    if get_settings().account_video_processing_enabled and not tools_ready():
+        raise HTTPException(503, "Обработка видео не настроена. Обратитесь в поддержку")
     if payload.size_bytes > get_settings().account_video_max_bytes:
         raise HTTPException(413, "Видео превышает разрешённый размер")
     on_volume = use_volume()
@@ -88,6 +93,9 @@ async def begin_video(
         owner_id=user.id,
         content_type=payload.content_type,
         size_bytes=payload.size_bytes,
+        processing_status="uploading"
+        if get_settings().account_video_processing_enabled
+        else None,
         object_key=f"volume:pending/{uuid.uuid4().hex}"
         if on_volume
         else f"account-uploads/{user.id}/{uuid.uuid4()}",
@@ -108,6 +116,34 @@ async def begin_video(
         )
     )
     async with session.begin():
+        await session.scalar(
+            select(User.id).where(User.id == user.id).with_for_update()
+        )
+        pending = await session.scalar(
+            select(func.count())
+            .select_from(AccountVideo)
+            .where(
+                AccountVideo.owner_id == user.id,
+                AccountVideo.processing_status.in_(
+                    ("uploading", "queued", "processing")
+                ),
+                AccountVideo.created_at > datetime.now(UTC) - timedelta(hours=1),
+            )
+        )
+        daily = await session.scalar(
+            select(func.count())
+            .select_from(AccountVideo)
+            .where(
+                AccountVideo.owner_id == user.id,
+                AccountVideo.processing_status.is_not(None),
+                AccountVideo.created_at > datetime.now(UTC) - timedelta(days=1),
+            )
+        )
+        if pending >= 3 or daily >= get_settings().account_video_daily_limit:
+            raise HTTPException(
+                429,
+                "Слишком много видео в обработке. Дождитесь завершения или повторите позже.",
+            )
         session.add(video)
     return {
         "id": video.id,
@@ -169,15 +205,98 @@ async def complete_video(
         )
         if not video or video.owner_id != user.id:
             raise HTTPException(404, "Видео не найдено")
+        if video.processing_status in {"expired", "expiring"}:
+            raise HTTPException(
+                409, "Срок хранения загрузки истёк. Выберите видео заново"
+            )
         if not video.ready:
+            if video.processing_status in {
+                "queued",
+                "processing",
+                "failed",
+                "cancelled",
+            }:
+                return video_state(video)
             if video.object_key.startswith("volume:"):
                 raise HTTPException(409, "Сначала завершите загрузку видео")
             client, bucket = storage()
+            upload_key = video.object_key
             video.object_key = await run_in_threadpool(
                 verify_and_freeze, client, bucket, video
             )
-            video.ready = True
-    return {"id": video.id, "ready": video.ready}
+            video.ready = video.processing_status is None
+            if video.processing_status == "uploading":
+                video.processing_status = "queued"
+                video.processing_meta = {
+                    **(video.processing_meta or {}),
+                    "upload_key": upload_key,
+                }
+    return video_state(video)
+
+
+def video_state(video):
+    meta = video.processing_meta or {}
+    return {
+        "id": video.id,
+        "ready": video.ready,
+        "status": video.processing_status or ("ready" if video.ready else "uploading"),
+        "progress": meta.get("progress", 0),
+        "error": meta.get("error"),
+        "output_bytes": meta.get("output_bytes"),
+    }
+
+
+@router.get("/account-videos/{video_id}/status")
+async def video_status(
+    video_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    video = await session.get(AccountVideo, video_id)
+    if not video or video.owner_id != user.id:
+        raise HTTPException(404, "Видео не найдено")
+    return video_state(video)
+
+
+@router.post("/account-videos/{video_id}/cancel")
+async def cancel_video(
+    video_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    async with session.begin():
+        video = await session.scalar(
+            select(AccountVideo).where(AccountVideo.id == video_id).with_for_update()
+        )
+        if not video or video.owner_id != user.id:
+            raise HTTPException(404, "Видео не найдено")
+        if not video.ready:
+            video.processing_status = "cancelled"
+    return video_state(video)
+
+
+@router.post("/account-videos/{video_id}/retry")
+async def retry_video(
+    video_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    async with session.begin():
+        video = await session.scalar(
+            select(AccountVideo).where(AccountVideo.id == video_id).with_for_update()
+        )
+        if not video or video.owner_id != user.id:
+            raise HTTPException(404, "Видео не найдено")
+        if video.processing_status == "failed":
+            if (video.processing_meta or {}).get("attempts", 0) >= 3:
+                raise HTTPException(409, "Выберите другой файл видео")
+            video.processing_status = "queued"
+            video.processing_meta = {
+                **(video.processing_meta or {}),
+                "progress": 0,
+                "error": None,
+            }
+    return video_state(video)
 
 
 @router.put("/account-videos/{video_id}/content")
@@ -221,7 +340,12 @@ async def upload_video(
             )
             if not video or video.owner_id != owner:
                 raise HTTPException(404, "Видео не найдено")
-            if video.ready and video.object_key != key:
+            if video.processing_status in {"cancelled", "expired", "expiring"}:
+                raise HTTPException(409, "Загрузка отменена")
+            if (
+                video.object_key.startswith("volume:videos/")
+                and video.object_key != key
+            ):
                 raise HTTPException(
                     409, "Загруженное видео нельзя заменить. Создайте новое"
                 )
@@ -229,8 +353,15 @@ async def upload_video(
             target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             if not target.exists():
                 temporary.replace(target)
-            video.object_key, video.ready = key, True
-        return {"id": video_id, "ready": True}
+            video.object_key = key
+            if video.processing_status == "uploading":
+                video.processing_status = "queued"
+            video.ready = (
+                video.ready
+                or video.processing_status is None
+                or video.processing_status == "ready"
+            )
+        return video_state(video)
     except TimeoutError:
         raise HTTPException(
             408, "Загрузка заняла слишком много времени. Повторите попытку"
@@ -283,9 +414,10 @@ async def play_video(
     if not video:
         raise HTTPException(404, "Видео недоступно")
     await require_playback(session, video, user)
+    key = video.processed_key or video.object_key
     response.headers["Cache-Control"] = "private, no-store"
-    if video.object_key.startswith("volume:"):
-        if not object_path(video.object_key).is_file():
+    if key.startswith("volume:"):
+        if not object_path(key).is_file():
             raise HTTPException(404, "Файл видео недоступен. Обратитесь в поддержку")
         path = f"/api/account-videos/{video.id}/stream"
         # Native <video> cannot send initData headers. A short-lived capability
@@ -296,7 +428,7 @@ async def play_video(
     url = await run_in_threadpool(
         client.generate_presigned_url,
         "get_object",
-        Params={"Bucket": bucket, "Key": video.object_key},
+        Params={"Bucket": bucket, "Key": key},
         ExpiresIn=PLAYBACK_TTL,
     )
     response.headers["Cache-Control"] = "private, no-store"
@@ -321,12 +453,12 @@ async def stream_video(
     if not user:
         raise HTTPException(401, "Откройте видео из карточки аккаунта повторно")
     await require_playback(session, video, user)
-    path = object_path(video.object_key)
+    path = object_path(video.processed_key or video.object_key)
     if not path.is_file():
         raise HTTPException(404, "Файл видео недоступен")
     # Release DB connection before streaming the body. Starlette implements
     # byte ranges/206/416, so seeking does not download the entire video again.
-    mime = video.content_type
+    mime = "video/mp4" if video.processed_key else video.content_type
     await session.rollback()
     return FileResponse(
         path,

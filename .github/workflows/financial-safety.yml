@@ -58,10 +58,12 @@ jobs:
       - name: Install real media encoder for video playback verification
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Private volume video, signed buyer, real decoding, seeking and 2x/5x playback
-        run: python -m pytest -q -s tests/test_account_video_browser.py tests/test_account_video_postgres.py
+        run: python -m pytest -q -s tests/test_account_video_browser.py tests/test_account_video_postgres.py tests/test_account_video_processing.py tests/test_account_video_cleanup_postgres.py tests/test_account_seller_browser_postgres.py
         working-directory: backend
         env:
           RUN_ACCOUNT_VIDEO_BROWSER: '1'
+          RUN_ACCOUNT_VIDEO_BENCHMARK: '1'
+          RUN_ACCOUNT_BROWSER: '1'
       - name: VIP renewal and mobile keyboard regression (fixtures only)
         run: node webapp/tests/vip-renewal-keyboard-browser.cjs
       - name: Independent game filters and unique badges on mobile layouts (fixtures only)
@@ -101,3 +103,11 @@ jobs:
         run: node webapp/tests/manual-gift-withdrawal-browser.cjs
       - run: python backend/scripts/build_webapp.py
       - run: git diff --exit-code -- webapp/index.html webapp/build-info.json
+  production-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image without publishing or deploying
+        run: docker build --tag autoflow-account-video-ci .
+      - name: Verify real encoder and Python modules inside production image
+        run: docker run --rm --entrypoint sh autoflow-account-video-ci -c 'ffmpeg -version >/dev/null && ffprobe -version >/dev/null && python -m compileall -q /app/backend/app'
