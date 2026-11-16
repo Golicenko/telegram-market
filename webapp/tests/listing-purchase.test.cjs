@@ -2,10 +2,20 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 
 const source = fs.readFileSync(path.join(__dirname, "..", "js", "app.js"), "utf8");
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const css = fs.readFileSync(path.join(__dirname, "..", "css", "style.css"), "utf8");
+
+for (const kind of ['car','account']) test(`${kind} purchase opens its chat without a success overlay`,async()=>{
+  const events=[];
+  const context={state:{purchaseFlow:{}},elements:{purchaseModal:{open:true,close(){events.push('close');}},successOverlay:{hidden:false}},
+    refreshMarketplace:async()=>events.push('refresh'),openDealConversation:async id=>events.push(id),showPurchaseSuccess(){throw Error('Blocking overlay must not be shown');}};
+  vm.runInNewContext(source.slice(source.indexOf('async function finishListingPurchase'),source.indexOf('function showPurchaseSuccess')),context);
+  await context.finishListingPurchase({id:'exact-paid-deal',product_kind:kind});
+  assert.deepEqual(events,['close','refresh','exact-paid-deal']);assert.equal(context.elements.successOverlay.hidden,true);assert.equal(context.state.purchaseFlow,null);
+});
 
 test("regular and unique cards expose the same server-backed purchase action", () => {
   const cardRenderer = source.slice(source.indexOf("function createListingCard"), source.indexOf("function renderTraining"));

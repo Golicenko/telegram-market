@@ -1963,10 +1963,9 @@ function handleClick(event) {
     if (elements.purchaseModal?.open) elements.purchaseModal.close();
     state.purchaseFlow = null;
     await refreshMarketplace();
-    showPurchaseSuccess(
-      deal?.product_kind === "account" ? "⚡ Аккаунт куплен" : "✅ Машина куплена",
-      deal?.product_kind === "account" ? "Откройте защищённую карточку в чате и проверьте доступ." : "Укажите данные, чтобы продавец смог передать вам автомобиль.",
-    );
+    // A paid purchase goes straight to its chat, without an obscuring success
+    // overlay. Publication success notifications use their existing flow.
+    elements.successOverlay.hidden = true;
     if (!deal?.id) return;
     await openDealConversation(deal.id);
   }
@@ -2985,6 +2984,9 @@ async function hideCurrentConversation() {
       older.disabled = Boolean(state.chatLoadingOlder); older.onclick = loadOlderChatMessages; renderedMessages.push(older);
     }
     state.messages.forEach((message) => {
+      // The protected account action lives once in the chat header. Preserve
+      // its audit message in history/DB, but do not render a duplicate card.
+      if (message.account_card_id && details.deal?.product_kind === "account") return;
       const day = new Date(message.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
       if (day !== previousDay) { const divider = existingDays.get(day) || document.createElement("div"); divider.className = "message-day"; divider.dataset.messageDay=day;divider.textContent = day; renderedMessages.push(divider); previousDay = day; }
       const isOffer = message.message_type === "offer";
@@ -2993,8 +2995,7 @@ async function hideCurrentConversation() {
       if (existing?.dataset.signature === signature) { renderedMessages.push(existing); return; }
       const bubble = document.createElement("div"); bubble.className = `message${message.sender_id === state.me.user.id ? " is-own" : ""}${message.message_type === "system" ? " is-system" : ""}${isOffer ? " is-offer" : ""}`;
       bubble.dataset.signature=signature;
-      if (message.account_card_id && state.currentConversation?.deal?.product_kind === "account") bubble.append(accountSales.card(state.currentConversation.deal, state.currentConversation.deal.buyer_id === state.me.user.id));
-      else if (isOffer) renderOfferMessage(bubble, message);
+      if (isOffer) renderOfferMessage(bubble, message);
       else { if(message.message_type==="photo")bubble.append(window.AutoFlowChatMedia.image(message));bubble.append(document.createTextNode(message.body)); }
       bubble.dataset.messageId = message.id;
       if (!isOffer && message.message_type !== "system" && message.body) installMessageCopy(bubble, message.body);
@@ -3053,6 +3054,7 @@ async function hideCurrentConversation() {
     const panel = elements.dealDeliveryPanel;
     const deal = state.currentConversation?.deal;
     const isBuyer = deal?.buyer_id === state.me.user.id;
+    panel.classList.toggle("account-chat-access", deal?.product_kind === "account");
     if (deal?.product_kind === "account") {
       window.AutoFlowSellerDeal.stop(); document.body.classList.remove("deal-details-required"); panel.classList.remove("seller-deal", "seller-deal--intro");
       accountSales.panel(panel, deal); return;

@@ -2,11 +2,12 @@
   "use strict";
   const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
   function create({ api, notify, refresh, openCar, support, userId, reloadDeal, topup }) {
-    let current = null, explained = false, savedOverflow = "";
+    let current = null, savedOverflow = "";
     const dialogs = new Set();
     function modal(title) {
       const dialog = node("dialog", null, "modal account-modal");
       const heading = node("h2", title), close = button("×", () => dialog.close(), "ghost-button");
+      dialog.setAttribute("aria-label", title);
       close.setAttribute("aria-label", "Закрыть"); close.classList.add("account-modal__close");
       dialog.append(close, heading); document.body.append(dialog);
       if (!dialogs.size) savedOverflow = document.body.style.overflow;
@@ -36,8 +37,19 @@
     }
     async function choose() {
       const dialog = modal("Что хотите продать?");
-      dialog.append(button("🚗 Автомобиль — продать машину в Car Parking", () => { dialog.close(); openCar(); }));
-      dialog.append(button("👤 Аккаунт — продать игровой аккаунт", () => { dialog.close(); void editor(); }, "publish-button"));
+      dialog.append(button("🚗 Автомобиль — продать машину в Car Parking", () => { dialog.close(); openCar(); }, "publish-button account-sale-choice"));
+      dialog.append(button("👤 Аккаунт — продать игровой аккаунт", () => { dialog.close(); void editor(); }, "publish-button account-sale-choice"));
+    }
+    function explainAutodelivery(rules) {
+      const dialog = modal("Как работает автовыдача?"); dialog.classList.add("account-autodelivery-help");
+      dialog.append(node("p", "Вы указываете email или логин и пароль игрового аккаунта. Маркет хранит их в зашифрованном виде — в объявлении они не видны."));
+      dialog.append(node("p", "После оплаты покупатель открывает данные в чате сделки. Отправлять их вручную не нужно."));
+      const days = Number(rules.secret_retention_days);
+      const retention = Number.isSafeInteger(days) && days > 0
+        ? `Через ${days} сут. после завершения сделки маркет автоматически удаляет сохранённые данные.`
+        : "После завершения сделки маркет автоматически удаляет сохранённые данные по установленному сроку хранения.";
+      dialog.append(node("p", `${retention} Пока открыт спор, данные сохраняются для его рассмотрения.`));
+      dialog.append(button("Понятно", () => dialog.close(), "publish-button"));
     }
     function field(form, title, type, name, options = {}) {
       const label = node("label", title), input = node(type === "textarea" ? "textarea" : "input");
@@ -49,10 +61,6 @@
       let rules;
       try { rules = await api.request("/account-publication-rules", { retries: 0 }); if (!rules.enabled) throw new Error("Продажа аккаунтов ещё не включена. Публикация автомобилей доступна как прежде."); }
       catch (error) { notify(error.message); return; }
-      if (!explained) {
-        explained = await prompt("Как работает автовыдача?", "Вы заранее указываете данные игрового аккаунта. После оплаты покупатель откроет их в защищённой карточке чата. Средства остаются под защитой до подтверждения или решения спора. Передавайте только свой аккаунт, без пароля от личной почты.", "Понятно, продолжить");
-        if (!explained) return;
-      }
       const dialog = modal(listing ? "Изменить аккаунт" : "Продать аккаунт"), form = node("form", null, "account-form");
       dialog.append(form);
       const gameLabel = node("label", "Игра"), game = node("select"); game.name = "game_version"; game.required = true;
@@ -69,13 +77,15 @@
       form.append(node("p", "⚠️ Фото, видео и описание должны соответствовать аккаунту. Обман может привести к разбирательству, возврату по результатам проверки и блокировке.", "security-note"));
       const title = field(form, "Название объявления", "text", "title", { maxLength: 160, value: listing?.brand || "", placeholder: "Аккаунт CP2 — редкие автомобили" });
       const description = field(form, "Описание аккаунта", "textarea", "description", { maxLength: 5000, minLength: 5, value: listing?.description || "", placeholder: "Содержимое и особенности, без контактов и сторонней оплаты" });
-      form.append(node("strong", "⚡ Только автоматическая выдача"));
+      const deliveryInfo = node("div", null, "account-autodelivery-info");
+      const deliveryHelp = button("?", () => explainAutodelivery(rules), "account-autodelivery-info__help");
+      deliveryHelp.setAttribute("aria-label", "Как работает автовыдача?"); deliveryHelp.setAttribute("aria-haspopup", "dialog");
+      deliveryInfo.append(node("strong", "⚡ Только автоматическая выдача"), deliveryHelp); form.append(deliveryInfo);
       if (listing) form.append(node("small", "Для изменения заново укажите актуальные данные входа. Сохранённый пароль не загружается в форму."));
       const login = field(form, "Email или логин игрового аккаунта", "text", "login", { minLength: 3, maxLength: 320, autocomplete: "off", spellcheck: false });
       const password = field(form, "Пароль игрового аккаунта (не личной почты)", "password", "password", { maxLength: 256, autocomplete: "new-password" });
       form.append(button("👁 Показать пароль", event => { password.type = password.type === "password" ? "text" : "password"; event.currentTarget.textContent = password.type === "password" ? "👁 Показать пароль" : "👁 Скрыть пароль"; }));
       field(form, "Я владею аккаунтом и могу передать доступ", "checkbox", "owns_account");
-      field(form, "Доступ к моему личному почтовому ящику не требуется", "checkbox", "no_personal_mail_required");
       const price = field(form, "Цена аккаунта, AF Coins", "number", "price_af_coins", { min: "1", step: "0.01", value: listing?.price_af_coins || "", inputMode: "decimal" });
       form.append(node("p", `Аккаунты: ${rules.free_limit} бесплатных места; дополнительная публикация — ${rules.price_af} AF. VIP: ${rules.vip_stars} ⭐ на ${rules.vip_hours} ч. после публикации.`, "security-note"));
       const status = node("p"); status.setAttribute("role", "status"); const submit = node("button", listing ? "Сохранить аккаунт" : "Опубликовать аккаунт", "publish-button"); submit.type = "submit"; form.append(status, submit);
@@ -113,7 +123,7 @@
             finally { clearTimeout(timeout); cancelUpload.remove(); }
             const checked = await api.request(`/account-videos/${upload.id}/complete`, { method: "POST", retries: 0 }); videoId = checked.id;
           }
-          const payload = { client_request_id: requestId, game_version: game.value, title: title.value, description: description.value, image_url: uploadedCover, video_asset_id: videoId, login: login.value, password: password.value, price_af_coins: price.value, owns_account: form.elements.owns_account.checked, no_personal_mail_required: form.elements.no_personal_mail_required.checked };
+          const payload = { client_request_id: requestId, game_version: game.value, title: title.value, description: description.value, image_url: uploadedCover, video_asset_id: videoId, login: login.value, password: password.value, price_af_coins: price.value, owns_account: form.elements.owns_account.checked };
           const path = listing ? `/account-products/${listing.id}` : "/account-products", method = listing ? "PATCH" : "POST";
           status.textContent = "Сохранение…";
           try { await api.request(path, { method, body: JSON.stringify(payload), retries: 0 }); }
@@ -147,18 +157,12 @@
         dialog.append(node("p", "Проверьте соответствие аккаунта описанию и видео. После входа обязательно смените привязанную электронную почту, пароль и данные восстановления: продавец может попытаться вернуть доступ. Сделайте это до подтверждения получения. Будьте внимательны.", "security-note"), button("Закрыть", () => dialog.close()));
       } catch (error) { if (dialog.open) status.textContent = error.message; }
     }
-    function card(deal, buyer) {
-      const box = node("div", null, "account-delivery-card");
-      box.append(node("strong", buyer ? "⚡ Ваш аккаунт готов!" : "⚡ Автовыдача выполнена"), node("p", buyer ? "Данные для входа доступны в защищённой карточке. Открытие не завершает сделку." : "Данные предоставлены покупателю. Ожидаем подтверждения получения."));
-      if (buyer) box.append(button("🔐 Открыть аккаунт", () => void openCredentials(deal), "publish-button"));
-      return box;
-    }
     function panel(host, deal) {
-      const buyer = deal.buyer_id === userId(); host.replaceChildren(); host.hidden = false;
-      if (["transfer_in_progress", "disputed"].includes(deal.status)) host.append(card(deal, buyer));
-      if (deal.status === "completed") { host.append(node("strong", "✅ Сделка завершена")); if (buyer) host.append(button("Открыть данные (в пределах срока хранения)", () => void openCredentials(deal))); }
-      else if (deal.status === "cancelled") host.append(node("strong", "Сделка отменена. Доступ закрыт."));
-      else host.append(node("p", `🔒 ${deal.price_af_coins} AF под защитой${deal.status === "disputed" ? " · спор на рассмотрении" : " до подтверждения получения"}`));
+      const buyer = deal.buyer_id === userId(); host.replaceChildren(); host.hidden = false; host.classList.add("account-chat-access");
+      if (deal.status === "completed") host.append(node("strong", "✅ Сделка завершена"));
+      if (deal.status === "cancelled") { host.append(node("strong", "Сделка отменена. Доступ закрыт.")); return; }
+      if (buyer && ["transfer_in_progress", "disputed", "completed"].includes(deal.status)) host.append(button("🔐 Открыть аккаунт", () => void openCredentials(deal), "publish-button"));
+      else if (deal.status === "transfer_in_progress") host.append(node("strong", "Ожидаем подтверждения покупателя"));
     }
     function controls(host, deal) {
       host.replaceChildren();
@@ -249,7 +253,7 @@
         root.Telegram.WebApp.openInvoice(result.invoice_url, async () => { await refresh(); notify("Статус закрепления обновлён с сервера. При задержке платежа обновите страницу объявления позже."); });
       } catch (error) { notify(error.message); }
     }
-    return { choose, editor, dismiss, card, panel, controls, video, pauseVideos, pin };
+    return { choose, editor, dismiss, panel, controls, video, pauseVideos, pin };
   }
   root.AutoFlowAccountSales = { create };
 })(window);

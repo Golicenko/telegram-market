@@ -13,10 +13,10 @@ const server=http.createServer((req,res)=>{if(req.url==='/isolated-account-fixtu
   await page.addScriptTag({url:base+'/js/account-sales.js'});
   await page.route('**/fixture-video',r=>r.fulfill({status:200,body:''}));
   await page.evaluate(width=>{
-   const fixture=window.testAccount={car:0,refresh:0,reveals:0,submissions:[],copies:0,support:0,volumeUploads:0};
+   const fixture=window.testAccount={car:0,refresh:0,reveals:0,submissions:[],copies:0,support:0,volumeUploads:0,retentionDays:width===430?3:1};
    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{async writeText(){fixture.copies++;}}});
    const api={async request(path,options={}){
-    if(path==='/account-publication-rules')return {enabled:true,free_limit:3,price_af:15,vip_stars:5,vip_hours:24,video_max_bytes:104857600,secret_retention_days:1};
+    if(path==='/account-publication-rules')return {enabled:true,free_limit:3,price_af:15,vip_stars:5,vip_hours:24,video_max_bytes:104857600,secret_retention_days:fixture.retentionDays};
     if(path==='/account-videos')return {id:'00000000-0000-4000-a000-000000000005',upload_url:width===390?'/account-videos/00000000-0000-4000-a000-000000000005/content':location.origin+'/fixture-video',upload_transport:width===390?'miniapp':'s3',content_type:'video/mp4'};
     if(path.endsWith('/content')){if(options.headers['Content-Type']!=='video/mp4'||!(options.body instanceof File)||options.method!=='PUT')throw Error('Invalid binary video request');fixture.volumeUploads++;return {ready:true};}
     if(path.endsWith('/complete'))return {id:'video-fixture',ready:true};
@@ -32,11 +32,19 @@ const server=http.createServer((req,res)=>{if(req.url==='/isolated-account-fixtu
    document.querySelector('#launch').onclick=()=>window.accountModule.choose();
   },width);
   await page.locator('#launch').click();
+  const choices=page.locator('dialog.account-modal .account-sale-choice');assert.equal(await choices.count(),2);
+  for(const choice of await choices.all()){
+    const appearance=await choice.evaluate(el=>{const style=getComputedStyle(el);return {background:style.backgroundImage,color:style.color,weight:Number(style.fontWeight),font:parseFloat(style.fontSize),height:el.getBoundingClientRect().height};});
+    assert.match(appearance.background,/255, 229, 139/);assert.equal(appearance.color,'rgb(32, 22, 6)');assert(appearance.weight<=500&&appearance.font>=14&&appearance.height>=44&&appearance.height<70);
+  }
+  await page.locator('dialog.account-modal').evaluate(el=>Promise.all(el.getAnimations().map(animation=>animation.finished)));
+  await page.screenshot({path:path.join(out,'sale-choice-'+width+'.png')});
   await page.getByRole('button',{name:/🚗 Автомобиль/}).click();
   assert.equal(await page.evaluate(()=>window.testAccount.car),1);
   await page.locator('#launch').click();await page.getByRole('button',{name:/👤 Аккаунт/}).click();
-  await page.waitForTimeout(500);await page.getByRole('button',{name:'Понятно, продолжить',exact:true}).click();
   const form=page.locator('form.account-form');await form.waitFor();
+  assert.equal(await page.getByRole('heading',{name:'Как работает автовыдача?',exact:true}).count(),0,'No forced intro');
+  assert.equal(await form.locator('[name=no_personal_mail_required]').count(),0);
   await form.locator('[name=game_version]').selectOption('car_parking_2');
   const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jDrsAAAAASUVORK5CYII=','base64');
   await form.locator('[name=cover]').setInputFiles({name:'cover.png',mimeType:'image/png',buffer:png});
@@ -44,7 +52,19 @@ const server=http.createServer((req,res)=>{if(req.url==='/isolated-account-fixtu
   await form.locator('[name=title]').fill('Аккаунт CP2 — тестовая коллекция');
   await form.locator('[name=description]').fill('Реальные значения тестовой коллекции. Изолированная проверка интерфейса.');
   await form.locator('[name=price_af_coins]').fill('100');
-  await form.locator('[name=owns_account]').check();await form.locator('[name=no_personal_mail_required]').check();
+  await form.locator('[name=owns_account]').check();
+  await form.getByRole('button',{name:'Как работает автовыдача?',exact:true}).click();
+  const help=page.getByRole('dialog',{name:'Как работает автовыдача?',exact:true});await help.waitFor();
+  assert.match(await help.innerText(),/хранит их в зашифрованном виде/);assert.match(await help.innerText(),/После оплаты покупатель открывает данные в чате сделки/);
+  assert.match(await help.innerText(),new RegExp('Через '+(width===430?3:1)+' сут\\. после завершения сделки'));assert.match(await help.innerText(),/Пока открыт спор/);
+  await help.evaluate(el=>Promise.all(el.getAnimations().map(animation=>animation.finished)));
+  await page.screenshot({path:path.join(out,'autodelivery-help-'+width+'.png')});
+  await page.evaluate(()=>accountModule.dismiss());await help.waitFor({state:'detached'});
+  assert.equal(await form.locator('[name=title]').inputValue(),'Аккаунт CP2 — тестовая коллекция');assert.equal(await form.locator('[name=owns_account]').isChecked(),true);
+  assert.equal(await page.evaluate(()=>testAccount.submissions.length),0,'Help must never submit the form');
+  await form.getByRole('button',{name:'Как работает автовыдача?',exact:true}).click();await help.waitFor();
+  await help.getByRole('button',{name:'Понятно',exact:true}).click();await help.waitFor({state:'detached'});
+  assert.equal(await page.evaluate(()=>document.body.style.overflow),'hidden','Closing help must keep parent scroll lock');
   const geometry=await page.locator('dialog[open]').boundingBox();assert(geometry.x>=0&&geometry.x+geometry.width<=width+1);
   assert.equal(await form.locator('[name=password]').evaluate(el=>getComputedStyle(el).fontSize),'16px');
   // Screenshot is taken before filling either credential.
@@ -55,9 +75,10 @@ const server=http.createServer((req,res)=>{if(req.url==='/isolated-account-fixtu
   await page.waitForTimeout(500);await page.getByRole('button',{name:'Опубликовать за 15 AF',exact:true}).click();
   await page.locator('dialog[open]').waitFor({state:'detached'});
   assert.equal(await page.evaluate(()=>window.testAccount.refresh),1);
-  const state=await page.evaluate(()=>({count:window.testAccount.submissions.length,paid:window.testAccount.submissions[1].publication_fee_confirmed,game:window.testAccount.submissions[1].game_version}));
-  assert.deepEqual(state,{count:2,paid:true,game:'car_parking_2'});
-  await page.evaluate(()=>document.querySelector('#card').append(window.accountModule.card({id:'deal-fixture',buyer_id:'buyer'},true)));
+  const state=await page.evaluate(()=>({count:window.testAccount.submissions.length,paid:window.testAccount.submissions[1].publication_fee_confirmed,game:window.testAccount.submissions[1].game_version,mailDeclarationSent:window.testAccount.submissions.some(data=>Object.hasOwn(data,'no_personal_mail_required'))}));
+  assert.deepEqual(state,{count:2,paid:true,game:'car_parking_2',mailDeclarationSent:false});
+  await page.evaluate(()=>window.accountModule.panel(document.querySelector('#card'),{id:'deal-fixture',buyer_id:'buyer',status:'transfer_in_progress'}));
+  assert.equal(await page.locator('#card').getByRole('button',{name:'🔐 Открыть аккаунт',exact:true}).count(),1);
   assert.equal(await page.evaluate(()=>window.testAccount.reveals),0);
   await page.getByRole('button',{name:'🔐 Открыть аккаунт',exact:true}).click();await page.locator('[name=password]').waitFor();
   assert.equal(await page.locator('[name=password]').getAttribute('type'),'password');
@@ -70,6 +91,6 @@ const server=http.createServer((req,res)=>{if(req.url==='/isolated-account-fixtu
   await page.evaluate(()=>window.accountModule.controls(document.querySelector('#card'),{id:'closed-account',buyer_id:'buyer',status:'completed'}));
   await page.getByRole('button',{name:'Обратиться в поддержку',exact:true}).click();assert.equal(await page.evaluate(()=>window.testAccount.support),1);
   assert.equal(await page.evaluate(()=>testAccount.volumeUploads),width===390?1:0);
-  assert.deepEqual(errors,[]);await context.close();console.log('PASS account form, video PUT, 15 AF consent, protected popup and cleanup '+width+'px');
+  assert.deepEqual(errors,[]);await context.close();console.log('PASS yellow choices, optional delivery help, form without mail checkbox, video PUT, 15 AF consent and protected header '+width+'px');
  }}finally{await browser.close();server.close();}
 })().catch(e=>{console.error(e);server.close();process.exitCode=1;});
