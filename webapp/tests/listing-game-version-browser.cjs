@@ -88,6 +88,7 @@ const server = http.createServer((req, res) => {
     for (const game of ['car_parking_1', 'car_parking_2']) {
       await page.locator('.bottom-nav [data-nav-target="market"]').click();
       await page.locator('.catalog-add[data-open-add]').click();
+      await page.getByRole('button',{name:/🚗 Автомобиль —/}).click();
       const form = page.locator('#carForm');
       assert.equal(await form.locator('[name="game_version"]:checked').count(), 0);
       assert((await form.locator('.listing-game-choice').boundingBox()).y < (await form.locator('.photo-upload').boundingBox()).y);

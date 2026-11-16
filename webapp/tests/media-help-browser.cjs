@@ -69,6 +69,7 @@ const server = http.createServer((req, res) => {
       assert.equal(new URL(await media.locator('img').getAttribute('src')).pathname,'/api/media/photo','real photo URL is not replaced by frame');
       await page.screenshot({path:path.join(__dirname,`media-help-market-${width}.png`),animations:'disabled'});
       await page.locator('.catalog-add[data-open-add]').click();
+      await page.getByRole('button',{name:/🚗 Автомобиль —/}).click();
       const form=page.locator('#carForm');
       await form.locator('[name=game_version][value=car_parking_2]').check({force:true});
       await form.locator('[name=brand]').fill('Test');await form.locator('[name=power_hp]').fill('300');await form.locator('[name=max_speed_kph]').fill('250');

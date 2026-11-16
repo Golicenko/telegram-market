@@ -42,6 +42,7 @@ if (!base || new URL(base).hostname!=='127.0.0.1') throw new Error('Isolated loc
     const saved=[];
     for(const [n,game] of ['car_parking_1','car_parking_2'].entries()) {
       await page.locator('.catalog-add[data-open-add]').click();
+      await page.getByRole('button',{name:/🚗 Автомобиль —/}).click();
       const form=page.locator('#carForm');
       await form.locator(`[name=game_version][value=${game}]`).check({force:true});
       await form.locator('[name=brand]').fill(`Publication ${n}`);
