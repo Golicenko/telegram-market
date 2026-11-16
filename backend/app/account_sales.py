@@ -192,7 +192,11 @@ async def publish(session, user, payload):
             raise HTTPException(
                 422, "Загрузите главную фотографию через форму аккаунта"
             )
-        video = await session.get(AccountVideo, payload.video_asset_id)
+        video = await session.scalar(
+            select(AccountVideo)
+            .where(AccountVideo.id == payload.video_asset_id)
+            .with_for_update()
+        )
         if not video or video.owner_id != user.id or not video.ready:
             raise HTTPException(422, "Загрузите и дождитесь проверки видео аккаунта")
         paid = await account_count(session, user.id) >= 3
@@ -291,7 +295,11 @@ async def edit(
                 409, "Нельзя изменять проданный или зарезервированный аккаунт"
             )
         await validate_listing_media(session, [payload.image_url], user.id)
-        video = await session.get(AccountVideo, payload.video_asset_id)
+        video = await session.scalar(
+            select(AccountVideo)
+            .where(AccountVideo.id == payload.video_asset_id)
+            .with_for_update()
+        )
         if not video or video.owner_id != user.id or not video.ready:
             raise HTTPException(422, "Видео не готово")
         item.brand, item.description, item.game_version = (

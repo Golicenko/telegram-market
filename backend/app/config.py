@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     # Existing Railway mount, NOT the PostgreSQL volume. No ephemeral fallback.
     railway_volume_mount_path: str = ""
     account_video_volume_dir: str = ""
+    account_video_processing_enabled: bool = True
+    account_video_daily_limit: int = Field(default=20, ge=3, le=200)
+    account_video_max_duration_seconds: int = Field(default=240, ge=180, le=600)
+    ffmpeg_binary: str = "ffmpeg"
+    ffprobe_binary: str = "ffprobe"
     account_s3_endpoint: str = ""
     account_s3_region: str = "auto"
     account_s3_bucket: str = ""

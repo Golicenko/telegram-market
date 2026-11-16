@@ -209,6 +209,8 @@
   let bootstrapPromise = null;
   const accountSales = window.AutoFlowAccountSales.create({ api, notify, refresh: refreshMarketplace,
     openCar: () => openListingForm("regular"), support: openDealSupport, userId: () => state.me?.user.id,
+    showEditor: (page, listing) => { document.getElementById("accountEditorTitle").textContent = listing ? "Изменить аккаунт" : "Продать аккаунт"; document.getElementById("accountEditorBody").replaceChildren(page); if (state.currentView !== "account-editor") openSecondary("account-editor"); },
+    closeEditor: async listing => { if (state.currentView !== "account-editor") return; if (listing?.id) await openListingDetails(listing.id); else await navigate("market"); },
     reloadDeal: async () => { await refreshOpenConversation(); await refreshMarketplace(); }, topup: () => openSecondary("topup") });
   let marketProductKind = "";
   const productFilter = document.createElement("div"); productFilter.className = "market-product-filter";
@@ -968,13 +970,13 @@ function handleClick(event) {
       view.hidden = !active;
       view.classList.toggle("is-active", active);
     });
-    const navView = ["add", "deal-chat", "listing-detail"].includes(viewName) ? "market" : ["training-detail", "training-editor", "training-purchase"].includes(viewName) ? "training" : ["wallet", "topup", "withdraw", "admin", "support", "activity", "help"].includes(viewName) ? "profile" : viewName;
+    const navView = ["add", "account-editor", "deal-chat", "listing-detail"].includes(viewName) ? "market" : ["training-detail", "training-editor", "training-purchase"].includes(viewName) ? "training" : ["wallet", "topup", "withdraw", "admin", "support", "activity", "help"].includes(viewName) ? "profile" : viewName;
     elements.navButtons.forEach((button) => {
       const active = button.dataset.navTarget === navView;
       button.classList.toggle("is-active", active);
       active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
     });
-    elements.shell.classList.toggle("is-focused", ["add", "wallet", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin", "training-purchase", "help", "activity"].includes(viewName));
+    elements.shell.classList.toggle("is-focused", ["add", "account-editor", "wallet", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin", "training-purchase", "help", "activity"].includes(viewName));
     transition.phase = "visible";
     // Commit the visible destination before initializing or refreshing a section.
     try {
@@ -1962,17 +1964,16 @@ function handleClick(event) {
   async function finishListingPurchase(deal) {
     if (elements.purchaseModal?.open) elements.purchaseModal.close();
     state.purchaseFlow = null;
-    await refreshMarketplace();
-    // A paid purchase goes straight to its chat, without an obscuring success
-    // overlay. Publication success notifications use their existing flow.
-    elements.successOverlay.hidden = true;
+    void refreshMarketplace().catch(error => reportClientError("purchase_refresh", error));
+    state.purchaseSuccessDeals ||= new Set();
+    if (deal?.id && !["cancelled", "failed", "refunded"].includes(deal.status) && !state.purchaseSuccessDeals.has(deal.id)) { state.purchaseSuccessDeals.add(deal.id); if (state.purchaseSuccessDeals.size > 50) state.purchaseSuccessDeals.delete(state.purchaseSuccessDeals.values().next().value); showPurchaseSuccess("✓ Покупка успешна!", "Открываем чат сделки", 800); }
     if (!deal?.id) return;
     await openDealConversation(deal.id);
   }
 
-  function showPurchaseSuccess(title, message) {
+  function showPurchaseSuccess(title, message, duration = 2200) {
     elements.successTitle.textContent = title; elements.successText.textContent = message; elements.successOverlay.hidden = false;
-    window.setTimeout(() => { elements.successOverlay.hidden = true; }, 2200);
+    window.setTimeout(() => { elements.successOverlay.hidden = true; }, duration);
   }
 
   async function loadPublicationOptions() {
@@ -2307,7 +2308,7 @@ function handleClick(event) {
       `Статус: ${statusLabel(listing.status)}`,
     ]).map((value) => { const item = document.createElement("span"); item.textContent = value; return item; }));
     let video = document.getElementById("accountListingVideo");
-    if (!video) { video = document.createElement("div"); video.id = "accountListingVideo"; video.className = "account-video"; elements.listingPageDescription.closest("article").before(video); }
+    if (!video) { video = document.createElement("div"); video.id = "accountListingVideo"; video.className = "account-video"; elements.listingPageImage.parentElement.append(video); }
     accountSales.video(video, listing);
     elements.listingPageViews.textContent = `👁 ${Number(listing.views_count || 0)} просмотров`;
     renderListingLike(elements.listingPageLike, listing.liked_by_me, listing.likes_count);

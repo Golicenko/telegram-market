@@ -22,10 +22,16 @@ const out=path.join(__dirname,'evidence/account-video');
    }};
    window.accountModule=AutoFlowAccountSales.create({api,notify(){},refresh(){},userId:()=> 'test-buyer',reloadDeal(){},support(){}});
    document.body.innerHTML='<main style="padding:12px;max-width:600px;margin:auto"><div id="video" class="account-video"></div><div id="receipt"></div></main>';
-   window.item={id:'test-account',product_kind:'account',video_asset_id:videoId,images:[]};
+   window.item={id:'test-account',product_kind:'account',video_asset_id:videoId,images:['data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jDrsAAAAASUVORK5CYII=']};
    accountModule.video(document.querySelector('#video'),item);
   },{videoId,auth:process.env.ACCOUNT_VIDEO_TEST_AUTH||''});
   assert.equal(await page.evaluate(()=>videoRequests),0,'No media prefetch before tap');
+  assert.equal(await page.locator('.account-gallery-photo').isVisible(),true,'Photo is the first slide');
+  assert.equal(await page.locator('video').count(),0,'No video element/stream before intent');
+  await page.getByRole('button',{name:'Видео',exact:true}).click();
+  assert.equal(await page.evaluate(()=>videoRequests),0,'Switching to preview must not fetch video yet');
+  assert.equal(await page.locator('.account-gallery-photo').isVisible(),false);
+  assert.match(await page.locator('.account-gallery-nav').innerText(),/2 \/ 2/);
   await page.getByRole('button',{name:'Смотреть видео аккаунта',exact:true}).click();
   try { await page.waitForFunction(()=>{const v=document.querySelector('video');return v&&Number.isFinite(v.duration)&&v.duration>20;}); }
   catch (_) { throw Error('Video metadata unavailable: '+JSON.stringify(await page.evaluate(()=>{const v=document.querySelector('video');return {error:v?.error?.code,networkState:v?.networkState,webm:v?.canPlayType('video/webm; codecs="vp8"'),mp4:v?.canPlayType('video/mp4; codecs="avc1.42E01E"'),message:document.querySelector('.account-video__status')?.textContent};}))); }
@@ -41,11 +47,25 @@ const out=path.join(__dirname,'evidence/account-video');
   await page.waitForFunction(()=>document.querySelector('video').currentTime>14);
   await page.getByRole('button',{name:'Пауза',exact:true}).click();
   const position=await page.locator('video').evaluate(v=>v.currentTime);
-  await page.evaluate(()=>accountModule.video(document.querySelector('#video'),{...item}));
+  await page.evaluate(()=>{
+   // App detail refresh restores the image before asking the gallery to render.
+   document.querySelector('.account-gallery-photo').hidden=false;
+   document.querySelector('.account-gallery-video').hidden=true;
+   accountModule.video(document.querySelector('#video'),{...item});
+  });
   assert.equal(await page.locator('video').count(),1);
+  assert.equal(await page.locator('.account-gallery-photo').isVisible(),false,'Same-key refresh reapplies the selected video slide');
+  assert.equal(await page.locator('.account-gallery-video').isVisible(),true);
   assert.equal(await page.locator('video').evaluate(v=>v.currentTime),position,'Refresh must preserve position');
   assert.equal(await page.evaluate(()=>videoRequests),1,'Re-render must not request a second playback URL');
   await page.getByRole('button',{name:'Воспроизвести видео',exact:true}).click();
+  await page.getByRole('button',{name:'Фото',exact:true}).click();
+  assert.equal(await page.locator('video').evaluate(v=>v.paused),true,'Switching back to photo must pause video');
+  assert.equal(await page.locator('.account-gallery-photo').isVisible(),true);
+  await page.evaluate(()=>{document.querySelector('.account-gallery-photo').hidden=true;accountModule.video(document.querySelector('#video'),{...item});});
+  assert.equal(await page.locator('.account-gallery-photo').isVisible(),true,'Same-key refresh also reapplies the selected photo slide');
+  await page.getByRole('button',{name:'Видео',exact:true}).click();
+  assert.equal(await page.evaluate(()=>videoRequests),1,'Switching slides must reuse the media URL');
   await page.evaluate(()=>accountModule.pauseVideos());
   assert.equal(await page.locator('video').evaluate(v=>v.paused),true);
   assert.ok(ranges.includes(206),'Browser must receive a real byte-range response');
@@ -64,6 +84,10 @@ const out=path.join(__dirname,'evidence/account-video');
   await page.locator('dialog').waitFor({state:'detached'}); // Native close is queued, not synchronous DOM removal.
   assert.equal(await page.evaluate(()=>videoRequests),1,'Cancel must not confirm or change money');
   assert.equal(await page.locator('dialog').count(),0);
+  assert.equal(await page.locator('#video').evaluate(host=>typeof host.ontouchstart==='function'&&typeof host.ontouchend==='function'),true);
+  await page.evaluate(()=>accountModule.video(document.querySelector('#video'),{id:'car-fixture',product_kind:'car'}));
+  assert.equal(await page.locator('#video').evaluate(host=>host.hidden&&host.ontouchstart===null&&host.ontouchend===null),true,'Returning to a car clears stale account swipe handlers');
+  assert.equal(await page.evaluate(()=>videoRequests),1,'Switching to a car does not fetch account media');
   assert.deepEqual(errors,[]);await context.close();
   console.log(`PASS ${useWebKit?'WebKit':'Chromium'} real volume video, Range/seek/pause/2x/5x, refresh, receipt warning ${width}px`);
  }}finally{await browser.close();}
