@@ -27,6 +27,7 @@ from app.models import (
     DealEvent,
     Listing,
     ListingImage,
+    ListingLike,
     Notification,
     PriceOffer,
     StarPayment,
@@ -74,6 +75,7 @@ def account_db(configuration):
         AccountVideo,
         Listing,
         ListingImage,
+        ListingLike,
         UploadedImage,
         AccountSecret,
         Conversation,
@@ -335,3 +337,60 @@ async def test_secret_not_echoed_by_validation_and_feature_disabled(
         data["login"] = "private@example.test"
         result = await client.post("/api/account-products", json=data)
         assert result.status_code == 503 and "do-not-echo" not in result.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "legacy_field", [None, True], ids=["current-form", "cached-client"]
+)
+async def test_account_create_and_edit_without_removed_checkbox(
+    account_db, legacy_field
+):
+    db, seller, _, _, video, cover = account_db
+    app = FastAPI()
+    app.include_router(account_pins.router)
+
+    async def database():
+        try:
+            yield db
+        finally:
+            if db.session.in_transaction():
+                db.session.rollback()
+
+    app.dependency_overrides[get_session] = database
+    app.dependency_overrides[get_current_user] = lambda: seller
+    data = payload(video, cover).model_dump(
+        mode="json", exclude={"no_personal_mail_required"}
+    )
+    data["login"], data["password"] = "private@example.test", "test-password-DO-NOT-LOG"
+    if legacy_field is not None:
+        data["no_personal_mail_required"] = legacy_field
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="http://test"
+    ) as client:
+        result = await client.post("/api/account-products", json=data)
+        assert result.status_code == 201, result.text
+        listing_id = result.json()["id"]
+        assert data["login"] not in result.text and data["password"] not in result.text
+        data["title"] = "Updated account preview"
+        result = await client.patch(f"/api/account-products/{listing_id}", json=data)
+        assert result.status_code == 200, result.text
+    with db.session.begin():
+        assert db.session.get(AccountSecret, uuid.UUID(listing_id)).ciphertext
+        assert (
+            db.session.scalar(select(func.count()).select_from(WalletTransaction)) == 0
+        )
+
+
+@pytest.mark.parametrize(
+    "fields", [{"owns_account": False}, {"no_personal_mail_required": False}]
+)
+def test_ownership_and_explicit_legacy_rejection_remain_protected(account_db, fields):
+    _, _, _, _, video, cover = account_db
+    request = payload(video, cover).model_dump(exclude={"no_personal_mail_required"})
+    request.update(fields)
+    with pytest.raises(HTTPException) as error:
+        account_sales.validate_public(
+            account_sales.AccountCreate.model_validate(request)
+        )
+    assert error.value.status_code == 422

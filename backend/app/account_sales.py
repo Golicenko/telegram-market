@@ -72,7 +72,9 @@ class AccountCreate(BaseModel):
     password: SecretStr = Field(min_length=1, max_length=256)
     price_af_coins: Decimal = Field(ge=1, decimal_places=2, max_digits=18)
     owns_account: bool
-    no_personal_mail_required: bool
+    # Older clients send this declaration. The current form no longer asks for
+    # it and must not fabricate a checked consent on the seller's behalf.
+    no_personal_mail_required: bool | None = Field(default=None, deprecated=True)
     publication_fee_confirmed: bool = False
 
 
@@ -90,7 +92,7 @@ def validate_public(payload):
     public = payload.title + "\n" + payload.description
     if len(payload.title.strip()) < 2 or len(payload.description.strip()) < 5:
         raise HTTPException(422, "Заполните название и описание без пустых пробелов")
-    if not payload.owns_account or not payload.no_personal_mail_required:
+    if not payload.owns_account or payload.no_personal_mail_required is False:
         raise HTTPException(
             422,
             "Нужны собственный игровой аккаунт и передача без доступа к личному почтовому ящику",

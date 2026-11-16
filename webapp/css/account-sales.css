@@ -4,6 +4,12 @@
 .account-modal p { color:#bac6d8; line-height:1.5; }
 .account-modal > button:not(.account-modal__close) { width:100%; margin-top:12px; min-height:46px; white-space:normal; }
 .account-modal__close { position:absolute; right:12px; top:12px; min-width:44px; min-height:44px; }
+.account-modal > button.account-sale-choice { min-height:46px; padding:9px 12px; border:1px solid #ffe393; border-radius:10px; background:linear-gradient(160deg,#ffe58b,#ffc342); color:#201606; font-size:14px; font-weight:400; line-height:1.35; text-align:center; box-shadow:none; }
+.account-sale-choice:focus-visible,.account-autodelivery-info__help:focus-visible { outline:2px solid #81bfff; outline-offset:3px; }
+.account-autodelivery-info { display:flex; align-items:center; gap:6px; min-width:0; }
+.account-autodelivery-info strong { font-size:16px; line-height:1.4; }
+.account-form .account-autodelivery-info__help { flex:0 0 44px; width:44px; height:44px; min-height:44px; padding:0; display:grid; place-items:center; border:1px solid #60748b; border-radius:50%; background:#112238; color:#e8f0fa; font-size:20px; font-weight:750; }
+.account-autodelivery-help p { font-size:16px; line-height:1.55; }
 .account-form { display:grid; gap:14px; min-width:0; }
 .account-form label { display:grid; gap:8px; color:#dce5f2; }
 .account-form label:has(input[type=checkbox]) { grid-template-columns:24px 1fr; align-items:start; }
@@ -13,9 +19,9 @@
 .account-form textarea { min-height:110px; resize:vertical; }
 .account-form button { min-height:46px; white-space:normal; }
 .account-cover-preview { width:100%; max-height:220px; object-fit:contain; border-radius:12px; }
-.account-delivery-card { border:1px solid #685025; border-radius:12px; padding:14px; background:#0b1828; color:#e5edf9; }
-.account-delivery-card p { line-height:1.45; margin:8px 0 12px; }
-.account-delivery-card button { min-height:44px; width:100%; }
+.deal-delivery.account-chat-access { flex:0 0 auto; max-height:none; overflow:visible; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.account-chat-access > button { width:100%; min-height:46px; }
+.account-chat-access > strong { display:block; margin:0 0 8px; font-size:14px; }
 .account-video { margin:14px 0; }
 .account-video video { width:100%; max-height:400px; background:#03080e; border-radius:12px; }
 .account-video { min-width:0; padding:0 4px; }
