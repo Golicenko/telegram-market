@@ -1315,6 +1315,9 @@ function handleClick(event) {
   }
 
   async function openSupport() {
+    document.getElementById("accountSupportReason")?.remove();
+    delete elements.supportForm.dataset.accountCase;
+    delete elements.supportForm.dataset.closedAccountCase;
     if (state.currentView.startsWith("training") && state.selectedTraining?.id) track("training_support_opened", state.selectedTraining.id);
     elements.supportForm.elements.deal_id.value = "";
     elements.supportForm.elements.topic.closest("label").hidden = false;
