@@ -12,12 +12,13 @@ const server=http.createServer((req,res)=>{if(req.url==='/isolated-account-fixtu
   await page.setContent(`<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="${base}/css/style.css"><link rel="stylesheet" href="${base}/css/account-sales.css"><button id="launch">Продать</button><main id="card"></main>`);
   await page.addScriptTag({url:base+'/js/account-sales.js'});
   await page.route('**/fixture-video',r=>r.fulfill({status:200,body:''}));
-  await page.evaluate(()=>{
-   const fixture=window.testAccount={car:0,refresh:0,reveals:0,submissions:[],copies:0,support:0};
+  await page.evaluate(width=>{
+   const fixture=window.testAccount={car:0,refresh:0,reveals:0,submissions:[],copies:0,support:0,volumeUploads:0};
    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{async writeText(){fixture.copies++;}}});
    const api={async request(path,options={}){
     if(path==='/account-publication-rules')return {enabled:true,free_limit:3,price_af:15,vip_stars:5,vip_hours:24,video_max_bytes:104857600,secret_retention_days:1};
-    if(path==='/account-videos')return {id:'video-fixture',upload_url:location.origin+'/fixture-video',content_type:'video/mp4'};
+    if(path==='/account-videos')return {id:'00000000-0000-4000-a000-000000000005',upload_url:width===390?'/account-videos/00000000-0000-4000-a000-000000000005/content':location.origin+'/fixture-video',upload_transport:width===390?'miniapp':'s3',content_type:'video/mp4'};
+    if(path.endsWith('/content')){if(options.headers['Content-Type']!=='video/mp4'||!(options.body instanceof File)||options.method!=='PUT')throw Error('Invalid binary video request');fixture.volumeUploads++;return {ready:true};}
     if(path.endsWith('/complete'))return {id:'video-fixture',ready:true};
     if(path==='/account-products'){
      const data=JSON.parse(options.body);fixture.submissions.push(data);
@@ -29,7 +30,7 @@ const server=http.createServer((req,res)=>{if(req.url==='/isolated-account-fixtu
    },async upload(){return {url:'/api/media/00000000-0000-4000-a000-000000000001'};}};
    window.accountModule=window.AutoFlowAccountSales.create({api,notify(){},refresh:async()=>fixture.refresh++,openCar:()=>fixture.car++,support(){fixture.support++;},userId:()=> 'buyer',reloadDeal:async()=>{},topup(){}});
    document.querySelector('#launch').onclick=()=>window.accountModule.choose();
-  });
+  },width);
   await page.locator('#launch').click();
   await page.getByRole('button',{name:/🚗 Автомобиль/}).click();
   assert.equal(await page.evaluate(()=>window.testAccount.car),1);
@@ -68,6 +69,7 @@ const server=http.createServer((req,res)=>{if(req.url==='/isolated-account-fixtu
   assert.equal(await page.evaluate(()=>JSON.stringify(localStorage).includes('DO-NOT-LOG')),false);
   await page.evaluate(()=>window.accountModule.controls(document.querySelector('#card'),{id:'closed-account',buyer_id:'buyer',status:'completed'}));
   await page.getByRole('button',{name:'Обратиться в поддержку',exact:true}).click();assert.equal(await page.evaluate(()=>window.testAccount.support),1);
+  assert.equal(await page.evaluate(()=>testAccount.volumeUploads),width===390?1:0);
   assert.deepEqual(errors,[]);await context.close();console.log('PASS account form, video PUT, 15 AF consent, protected popup and cleanup '+width+'px');
  }}finally{await browser.close();server.close();}
 })().catch(e=>{console.error(e);server.close();process.exitCode=1;});

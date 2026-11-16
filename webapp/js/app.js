@@ -930,6 +930,7 @@ function handleClick(event) {
     if (viewName === "settings") viewName = "profile";
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
+    if (viewName !== "listing-detail") accountSales.pauseVideos();
     state.navigationVersion = (state.navigationVersion || 0) + 1;
     const transition = { from: state.currentView, to: viewName, phase: "requested", at: Math.round(performance.now()) };
     state.navigationTrace ||= []; state.navigationTrace.push(transition);
@@ -2307,7 +2308,7 @@ function handleClick(event) {
       `Статус: ${statusLabel(listing.status)}`,
     ]).map((value) => { const item = document.createElement("span"); item.textContent = value; return item; }));
     let video = document.getElementById("accountListingVideo");
-    if (!video) { video = document.createElement("div"); video.id = "accountListingVideo"; video.className = "account-video"; elements.listingPageDescription.after(video); }
+    if (!video) { video = document.createElement("div"); video.id = "accountListingVideo"; video.className = "account-video"; elements.listingPageDescription.closest("article").before(video); }
     accountSales.video(video, listing);
     elements.listingPageViews.textContent = `👁 ${Number(listing.views_count || 0)} просмотров`;
     renderListingLike(elements.listingPageLike, listing.liked_by_me, listing.likes_count);

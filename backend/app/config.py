@@ -1,6 +1,7 @@
 import hashlib
 import os
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -100,6 +101,10 @@ class Settings(BaseSettings):
     account_secret_keys: dict[str, str] = Field(default_factory=dict, repr=False)
     account_secret_active_key: str = ""
     account_secret_retention_days: int = Field(default=1, ge=1, le=30)
+    account_video_storage: Literal["auto", "volume", "s3"] = "auto"
+    # Existing Railway mount, NOT the PostgreSQL volume. No ephemeral fallback.
+    railway_volume_mount_path: str = ""
+    account_video_volume_dir: str = ""
     account_s3_endpoint: str = ""
     account_s3_region: str = "auto"
     account_s3_bucket: str = ""

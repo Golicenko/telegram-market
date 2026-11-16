@@ -65,14 +65,14 @@ test('profile and ad updates never rebuild catalogue, training or brand selector
 test('primary navigation resolves immediately and later read cannot change the chosen screen',async()=>{
   const pending=deferred();const list=()=>({toggle(){},remove(){}});
   const views=['market','profile','training'].map(view=>({dataset:{view},classList:list()}));
-  const state={currentView:'market',navigationStack:[],serverAvailable:true};
+  const state={currentView:'market',navigationStack:[],serverAvailable:true};let paused=0;
   const c=vm.createContext({state,performance,primaryViews:new Set(['market','profile','training']),navigationDataMaxAge:15000,
-    elements:{views,navButtons:[],shell:{classList:list()}},document:{body:{classList:list()}},window:{scrollTo(){}},
+    elements:{views,navButtons:[],shell:{classList:list()}},document:{body:{classList:list()}},window:{scrollTo(){}},accountSales:{pauseVideos(){paused++;}},
     track(){},selectProfileAction(){},syncReferralsPage(){},syncReferralHeader(){},syncBackNavigation(){},updateFloatingChatVisibility(){},observeVisibleListingCards(){},switchProfileTab(){},
     loadOptionalData:async()=>pending.promise,reportClientError(){},updateSyncStatus(){}});
   vm.runInContext(code('async function navigate','async function openContentSection'),c);
   await c.navigate('profile');assert.equal(state.currentView,'profile');
-  await c.navigate('market');assert.equal(state.currentView,'market');assert.equal(state.navigationVersion,2);pending.resolve([]);await Promise.resolve();assert.equal(state.currentView,'market');
+  await c.navigate('market');assert.equal(state.currentView,'market');assert.equal(state.navigationVersion,2);pending.resolve([]);await Promise.resolve();assert.equal(state.currentView,'market');assert.equal(paused,2);
 });
 
 test('failed scheduled render is isolated and identical data can retry it',async()=>{
