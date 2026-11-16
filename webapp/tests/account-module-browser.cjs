@@ -13,7 +13,7 @@ const server=http.createServer((req,res)=>{if(req.url==='/isolated-account-fixtu
   await page.addScriptTag({url:base+'/js/account-sales.js'});
   await page.route('**/fixture-video',r=>r.fulfill({status:200,body:''}));
   await page.evaluate(()=>{
-   const fixture=window.testAccount={car:0,refresh:0,reveals:0,submissions:[],copies:0};
+   const fixture=window.testAccount={car:0,refresh:0,reveals:0,submissions:[],copies:0,support:0};
    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{async writeText(){fixture.copies++;}}});
    const api={async request(path,options={}){
     if(path==='/account-publication-rules')return {enabled:true,free_limit:3,price_af:15,vip_stars:5,vip_hours:24,video_max_bytes:104857600,secret_retention_days:1};
@@ -27,7 +27,7 @@ const server=http.createServer((req,res)=>{if(req.url==='/isolated-account-fixtu
     if(path.endsWith('/credentials')){fixture.reveals++;return {login:'test-account-login',password:'test-password-DO-NOT-LOG'};}
     throw Error('Unexpected fixture request '+path);
    },async upload(){return {url:'/api/media/00000000-0000-4000-a000-000000000001'};}};
-   window.accountModule=window.AutoFlowAccountSales.create({api,notify(){},refresh:async()=>fixture.refresh++,openCar:()=>fixture.car++,support(){},userId:()=> 'buyer',reloadDeal:async()=>{},topup(){}});
+   window.accountModule=window.AutoFlowAccountSales.create({api,notify(){},refresh:async()=>fixture.refresh++,openCar:()=>fixture.car++,support(){fixture.support++;},userId:()=> 'buyer',reloadDeal:async()=>{},topup(){}});
    document.querySelector('#launch').onclick=()=>window.accountModule.choose();
   });
   await page.locator('#launch').click();
@@ -66,6 +66,8 @@ const server=http.createServer((req,res)=>{if(req.url==='/isolated-account-fixtu
   assert.equal(await page.evaluate(()=>window.testAccount.copies),1);
   await page.evaluate(()=>window.accountModule.dismiss());await page.locator('dialog.account-modal').waitFor({state:'detached'});assert.equal(await page.locator('[name=password]').count(),0);
   assert.equal(await page.evaluate(()=>JSON.stringify(localStorage).includes('DO-NOT-LOG')),false);
+  await page.evaluate(()=>window.accountModule.controls(document.querySelector('#card'),{id:'closed-account',buyer_id:'buyer',status:'completed'}));
+  await page.getByRole('button',{name:'Обратиться в поддержку',exact:true}).click();assert.equal(await page.evaluate(()=>window.testAccount.support),1);
   assert.deepEqual(errors,[]);await context.close();console.log('PASS account form, video PUT, 15 AF consent, protected popup and cleanup '+width+'px');
  }}finally{await browser.close();server.close();}
 })().catch(e=>{console.error(e);server.close();process.exitCode=1;});

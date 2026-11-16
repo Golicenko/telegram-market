@@ -3416,6 +3416,7 @@ async function hideCurrentConversation() {
     form.elements.topic.value = "deal";
     form.elements.topic.closest("label").hidden = true;
     form.dataset.accountCase = String(deal?.product_kind === "account");
+    form.dataset.closedAccountCase = String(deal?.product_kind === "account" && ["completed", "cancelled"].includes(deal.status));
     document.getElementById("accountSupportReason")?.remove();
     if (deal?.product_kind === "account") {
       const label = document.createElement("label"); label.id = "accountSupportReason"; label.textContent = "Причина обращения";
@@ -3435,6 +3436,7 @@ async function hideCurrentConversation() {
       `Покупатель: ${isBuyer ? currentName : otherName}`,
       "Деньги останутся под защитой до решения.",
     ].join("\n");
+    if (form.dataset.closedAccountCase === "true") context.textContent = context.textContent.replace("Деньги останутся под защитой до решения.", "Сделка уже закрыта. Поддержка проверит ситуацию; обращение не отменяет состоявшийся расчёт автоматически.");
     openSecondary("support");
     window.setTimeout(() => form.elements.message.focus({ preventScroll: true }), 50);
   }
@@ -4634,7 +4636,7 @@ async function hideCurrentConversation() {
       const signature = JSON.stringify([dealId, data.get("topic"), data.get("linked_deal_id"), data.get("message"), data.get("screenshot")?.name, data.get("screenshot")?.size]);
       if (state.supportSubmission?.signature !== signature) state.supportSubmission = { signature, requestId: createRequestId() };
       let ticket;
-      if (dealId) {
+      if (dealId && formElement.dataset.closedAccountCase !== "true") {
         const screenshot = data.get("screenshot");
         if (!screenshot?.size && formElement.dataset.accountCase !== "true") {
           throw new Error("Прикрепите хотя бы один скриншот, чтобы мы могли разобраться в ситуации.");
@@ -4654,8 +4656,8 @@ async function hideCurrentConversation() {
         if (screenshot?.size) screenshotUrl = (await api.upload(screenshot, "/uploads?purpose=support")).url;
         ticket = await api.request("/support/tickets", {
           method: "POST",
-          body: JSON.stringify({ topic: data.get("topic"), message: data.get("message"), screenshot_url: screenshotUrl,
-            deal_id: data.get("linked_deal_id") || null, client_request_id: state.supportSubmission.requestId }),
+          body: JSON.stringify({ topic: data.get("topic"), message: data.get("account_reason") ? `${data.get("account_reason")}\n${data.get("message")}` : data.get("message"), screenshot_url: screenshotUrl,
+            deal_id: dealId || data.get("linked_deal_id") || null, client_request_id: state.supportSubmission.requestId }),
         });
       }
       formElement.reset();

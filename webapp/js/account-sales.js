@@ -152,7 +152,6 @@
     }
     function controls(host, deal) {
       host.replaceChildren();
-      if (["completed", "cancelled"].includes(deal.status)) return;
       if (deal.buyer_id === userId() && deal.status === "transfer_in_progress") host.append(button("Аккаунт получен", () => confirmReceipt(deal), "deal-confirm"));
       host.append(button("Обратиться в поддержку", () => support(deal.id), "deal-support"));
     }
