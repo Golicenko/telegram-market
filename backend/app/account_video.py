@@ -21,7 +21,6 @@ from .database import AsyncSession, get_session
 from .models import AccountVideo, Listing, User
 from .account_video_volume import (
     PLAYBACK_TTL,
-    UPLOAD_SLOTS,
     object_path,
     playback_token,
     playback_viewer,
@@ -29,6 +28,7 @@ from .account_video_volume import (
     use_volume,
     valid_container,
     volume_root,
+    upload_slots,
 )
 
 
@@ -201,8 +201,9 @@ async def upload_video(
         raise HTTPException(413, "Видео превышает разрешённый размер")
     # Do not occupy a DB transaction/connection during a slow mobile upload.
     await session.rollback()
+    slots = upload_slots(request)
     try:
-        await asyncio.wait_for(UPLOAD_SLOTS.acquire(), 5)
+        await asyncio.wait_for(slots.acquire(), 5)
     except TimeoutError:
         raise HTTPException(
             429, "Загрузка видео занята. Повторите через несколько секунд"
@@ -249,7 +250,7 @@ async def upload_video(
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
-        UPLOAD_SLOTS.release()
+        slots.release()
 
 
 async def require_playback(session, video, user):

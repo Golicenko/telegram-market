@@ -69,9 +69,9 @@ async def test_parallel_upload_signed_buyer_acl_hide_and_restart(volume_settings
             assert len(list(volume.volume_root().glob("videos/*/*"))) == 1
             async with sessions() as session:
                 video = await session.get(AccountVideo, uuid.UUID(data["id"]))
-                item = await account_sales.publish(
-                    session, seller, payload(video, cover, game_version=game)
-                )
+                publication = payload(video, cover, game_version=game)
+            async with sessions() as session:
+                item = await account_sales.publish(session, seller, publication)
             play = await client.get(
                 f"/api/account-videos/{video.id}/play", headers=headers(buyer)
             )
@@ -142,5 +142,7 @@ async def test_signed_buyer_plays_real_volume_webm(volume_settings, tmp_path):
             assert result.status_code == 200, result.text
         async with sessions() as session:
             video = await session.get(AccountVideo, uuid.UUID(data["id"]))
-            await account_sales.publish(session, seller, payload(video, cover))
+            publication = payload(video, cover)
+        async with sessions() as session:
+            await account_sales.publish(session, seller, publication)
         await run_browser(app, video.id, init_data(buyer.telegram_id))

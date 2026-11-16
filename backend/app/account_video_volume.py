@@ -23,8 +23,17 @@ from starlette.staticfiles import StaticFiles
 
 from .config import get_settings
 
-UPLOAD_SLOTS = asyncio.Semaphore(2)
 PLAYBACK_TTL = 3600
+
+
+def upload_slots(request):
+    # ASGI apps may be restarted in another event loop in the same process.
+    # Do not retain a semaphore bound to a previous app/test loop.
+    slots = getattr(request.app.state, "account_video_upload_slots", None)
+    if slots is None:
+        slots = asyncio.Semaphore(2)
+        request.app.state.account_video_upload_slots = slots
+    return slots
 
 
 class VideoAccessLogFilter(logging.Filter):
