@@ -30,6 +30,7 @@ from app.services import (
     resolve_dispute,
 )
 from app.support_media import router as support_router
+from app.message_notifications import claim_delivery
 from test_account_autodelivery import configuration, payload  # noqa: F401,F811 -- pytest fixture
 from test_catalog_and_acceptance_postgres import client_app, headers
 from test_private_chat_photos import photo
@@ -159,6 +160,35 @@ async def test_two_buyers_one_winner_and_duplicate_confirmation():
                 )
                 == 1
             )
+
+
+@pytest.mark.asyncio
+async def test_account_purchase_notification_survives_automatic_transfer_stage():
+    async with isolated_pg() as (_, sessions):
+        seller, buyer = (
+            await signed_login(sessions, 5251),
+            await signed_login(sessions, 5252),
+        )
+        video, cover = await media(sessions, seller)
+        await media(sessions, buyer)
+        async with sessions() as session, session.begin():
+            from app.models import User
+
+            (await session.get(User, seller.id)).bot_started = True
+        async with sessions() as session:
+            item = await account_sales.publish(session, seller, payload(video, cover))
+        async with sessions() as session:
+            deal, _, _ = await purchase_listing(session, buyer, item.id)
+        async with sessions() as session:
+            job = await claim_delivery(session, seller.id, datetime.now(UTC))
+        assert job and job["notification_type"] == "deal_created"
+        assert job["photo_url"] == f"/api/media/{cover.id}"
+        assert job["params"] == {"deal_id": str(deal.id)}
+        assert (
+            "Автовыдача выполнена" in job["text"] and "test-password" not in job["text"]
+        )
+        async with sessions() as session:
+            assert await claim_delivery(session, seller.id, datetime.now(UTC)) is None
 
 
 @pytest.mark.asyncio
