@@ -1,6 +1,12 @@
 // Real production account component; only API/invoice transport is a fixture.
 const {chromium}=require('playwright'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const root=path.resolve(__dirname,'..'),out=path.join(__dirname,'evidence/account-autodelivery');
+async function waitForModalCleanup(page){
+ // A closed <dialog> immediately disappears from role queries, but its native
+ // close event performs DOM/scroll cleanup asynchronously in Chromium.
+ await page.locator('dialog.account-modal').waitFor({state:'detached'});
+ await page.waitForFunction(()=>document.body.style.overflow==='');
+}
 const server=http.createServer((req,res)=>{
  if(req.url==='/isolated-account-fixture'){res.setHeader('Content-Type','text/html; charset=utf-8');return res.end('<!doctype html><meta charset="utf-8"><title>Isolated UI test</title>');}
  const file=path.resolve(root,'.'+new URL(req.url,'http://test').pathname);
@@ -53,9 +59,9 @@ const server=http.createServer((req,res)=>{
   }
   await page.locator('dialog.account-modal').evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
   await page.screenshot({path:path.join(out,`sale-choice-${width}.png`)});
-  await page.getByRole('button',{name:/🚗 Автомобиль/}).click();assert.equal(await page.evaluate(()=>testAccount.car),1);
+  await page.getByRole('button',{name:/🚗 Автомобиль/}).click();await waitForModalCleanup(page);assert.equal(await page.evaluate(()=>testAccount.car),1);
   await page.locator('#launch').click();await page.getByRole('button',{name:/👤 Аккаунт/}).click();
-  const form=page.locator('#editor-body form.account-form');await form.waitFor();
+  const form=page.locator('#editor-body form.account-form');await form.waitFor();await waitForModalCleanup(page);
   assert.equal(await form.evaluate(el=>el.closest('dialog')===null),true,'Full app page, not a modal');
   assert.equal(await page.getByRole('heading',{name:'Как работает автовыдача?',exact:true}).count(),0);
   assert.equal(await form.locator('[name=no_personal_mail_required]').count(),0);
@@ -64,12 +70,15 @@ const server=http.createServer((req,res)=>{
   assert.equal(await page.evaluate(()=>testAccount.pinStarts),0);
   await form.locator('[name=game_version]').selectOption('car_parking_2');await form.locator('[name=title]').fill('Аккаунт CP2 — тестовая коллекция');
   await page.locator('#back').click();await page.locator('#launch').click();await page.getByRole('button',{name:/👤 Аккаунт/}).click();
+  await waitForModalCleanup(page);
   assert.equal(await form.locator('[name=title]').inputValue(),'Аккаунт CP2 — тестовая коллекция','Back preserves in-memory draft');
   await page.evaluate(()=>{testAccount.activeCount=1;document.querySelector('#back').click();});
   await page.locator('#launch').click();await page.getByRole('button',{name:/👤 Аккаунт/}).click();
+  await waitForModalCleanup(page);
   assert.match(await quota.innerText(),/1 из 3 использовано/);assert.match(await quota.innerText(),/Осталось бесплатно: 2/);
   await page.evaluate(count=>{testAccount.activeCount=count;document.querySelector('#back').click();},width===320?0:width===390?3:4);
   await page.locator('#launch').click();await page.getByRole('button',{name:/👤 Аккаунт/}).click();
+  await waitForModalCleanup(page);
   const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jDrsAAAAASUVORK5CYII=','base64');
   await form.locator('[name=cover]').setInputFiles({name:'cover.png',mimeType:'image/png',buffer:png});
   if(width===390){
@@ -90,7 +99,7 @@ const server=http.createServer((req,res)=>{
   const help=page.getByRole('dialog',{name:'Как работает автовыдача?',exact:true});await help.waitFor();
   assert.match(await help.innerText(),/хранит их в зашифрованном виде/);assert.match(await help.innerText(),new RegExp('Через '+(width===430?3:1)+' сут\\. после завершения сделки'));
   await help.evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));await page.screenshot({path:path.join(out,`autodelivery-help-${width}.png`)});
-  await page.evaluate(()=>accountModule.dismiss());await help.waitFor({state:'detached'});
+  await page.evaluate(()=>accountModule.dismiss());await waitForModalCleanup(page);
   assert.equal(await form.locator('[name=title]').inputValue(),'Аккаунт CP2 — тестовая коллекция');assert.equal(await page.evaluate(()=>document.body.style.overflow),'','Help restores normal page scroll');
   assert.equal(await page.evaluate(()=>testAccount.submissions.length),0);assert.equal(await form.locator('[name=password]').evaluate(el=>getComputedStyle(el).fontSize),'16px');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
@@ -99,14 +108,14 @@ const server=http.createServer((req,res)=>{
   const uploadsBefore=await page.evaluate(()=>testAccount.uploads);
   await form.getByRole('button',{name:'Опубликовать аккаунт',exact:true}).click();
   if(width!==320){await page.getByRole('heading',{name:'Лимит бесплатных объявлений',exact:true}).waitFor();await page.waitForTimeout(500);await page.getByRole('button',{name:'Опубликовать за 15 AF',exact:true}).click();}
-  await form.waitFor({state:'detached'});await page.waitForFunction(()=>testAccount.refresh>=1);
+  await form.waitFor({state:'detached'});await waitForModalCleanup(page);await page.waitForFunction(()=>testAccount.refresh>=1);
   if(width!==320)await page.waitForFunction(()=>testAccount.invoices===1&&testAccount.notices.some(m=>m.includes('без VIP')||m==='Аккаунт закреплён'));
   const state=await page.evaluate(()=>({count:testAccount.submissions.length,paid:testAccount.submissions.at(-1).publication_fee_confirmed||false,game:testAccount.submissions.at(-1).game_version,mail:testAccount.submissions.some(d=>Object.hasOwn(d,'no_personal_mail_required')),pin:testAccount.pinStarts,invoices:testAccount.invoices,closed:testAccount.closedTo,uploads:testAccount.uploads}));
   assert.deepEqual(state,{count:width===320?1:2,paid:width!==320,game:'car_parking_2',mail:false,pin:width===320?0:1,invoices:width===320?0:1,closed:'test-account',uploads:uploadsBefore});
   await page.evaluate(()=>accountModule.panel(document.querySelector('#card'),{id:'deal-fixture',buyer_id:'buyer',status:'transfer_in_progress'}));
   assert.equal(await page.evaluate(()=>testAccount.reveals),0);await page.getByRole('button',{name:'🔐 Открыть аккаунт',exact:true}).click();await page.locator('[name=password]').waitFor();
   assert.equal(await page.locator('[name=password]').getAttribute('type'),'password');await page.getByRole('button',{name:'Показать / скрыть',exact:true}).click();await page.getByRole('button',{name:'Скопировать',exact:true}).last().click();
-  assert.equal(await page.evaluate(()=>testAccount.copies),1);await page.evaluate(()=>accountModule.dismiss());await page.locator('dialog.account-modal').waitFor({state:'detached'});assert.equal(await page.locator('[name=password]').count(),0);
+  assert.equal(await page.evaluate(()=>testAccount.copies),1);await page.evaluate(()=>accountModule.dismiss());await waitForModalCleanup(page);assert.equal(await page.locator('[name=password]').count(),0);
   assert.equal(await page.evaluate(()=>JSON.stringify(localStorage).includes('DO-NOT-LOG')),false);assert.deepEqual(errors,[]);
   await context.close();console.log(`PASS full account page, quotas 0/1/3/4, early upload, default VIP/off/cancelled/paid, protected credentials ${width}px`);
  }}finally{await browser.close();server.close();}
