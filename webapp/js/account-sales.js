@@ -63,9 +63,9 @@
       const preview = node("img", null, "account-cover-preview"); preview.alt = "Предпросмотр главной фотографии"; preview.hidden = !listing?.images?.[0]; if (!preview.hidden) preview.src = listing.images[0]; form.append(preview);
       let previewUrl = null, uploadedCover = listing?.images?.[0] || null, videoId = listing?.video_asset_id || null;
       photo.onchange = () => { if (previewUrl) URL.revokeObjectURL(previewUrl); uploadedCover = null; if (photo.files[0]) { previewUrl = URL.createObjectURL(photo.files[0]); preview.src = previewUrl; preview.hidden = false; } };
-      const video = field(form, "Видео аккаунта", "file", "video", { required: !videoId, accept: "video/mp4,video/webm,.mp4,.webm" });
+      const video = field(form, "Видео аккаунта", "file", "video", { required: !videoId, accept: "video/mp4,video/quicktime,video/webm,.mp4,.m4v,.mov,.webm" });
       video.onchange = () => { videoId = null; };
-      form.append(node("small", `Покажите реальные автомобили, игровую валюту и ценности аккаунта. MP4 или WebM, до ${Math.floor(rules.video_max_bytes / 1024 / 1024)} МБ. Рекомендуется MP4 H.264 для iPhone.`));
+      form.append(node("small", `Выберите видео из медиатеки и покажите содержимое аккаунта. MP4, MOV или WebM, до ${Math.floor(rules.video_max_bytes / 1024 / 1024)} МБ. Для совместимости с iPhone и Android рекомендуется MP4 H.264.`));
       form.append(node("p", "⚠️ Фото, видео и описание должны соответствовать аккаунту. Обман может привести к разбирательству, возврату по результатам проверки и блокировке.", "security-note"));
       const title = field(form, "Название объявления", "text", "title", { maxLength: 160, value: listing?.brand || "", placeholder: "Аккаунт CP2 — редкие автомобили" });
       const description = field(form, "Описание аккаунта", "textarea", "description", { maxLength: 5000, minLength: 5, value: listing?.description || "", placeholder: "Содержимое и особенности, без контактов и сторонней оплаты" });
@@ -90,17 +90,27 @@
           if (!uploadedCover) { status.textContent = "Загрузка фотографии…"; uploadedCover = (await api.upload(photo.files[0])).url; }
           if (!videoId) {
             const file = video.files[0]; if (!file) throw new Error("Выберите видео");
-            const contentType = file.type || (/\.webm$/i.test(file.name) ? "video/webm" : "video/mp4");
+            const contentType = file.type || (/\.webm$/i.test(file.name) ? "video/webm" : /\.mov$/i.test(file.name) ? "video/quicktime" : "video/mp4");
+            if (file.size > rules.video_max_bytes) throw new Error("Видео слишком большое. Выберите файл меньшего размера.");
+            if (!["video/mp4", "video/quicktime", "video/webm"].includes(contentType)) throw new Error("Выберите видео MP4, MOV или WebM");
             const upload = await api.request("/account-videos", { method: "POST", body: JSON.stringify({ content_type: contentType, size_bytes: file.size }), retries: 0 });
             status.textContent = "Загрузка видео в хранилище…";
-            // Deliberately no Telegram auth headers on the external upload.
             const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 300000);
             const cancelUpload = button("Прервать загрузку", () => controller.abort()); dialog.append(cancelUpload);
-            let result;
-            try { result = await fetch(upload.upload_url, { method: "PUT", body: file, headers: { "Content-Type": upload.content_type }, credentials: "omit", referrerPolicy: "no-referrer", signal: controller.signal }); }
+            try {
+              const options = { method: "PUT", body: file, headers: { "Content-Type": upload.content_type }, signal: controller.signal };
+              if (upload.upload_transport === "miniapp") {
+                // Same-origin volume uploads use the existing signed Mini App
+                // request. Never forward its auth headers to an external S3 URL.
+                if (!/^\/account-videos\/[a-f0-9-]+\/content$/.test(upload.upload_url)) throw new Error("Некорректный адрес загрузки");
+                await api.request(upload.upload_url, { ...options, retries: 0, timeoutMs: 300000 });
+              } else {
+                const result = await fetch(upload.upload_url, { ...options, credentials: "omit", referrerPolicy: "no-referrer" });
+                if (!result.ok) throw new Error("Видео не загрузилось");
+              }
+            }
             catch (_) { throw new Error(controller.signal.aborted ? "Загрузка видео прервана или истёк срок ожидания. Данные формы сохранены; можно повторить." : "Не удалось загрузить видео. Проверьте сеть и повторите."); }
             finally { clearTimeout(timeout); cancelUpload.remove(); }
-            if (!result.ok) throw new Error("Видео не загрузилось. Проверьте сеть и повторите.");
             const checked = await api.request(`/account-videos/${upload.id}/complete`, { method: "POST", retries: 0 }); videoId = checked.id;
           }
           const payload = { client_request_id: requestId, game_version: game.value, title: title.value, description: description.value, image_url: uploadedCover, video_asset_id: videoId, login: login.value, password: password.value, price_af_coins: price.value, owns_account: form.elements.owns_account.checked, no_personal_mail_required: form.elements.no_personal_mail_required.checked };
@@ -134,7 +144,7 @@
           if (key === "password") form.append(button("Показать / скрыть", () => { input.type = input.type === "password" ? "text" : "password"; }));
           form.append(button("Скопировать", async () => { try { await navigator.clipboard.writeText(input.value); notify("Скопировано"); } catch (_) { input.focus(); input.select(); if (!document.execCommand("copy")) notify("Выделите и скопируйте значение вручную"); input.setSelectionRange(0, 0); } }));
         }
-        dialog.append(node("p", "Перед подтверждением проверьте вход в аккаунт, содержимое и возможность изменения данных восстановления. Покупатель может сохранить предоставленные ему данные.", "security-note"), button("Закрыть", () => dialog.close()));
+        dialog.append(node("p", "Проверьте соответствие аккаунта описанию и видео. После входа обязательно смените привязанную электронную почту, пароль и данные восстановления: продавец может попытаться вернуть доступ. Сделайте это до подтверждения получения. Будьте внимательны.", "security-note"), button("Закрыть", () => dialog.close()));
       } catch (error) { if (dialog.open) status.textContent = error.message; }
     }
     function card(deal, buyer) {
@@ -157,7 +167,8 @@
     }
     function confirmReceipt(deal) {
       const dialog = modal("Вы действительно получили аккаунт?");
-      dialog.append(node("p", "Убедитесь, что данные работают, содержимое соответствует объявлению и вы проверили возможность изменения почты и данных восстановления."));
+      dialog.append(node("p", "Убедитесь, что аккаунт действительно соответствует описанию и видео."));
+      dialog.append(node("p", "После входа обязательно смените привязанную электронную почту, пароль и данные восстановления: продавец может попытаться вернуть доступ к аккаунту. Сделайте это до подтверждения получения. Будьте внимательны.", "security-note"));
       const form = node("form", null, "account-form"), checked = field(form, "Я проверил доступ к аккаунту и подтверждаю получение", "checkbox", "checked_access");
       const submit = node("button", "Подтвердить получение", "publish-button"); submit.type = "submit"; submit.disabled = true;
       const status = node("p"); status.setAttribute("role", "status");
@@ -173,11 +184,62 @@
         catch (error) { delete dialog.dataset.busy; clearInterval(timer); submit.textContent = "Подтвердить получение"; submit.disabled = !checked.checked; status.textContent = error.message; }
       };
     }
-    async function play(videoId, host) {
-      try { const result = await api.request(`/account-videos/${videoId}/play`, { retries: 0 }); if (!host.isConnected) return; const video = node("video"); video.controls = true; video.playsInline = true; video.preload = "metadata"; video.src = result.url; video.referrerPolicy = "no-referrer"; host.replaceChildren(video); }
-      catch (error) { notify(error.message); }
+    const players = new Map();
+    const timestamp = value => { const n = Math.max(0, Math.floor(Number(value) || 0)); return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`; };
+    function pauseVideos() {
+      for (const player of players.values()) { player.media?.pause(); player.controller?.abort(); }
     }
-    function video(host, listing) { host.replaceChildren(); host.hidden = listing.product_kind !== "account"; if (!host.hidden) host.append(button("▶ Смотреть видео аккаунта", () => play(listing.video_asset_id, host))); }
+    document.addEventListener("visibilitychange", () => { if (document.hidden) pauseVideos(); });
+    root.addEventListener("pagehide", pauseVideos);
+    function video(host, listing) {
+      const key = `${listing.id}:${listing.video_asset_id}`;
+      if (players.get(host)?.key === key && listing.product_kind === "account") return;
+      const old = players.get(host);
+      if (old) { old.controller?.abort(); if (old.media) { old.media.pause(); old.media.removeAttribute("src"); old.media.load(); } players.delete(host); }
+      host.replaceChildren(); host.hidden = listing.product_kind !== "account";
+      if (host.hidden) return;
+      const state = { key, controller: null, media: null }; players.set(host, state);
+      const preview = button("▶ Смотреть", () => void load(), "account-video__preview");
+      preview.setAttribute("aria-label", "Смотреть видео аккаунта");
+      if (listing.images?.[0]) { const image = node("img"); image.src = listing.images[0]; image.alt = ""; image.loading = "lazy"; preview.prepend(image); }
+      const label = node("h3", "Видео аккаунта"), status = node("p", "Нажмите, чтобы посмотреть содержимое аккаунта", "account-video__status"); status.setAttribute("role", "status");
+      host.append(label, preview, status);
+      async function load() {
+        if (state.controller) return;
+        const controller = new AbortController(); state.controller = controller;
+        preview.disabled = true; status.textContent = "Загружаем видео…";
+        const position = state.media?.currentTime || 0, speed = state.media?.playbackRate || 1;
+        try {
+          const result = await api.request(`/account-videos/${listing.video_asset_id}/play`, { retries: 0, signal: controller.signal });
+          if (controller.signal.aborted || players.get(host) !== state || !host.isConnected) return;
+          if (!state.media) buildPlayer();
+          state.media.src = result.url; state.media.load();
+          state.media.addEventListener("loadedmetadata", () => { if (position && Number.isFinite(state.media.duration)) state.media.currentTime = Math.min(position, state.media.duration); state.media.playbackRate = speed; }, { once: true });
+          preview.hidden = true; status.textContent = "";
+          try { await state.media.play(); } catch (_) { status.textContent = "Нажмите ▶ на плеере, чтобы начать просмотр"; }
+        } catch (error) { if (!controller.signal.aborted && players.get(host) === state) { status.textContent = "Не удалось открыть видео. Проверьте сеть и попробуйте ещё раз."; retry.hidden = false; } }
+        finally { if (state.controller === controller) state.controller = null; preview.disabled = false; }
+      }
+      const retry = button("Повторить загрузку", () => { retry.hidden = true; void load(); }); retry.hidden = true; host.append(retry);
+      function buildPlayer() {
+        const media = node("video"); state.media = media;
+        media.controls = true; media.playsInline = true; media.preload = "metadata"; media.referrerPolicy = "no-referrer"; media.setAttribute("aria-label", "Видео содержимого аккаунта");
+        const bar = node("div", null, "account-video__controls"), time = node("span", "0:00 / 0:00", "account-video__time");
+        const toggle = button("▶", () => { if (media.paused) void media.play().catch(() => { status.textContent = "Нажмите ▶ на плеере"; }); else media.pause(); }); toggle.setAttribute("aria-label", "Воспроизвести видео");
+        const seek = node("input"); seek.type = "range"; seek.min = "0"; seek.max = "0"; seek.step = ".1"; seek.value = "0"; seek.disabled = true; seek.setAttribute("aria-label", "Позиция видео");
+        seek.oninput = () => { if (Number.isFinite(media.duration)) media.currentTime = Number(seek.value); };
+        const speedLabel = node("label", "Скорость"), rate = node("select"); rate.setAttribute("aria-label", "Скорость видео");
+        [0.5, 1, 1.25, 1.5, 2, 3, 5].forEach(value => { const option = node("option", `${value}×`); option.value = value; rate.append(option); }); rate.value = "1";
+        rate.onchange = () => { const before = media.playbackRate; try { const value = Number(rate.value); media.playbackRate = value; if (media.playbackRate !== value) throw new Error(); status.textContent = ""; } catch (_) { media.playbackRate = before; rate.value = String(before); status.textContent = "Эта скорость недоступна на устройстве. Выберите другую."; } };
+        media.addEventListener("ratechange", () => { rate.value = String(media.playbackRate); });
+        const sync = () => { const ready = Number.isFinite(media.duration) && media.duration > 0; seek.disabled = !ready; seek.max = ready ? media.duration : 0; seek.value = media.currentTime || 0; time.textContent = `${timestamp(media.currentTime)} / ${ready ? timestamp(media.duration) : "—"}`; };
+        ["timeupdate", "durationchange", "loadedmetadata"].forEach(name => media.addEventListener(name, sync));
+        media.addEventListener("play", () => { toggle.textContent = "Ⅱ"; toggle.setAttribute("aria-label", "Пауза"); });
+        media.addEventListener("pause", () => { toggle.textContent = "▶"; toggle.setAttribute("aria-label", "Воспроизвести видео"); });
+        media.addEventListener("error", () => { status.textContent = "Видео не загрузилось или формат не поддерживается устройством. Попробуйте ещё раз."; retry.hidden = false; });
+        speedLabel.append(rate); bar.append(toggle, seek, time, speedLabel); preview.after(media, bar);
+      }
+    }
     async function pin(listing) {
       try {
         const rules = await api.request("/account-publication-rules", { retries: 0 });
@@ -187,7 +249,7 @@
         root.Telegram.WebApp.openInvoice(result.invoice_url, async () => { await refresh(); notify("Статус закрепления обновлён с сервера. При задержке платежа обновите страницу объявления позже."); });
       } catch (error) { notify(error.message); }
     }
-    return { choose, editor, dismiss, card, panel, controls, video, pin };
+    return { choose, editor, dismiss, card, panel, controls, video, pauseVideos, pin };
   }
   root.AutoFlowAccountSales = { create };
 })(window);

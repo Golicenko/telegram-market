@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from .account_video_volume import PublicUploadFiles, VideoAccessLogFilter
 
 from .config import get_settings
 from .bot import configure_telegram_webhook
@@ -36,6 +37,7 @@ from .support_media import router as support_media_router
 
 settings = get_settings()
 logger = logging.getLogger("autoflow.api")
+logging.getLogger("uvicorn.access").addFilter(VideoAccessLogFilter())
 
 
 async def run_startup_job(name: str, job) -> None:
@@ -144,7 +146,7 @@ app.add_middleware(
     expose_headers=["X-Chat-Read-Ids"],
 )
 app.add_middleware(ImageUploadGuard)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+app.mount("/uploads", PublicUploadFiles(directory=UPLOAD_DIR), name="uploads")
 app.include_router(router)
 app.include_router(referral_router)
 app.include_router(admin_operations_router)

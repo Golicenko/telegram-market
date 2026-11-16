@@ -49,6 +49,16 @@ function jsonResponse(payload, status = 200) {
   };
 }
 
+test('authenticated binary video PUT preserves the caller MIME and raw body', async () => {
+  let captured;
+  const {api}=loadApi(async (_url,options)=>{captured=options;return jsonResponse({ready:true});},'signed-video-init-data');
+  const body=new Blob(['video bytes'],{type:'video/mp4'});
+  await api.request('/account-videos/isolated/content',{method:'PUT',headers:{'Content-Type':'video/mp4'},body,retries:0});
+  assert.equal(captured.headers['Content-Type'],'video/mp4');
+  assert.equal(captured.headers['X-Telegram-Init-Data'],'signed-video-init-data');
+  assert.equal(captured.body,body);
+});
+
 test('private photo blobs retain signed auth, never parse as JSON, and keep receipt headers out of fetch options', async () => {
   const blob=new Blob(['private jpeg'],{type:'image/jpeg'});let captured,receipt;
   const {api}=loadApi(async (_url,options)=>{captured=options;return {

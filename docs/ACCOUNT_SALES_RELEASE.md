@@ -30,7 +30,31 @@ administrator decisions. No automatic payout or complaint-only refund was added.
    https://olzhass.net/Car_Parking_Multiplayer-2_EULA.html .
 2. Back up the database, rehearse migration 0055 in a disposable copy and check
    the existing car catalogue and balances. Never test with real payments.
-3. Provision a PRIVATE S3-compatible bucket. Configure `ACCOUNT_S3_ENDPOINT`
+3. Use the existing application Railway Volume (production mount verified as
+   `/app/backend/uploads`, capacity 5 GB). With `ACCOUNT_VIDEO_STORAGE=auto`,
+   `RAILWAY_VOLUME_MOUNT_PATH` is detected automatically when S3 is not set.
+   Videos live in its private `.account-videos` directory; the legacy public
+   `/uploads` mount explicitly rejects this directory. No new bucket, paid
+   resource, database video blob or migration is required. For a different
+   persistent mount use `ACCOUNT_VIDEO_VOLUME_DIR`; do not point at ephemeral
+   container storage. Playback uses a one-hour encrypted capability, scoped to
+   the authenticated viewer and immutable asset; it works without cookies in
+   Telegram Web embeds. Native Range streaming rechecks the viewer/asset ACL.
+   No Telegram initData, bot token or account credentials appear in media URLs.
+   The capability itself is access-sensitive: application access logs redact
+   the stream query, responses are no-store/no-referrer. Do not retain signed
+   query strings in proxy logs. A viewer can share/download media while access
+   is valid; this is not DRM or a guarantee against screen recording.
+   Uploads are bounded to 100 MB by default, two concurrent streams per process,
+   with size/container validation, timeout, free-space reserve and immutable
+   content-hash final files. A repeated identical PUT is safe; replacing a ready
+   video is rejected. Monitor volume capacity, back it up, and keep one app
+   replica unless migrating to shared object storage. Controlled failed uploads
+   remove their temporary files; a hard process kill can leave `.part` files or
+   an unreferenced final file requiring owner-reviewed housekeeping. Do not
+   delete referenced media to free space.
+
+   Alternatively retain PRIVATE S3-compatible storage. Configure `ACCOUNT_S3_ENDPOINT`
    (HTTPS), `ACCOUNT_S3_REGION`, `ACCOUNT_S3_BUCKET`, `ACCOUNT_S3_ACCESS_KEY`,
    `ACCOUNT_S3_SECRET_KEY` via the deployment secret manager. Least privileges:
    Get/Head/Put/Copy on the two account prefixes only. No public listing/access.
@@ -83,7 +107,9 @@ reconstructed. Already cached public images cannot be made unseen retroactively.
 
 - GET `/api/account-publication-rules`
 - POST/PATCH `/api/account-products[/{listing_id}]`
-- POST `/api/account-videos`, POST `/{id}/complete`, GET `/{id}/play`
+- POST `/api/account-videos`, PUT `/{id}/content` (volume),
+  POST `/{id}/complete`, GET `/{id}/play`, GET/HEAD `/{id}/stream` (volume).
+  Existing S3 assets retain their provider without a data migration.
 - POST `/api/account-products/{id}/pin`, GET `/api/account-pins/{id}`
 - POST `/api/account-deals/{id}/credentials` (buyer only, no-store)
 - POST `/api/account-deals/{id}/confirm` (`checked_access=true`)
@@ -96,7 +122,9 @@ reconstructed. Already cached public images cannot be made unseen retroactively.
 ## Rollback
 
 Disable NEW account sales with the feature flag in this account-aware release;
-preserve keys, bucket and the additive schema. Continue existing obligations,
+preserve keys, video volume/bucket and the additive schema. Do not roll back to
+an S3-only binary after accepting volume videos: it cannot play those assets.
+Continue existing obligations,
 grant access, disputes and pending payment reconciliation. An old car-only binary
 cannot serialize account rows with NULL car stats, so do not roll back to it once
 accounts exist. Never drop grant/key data to roll back. The migration downgrade

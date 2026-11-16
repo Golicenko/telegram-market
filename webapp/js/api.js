@@ -167,7 +167,7 @@
     const headers = { ...(includeAuth ? authHeaders() : { Accept: "application/json" }), ...(fetchOptions.headers || {}) };
     const errorId = requestErrorId();
     headers["X-AutoFlow-Error-ID"] = errorId;
-    if (fetchOptions.body && !(fetchOptions.body instanceof FormData)) headers["Content-Type"] = "application/json";
+    if (fetchOptions.body && !(fetchOptions.body instanceof FormData) && !Object.keys(headers).some(key => key.toLowerCase() === "content-type")) headers["Content-Type"] = "application/json";
 
     for (let attempt = 1; attempt <= maxRetries + 1; attempt += 1) {
       const controller = typeof AbortController === "function" ? new AbortController() : null;
