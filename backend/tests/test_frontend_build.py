@@ -8,6 +8,8 @@ def test_build_script_stamps_all_assets_with_one_content_hash(tmp_path, monkeypa
     (webapp / "css").mkdir(parents=True)
     (webapp / "js").mkdir()
     (webapp / "css" / "style.css").write_text("body{}", encoding="utf-8")
+    (webapp / "css" / "account-sales.css").write_text("account{}", encoding="utf-8")
+    (webapp / "js" / "account-sales.js").write_text("account-sales", encoding="utf-8")
     (webapp / "js" / "api.js").write_text("api", encoding="utf-8")
     (webapp / "js" / "chat-media.js").write_text("chat-media", encoding="utf-8")
     (webapp / "js" / "app.js").write_text("app", encoding="utf-8")
@@ -23,6 +25,8 @@ def test_build_script_stamps_all_assets_with_one_content_hash(tmp_path, monkeypa
     index.write_text(
         '<meta name="autoflow-build" content="source">'
         '<link href="css/style.css?v=old">'
+        '<link href="css/account-sales.css?v=old">'
+        '<script src="js/account-sales.js?v=old"></script>'
         '<script src="js/api.js?v=old"></script>'
         '<script src="js/chat-media.js?v=old"></script>'
         '<script src="js/referrals.js?v=old"></script>'

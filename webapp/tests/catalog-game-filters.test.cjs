@@ -26,7 +26,7 @@ function setup() {
       { ...base, id: 'unique-unknown', game_version: 'unrecognized' },
     ],
   };
-  const context = { elements, state, renders: 0, renderListings() { this.renders++; } };
+  const context = { elements, state, marketProductKind: "", renders: 0, renderListings() { this.renders++; } };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('function getFilteredRegular()'), source.indexOf('function listingGameLabel(')), context);
   vm.runInContext(source.slice(source.indexOf('function resetFilters()'), source.indexOf('function renderProfile()')), context);
@@ -34,6 +34,18 @@ function setup() {
 }
 
 const ids = items => Array.from(items, item => item.id);
+
+test('account/car selection combines game filters without changing VIP order', () => {
+  const context = setup();
+  context.state.regular.unshift({ ...context.state.regular[0], id: 'account-vip', product_kind: 'account' });
+  context.marketProductKind = 'account';
+  context.elements.marketGameFilter.value = 'car_parking_2';
+  assert.deepEqual(ids(context.getFilteredRegular()), ['account-vip']);
+  context.elements.marketGameFilter.value = 'car_parking_1';
+  assert.deepEqual(ids(context.getFilteredRegular()), []);
+  context.marketProductKind = 'car'; context.elements.marketGameFilter.value = '';
+  assert.deepEqual(ids(context.getFilteredRegular()), ['cp2-vip', 'cp1', 'cp2', 'unknown', 'cp2-audi']);
+});
 
 test('default КП includes both games and unknown legacy values without reordering VIP', () => {
   const context = setup();

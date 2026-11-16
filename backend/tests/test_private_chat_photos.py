@@ -260,18 +260,12 @@ async def test_photo_migration_preserves_existing_text_and_money():
                 )
             )
             await connection.execute(
-                Listing.__table__.insert().values(
-                    id=lid,
-                    seller_id=uid,
-                    listing_type="regular",
-                    game_version="car_parking_1",
-                    brand="Existing",
-                    model="Car",
-                    power_hp=1,
-                    max_speed_kph=1,
-                    description="Existing",
-                    price_af_coins=1,
-                )
+                # Historical schema has no subtype/video columns. Do not use
+                # current ORM defaults to construct a pre-0054 record.
+                text(
+                    "INSERT INTO listings(id,seller_id,listing_type,game_version,brand,model,power_hp,max_speed_kph,description,price_af_coins) VALUES (:id,:uid,'regular','car_parking_1','Existing','Car',1,1,'Existing',1)"
+                ),
+                {"id": lid, "uid": uid},
             )
             await connection.execute(
                 Conversation.__table__.insert().values(

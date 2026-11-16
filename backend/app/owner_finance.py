@@ -21,12 +21,14 @@ from .withdrawal_support import profile_url, validated_username
 router = APIRouter(prefix="/api/admin/finance", tags=["owner-finance"])
 
 LABELS = {
-    "car_turnover": "Оплаченные автомобили — оборот, не доход платформы",
+    "car_turnover": "Оплаченные автомобили и аккаунты — оборот, не доход платформы",
     "training_turnover": "Оплаченные обучения — оборот",
     "publication": "Опубликованные платные объявления",
     "vip": "VIP и продления — окончательное списание AF",
     "car_commission": "Комиссия завершённых сделок",
-    "owner_car": "Завершённые продажи автомобилей владельца",
+    "owner_car": "Завершённые продажи автомобилей и аккаунтов владельца",
+    "account_publication": "Дополнительные публикации аккаунтов — AF",
+    "account_vip": "VIP аккаунтов — Stars",
     "training_platform": "Обучение — доля платформы после расчёта",
     "training_author": "Обучение — зачислено другим авторам",
     "training_owner": "Обучение — зачислено владельцу как автору",
@@ -34,7 +36,7 @@ LABELS = {
     "stars_received": "Подтверждённые поступления Stars — не прибыль",
     "stars_returned_cohort": "Возвращённые Stars из поступлений периода (не дата возврата)",
     "withdrawal_stars": "Завершённые ручные выплаты Stars",
-    "car_refund": "Возвраты покупателям автомобилей",
+    "car_refund": "Возвраты покупателям автомобилей и аккаунтов",
     "training_refund": "Возвраты покупателям обучения",
     "referral_bonus": "Зачислены невыводимые реферальные бонусы",
     "adjustment": "Корректировки AF администратором",
@@ -75,8 +77,9 @@ def operations(owner_id):
         wt.amount == training.seller_payout).exists()
     paid_receipt = payment.raw_payload["is_test"].astext.is_distinct_from("true")
     known_receipt = payment.status.in_(("credited", "publication", "publication_review", "publication_extra_refund",
-        "publication_extra_refunded", "publication_refunded", "vip_extra_refund", "vip_extra_refunded"))
-    returned = payment.status.in_(("publication_extra_refunded", "publication_refunded", "vip_extra_refunded"))
+        "publication_extra_refunded", "publication_refunded", "vip_extra_refund", "vip_extra_refunded",
+        "account_vip", "account_vip_refund_pending", "account_vip_refunded"))
+    returned = payment.status.in_(("publication_extra_refunded", "publication_refunded", "vip_extra_refunded", "account_vip_refunded"))
     paid_at = func.coalesce(payment.processed_at, payment.created_at)
     pub = row("publication", payment, paid_at, payment.xtr_amount, payment.user_id,
         payment.status == "publication", paid_receipt, PublicationDraft.status == "published",
@@ -101,6 +104,8 @@ def operations(owner_id):
         row("training_turnover", training, training.created_at, training.price_af_coins, training.buyer_id,
             confirmed_purchase(), category="turnover"),
         pub,
+        row("account_publication", wt, wt.created_at, -wt.amount, wt.user_id, wt.transaction_type == "account_publication", wt.amount < 0, category="platform_income"),
+        row("account_vip", payment, paid_at, payment.xtr_amount, payment.user_id, payment.status == "account_vip", paid_receipt, unit="Stars", category="platform_income"),
         row("vip", wt, wt.created_at, -wt.amount, wt.user_id, wt.transaction_type == "listing_promotion", wt.amount < 0, category="platform_income"),
         row("car_commission", wt, wt.created_at, -wt.amount, wt.user_id,
             wt.transaction_type == "platform_commission", wt.related_deal_id.is_not(None), wt.amount <= 0, category="platform_income"),

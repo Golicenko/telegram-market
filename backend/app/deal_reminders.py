@@ -75,6 +75,8 @@ async def request_reminder(session, actor, deal_id, kind, request_id):
     now = datetime.now(UTC)
     async with session.begin():
         deal = await seller_deal(session, actor, deal_id, True)
+        if deal.product_kind == "account":
+            raise HTTPException(409, "Аккаунт выдаётся автоматически; напоминания о передаче машины не применяются")
         previous = await session.scalar(select(DealEvent).where(DealEvent.deal_id == deal.id, DealEvent.request_id == request_id))
         if previous:
             if previous.actor_id != actor.id or previous.event_type != f"manual_{kind}_reminder":

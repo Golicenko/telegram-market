@@ -122,7 +122,7 @@ async def admin_nonfinancial_action(session, admin, deal_id, action, reason, req
             if active_ticket: raise HTTPException(409, "Сначала закройте обращение поддержки с объяснением решения")
             deal.status = "transfer_in_progress" if deal.transfer_started_at else "seller_contacted"
             deal.needs_admin_review_at = None
-            if deal.transfer_started_at:
+            if deal.transfer_started_at and deal.product_kind != "account":
                 schedule_next_reminder(deal, datetime.now(UTC))
             elif deal.seller_response_deadline:
                 # Explicitly resumed disputes must not inherit an already expired deadline.

@@ -110,12 +110,14 @@ class Listing(Base, TimestampMixin):
     seller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     client_request_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     listing_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    product_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="car", server_default="car", index=True)
+    video_asset_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("account_videos.id", ondelete="RESTRICT"))
     game_version: Mapped[str] = mapped_column(String(24), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", index=True)
     brand: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(Text, nullable=False)
-    power_hp: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    max_speed_kph: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    power_hp: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    max_speed_kph: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     price_af_coins: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     delivery_time_estimate: Mapped[str] = mapped_column(String(24), nullable=False, default="up_to_1h")
@@ -131,7 +133,8 @@ class Listing(Base, TimestampMixin):
         CheckConstraint("game_version IN ('car_parking_1','car_parking_2')", name="ck_listings_game_version"),
         CheckConstraint("status IN ('active','paused','reserved','sold','deleted')", name="ck_listings_status"),
         CheckConstraint("price_af_coins >= 1", name="ck_listings_min_price"),
-        CheckConstraint("power_hp > 0 AND max_speed_kph > 0", name="ck_listings_positive_stats"),
+        CheckConstraint("(product_kind = 'car' AND power_hp IS NOT NULL AND max_speed_kph IS NOT NULL AND power_hp > 0 AND max_speed_kph > 0) OR (product_kind = 'account' AND listing_type = 'regular' AND power_hp IS NULL AND max_speed_kph IS NULL)", name="ck_listings_positive_stats"),
+        CheckConstraint("product_kind IN ('car','account')", name="ck_listings_product_kind"),
         CheckConstraint(
             "delivery_time_estimate IN ('up_to_15m','up_to_30m','up_to_1h','up_to_3h','up_to_6h','up_to_12h','up_to_24h')",
             name="ck_listings_delivery_time",
@@ -140,6 +143,52 @@ class Listing(Base, TimestampMixin):
         UniqueConstraint("seller_id", "client_request_id", name="uq_listing_seller_client_request"),
         Index("ix_listings_type_status_created", "listing_type", "status", "created_at"),
     )
+
+
+class AccountVideo(Base):
+    __tablename__ = "account_videos"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    object_key: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    content_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    ready: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AccountSecret(Base):
+    __tablename__ = "account_secrets"
+    listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"), primary_key=True)
+    key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AccountGrant(Base):
+    __tablename__ = "account_grants"
+    deal_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("deals.id", ondelete="RESTRICT"), primary_key=True)
+    key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    first_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    open_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AccountPin(Base):
+    __tablename__ = "account_pins"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    invoice_url: Mapped[str | None] = mapped_column(Text)
+    checkout_query_id: Mapped[str | None] = mapped_column(String(255))
+    checkout_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("star_payments.id", ondelete="RESTRICT"), unique=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", server_default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (UniqueConstraint("user_id", "request_id", name="uq_account_pin_request"),)
 
 
 class ListingImage(Base):
@@ -189,6 +238,7 @@ class UploadedImage(Base):
     __tablename__ = "uploaded_images"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    support_private: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     content_type: Mapped[str] = mapped_column(String(64), nullable=False)
     data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -394,6 +444,7 @@ class Deal(Base, TimestampMixin):
     __tablename__ = "deals"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"), nullable=False)
+    product_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="car", server_default="car")
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("conversations.id", ondelete="SET NULL"), index=True)
     buyer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     seller_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
@@ -586,6 +637,7 @@ class ConversationMessage(Base):
         nullable=True,
     )
     client_message_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    account_card_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("account_grants.deal_id", ondelete="RESTRICT"))
     media_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("private_chat_images.id", ondelete="RESTRICT"), unique=True)
     media_width: Mapped[int | None] = mapped_column(Integer)
     media_height: Mapped[int | None] = mapped_column(Integer)

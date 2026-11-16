@@ -1332,7 +1332,10 @@ async def upload_image(
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    purpose: str = "listing",
 ):
+    if purpose not in {"listing", "support"}:
+        raise HTTPException(422, "Неизвестное назначение изображения")
     max_bytes = get_settings().upload_max_bytes
     owner_id, telegram_id = user.id, user.telegram_id
     error_id = request.headers.get("X-AutoFlow-Error-ID", "")[:16] or None
@@ -1363,13 +1366,14 @@ async def upload_image(
         # Content-addressed per owner: a lost HTTP response or concurrent retry
         # cannot create another stored copy. The existing UUID PK is the atomic
         # uniqueness constraint; no schema or financial migration is required.
-        image_id = uuid.uuid5(owner_id, hashlib.sha256(normalized).hexdigest())
+        image_id = uuid.uuid5(owner_id, ("support:" if purpose == "support" else "") + hashlib.sha256(normalized).hexdigest())
         existing = await session.get(UploadedImage, image_id)
         if existing:
-            return {"url": f"/api/media/{existing.id}"}
+            return {"url": f"/api/support/images/{existing.id}" if purpose == "support" else f"/api/media/{existing.id}"}
         image = UploadedImage(
             id=image_id,
             owner_id=owner_id,
+            support_private=purpose == "support",
             content_type=content_type,
             data=normalized,
             size_bytes=len(normalized),
@@ -1386,7 +1390,7 @@ async def upload_image(
             "image_upload_completed %s",
             json.dumps({"error_id": error_id, "telegram_user_id": telegram_id, "stage": "completed", "file_mime": (file.content_type or "unknown")[:80], "file_size": size, **decoded, "prepared_size": len(normalized), "image_width": width, "image_height": height, "duration_ms": int((datetime.now(UTC) - started_at).total_seconds() * 1000)}, ensure_ascii=False),
         )
-        return {"url": f"/api/media/{image_id}"}
+        return {"url": f"/api/support/images/{image_id}" if purpose == "support" else f"/api/media/{image_id}"}
     except Exception as exc:
         diagnostic_logger.warning(
             "image_upload_failed %s",
@@ -1409,7 +1413,7 @@ def image_preview(content: bytes) -> bytes:
 @router.get("/media/{image_id}", response_class=Response)
 async def uploaded_image(image_id: uuid.UUID, session: AsyncSession = Depends(get_session), preview: bool = False):
     image = await session.get(UploadedImage, image_id)
-    if not image:
+    if not image or image.support_private:
         raise HTTPException(status_code=404, detail="Фотография не найдена")
     content = image.data
     if preview:
@@ -1580,11 +1584,19 @@ async def list_listings(
     min_speed: int | None = Query(default=None, gt=0),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    product_kind: str | None = None,
+    game_version: str | None = None,
 ):
+    if product_kind not in {None, "car", "account"} or game_version not in {None, "car_parking_1", "car_parking_2"}:
+        raise HTTPException(422, "Неизвестный фильтр товара или игры")
     if min_price is not None and max_price is not None and min_price > max_price:
         raise HTTPException(status_code=422, detail="Цена от не может быть больше цены до")
     await expire_promotions(session)
     query = select(Listing).where(Listing.listing_type == listing_type, Listing.status.in_(["active", "reserved"]))
+    if product_kind:
+        query = query.where(Listing.product_kind == product_kind)
+    if game_version:
+        query = query.where(Listing.game_version == game_version)
     if brand:
         query = query.where(Listing.brand == brand)
     if min_price is not None:
@@ -3318,6 +3330,7 @@ async def admin_platform_financial_summary(
     )).one()
     return {
         "completed_deals": int(completed_count or 0),
+        "completed_account_sales": int(await session.scalar(select(func.count(Deal.id)).where(Deal.status == "completed", Deal.product_kind == "account")) or 0),
         "platform_commission_af_coins": Decimal(commission or 0),
     }
 
@@ -3576,6 +3589,8 @@ async def create_support_ticket(
             screenshot_url=payload.screenshot_url,
             unread_by_admin=True,
         )
+        from .support_media import validate_attachment
+        await validate_attachment(session, payload.screenshot_url, user.id)
         session.add(ticket)
         await session.flush()
         session.add(SupportMessage(ticket_id=ticket.id, sender_id=user.id, body=payload.message.strip(), client_request_id=payload.client_request_id))
@@ -3909,9 +3924,14 @@ async def profile(user: User = Depends(get_current_user), session: AsyncSession 
             ordinary_last_message_at.is_not(None),
         ).order_by(ordinary_last_message_at.desc(), Conversation.created_at.desc())
     )).all())
+    account_receipt = select(Deal.id).where(
+        Deal.id == Conversation.deal_id, Deal.conversation_id == Conversation.id,
+        Deal.product_kind == "account", Deal.status == "completed",
+        Deal.completed_at > datetime.now(UTC) - timedelta(days=get_settings().account_secret_retention_days),
+    ).correlate(Conversation).exists()
     deal_thread_values = list((await session.scalars(
         select(Conversation).where(
-            active_thread_clause(),
+            or_(active_thread_clause(), account_receipt),
             or_(Conversation.buyer_id == user.id, Conversation.seller_id == user.id),
         ).order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc())
     )).all())
@@ -3988,6 +4008,14 @@ async def telegram_webhook(
     pre_checkout = update.get("pre_checkout_query") or {}
     if pre_checkout.get("id"):
         sender = pre_checkout.get("from") or {}
+        from .account_pins import PREFIX as ACCOUNT_PIN_PREFIX, validate_checkout as validate_account_pin
+        if str(pre_checkout.get("invoice_payload") or "").startswith(ACCOUNT_PIN_PREFIX):
+            if not expected_secret:
+                raise HTTPException(503, "Платёжный webhook не настроен")
+            accepted, error_message = await validate_account_pin(session, int(sender.get("id") or 0),
+                str(pre_checkout["invoice_payload"]), str(pre_checkout.get("currency")), int(pre_checkout.get("total_amount") or 0), str(pre_checkout["id"]))
+            await answer_pre_checkout_query(pre_checkout["id"], accepted, error_message)
+            return {"ok": True}
         from .promotions import PREFIX as VIP_PREFIX, validate_checkout as validate_vip_checkout
         if str(pre_checkout.get("invoice_payload") or "").startswith(VIP_PREFIX):
             if not expected_secret:
@@ -4174,6 +4202,12 @@ async def telegram_webhook(
         if await handle_message(session, update):
             return {"ok": True}
     if payment and sender.get("id"):
+        from .account_pins import PREFIX as ACCOUNT_PIN_PREFIX, receive_payment as receive_account_pin
+        if str(payment.get("invoice_payload") or "").startswith(ACCOUNT_PIN_PREFIX):
+            if not expected_secret:
+                raise HTTPException(503, "Платёжный webhook не настроен")
+            await receive_account_pin(session, int(sender["id"]), payment)
+            return {"ok": True}
         from .promotions import PREFIX as VIP_PREFIX, receive_payment as receive_vip_payment, fulfill as fulfill_vip
         if str(payment.get("invoice_payload") or "").startswith(VIP_PREFIX):
             if not expected_secret:

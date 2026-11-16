@@ -26,6 +26,7 @@ if (!base || new URL(base).hostname!=='127.0.0.1') throw Error('Isolated localho
     await page.route('**/api/profile',route=>published?route.fulfill({status:503,json:{detail:'isolated refresh failure'}}):route.continue());
     await page.goto(base);
     await page.locator('.catalog-add[data-open-add]').click();
+    await page.getByRole('button',{name:/🚗 Автомобиль —/}).click();
     const form=page.locator('#carForm');
     await form.locator('[name=game_version][value=car_parking_1]').check({force:true});
     await form.locator('[name=brand]').fill('VIP regression test');

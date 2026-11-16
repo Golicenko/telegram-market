@@ -69,6 +69,7 @@ const server = http.createServer((req, res) => {
       assert.equal(new URL(await media.locator('img').getAttribute('src')).pathname,'/api/media/photo','real photo URL is not replaced by frame');
       await page.screenshot({path:path.join(__dirname,`media-help-market-${width}.png`),animations:'disabled'});
       await page.locator('.catalog-add[data-open-add]').click();
+      await page.getByRole('button',{name:/🚗 Автомобиль —/}).click();
       const form=page.locator('#carForm');
       await form.locator('[name=game_version][value=car_parking_2]').check({force:true});
       await form.locator('[name=brand]').fill('Test');await form.locator('[name=power_hp]').fill('300');await form.locator('[name=max_speed_kph]').fill('250');
@@ -95,7 +96,7 @@ const server = http.createServer((req, res) => {
       await page.locator('.bottom-nav [data-nav-target=profile]').click();
       await page.locator('.profile-main-actions [data-open-info]').click();
       await page.waitForFunction(()=>document.getElementById('helpRulesStatus').textContent.includes('получены с сервера'));
-      assert.equal(await page.locator('#helpArticles details').count(),14);
+      assert.equal(await page.locator('#helpArticles details').count(),16);
       await page.locator('#help-withdraw summary').click();
       assert((await page.locator('#help-withdraw').innerText()).includes('30%'));
       await page.waitForFunction(()=>!document.getElementById('toast').classList.contains('is-visible'));

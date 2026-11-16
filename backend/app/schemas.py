@@ -145,6 +145,8 @@ class ListingUpdate(BaseModel):
 
 
 class ListingOut(ORMModel):
+    product_kind: str = "car"
+    video_asset_id: uuid.UUID | None = None
     game_version: GameVersion
     id: uuid.UUID
     seller_id: uuid.UUID
@@ -152,8 +154,8 @@ class ListingOut(ORMModel):
     status: str
     brand: str
     model: str
-    power_hp: int
-    max_speed_kph: int
+    power_hp: int | None
+    max_speed_kph: int | None
     description: str
     price_af_coins: Decimal
     delivery_time_estimate: str
@@ -175,6 +177,7 @@ class ListingEngagementOut(BaseModel):
 
 
 class DealOut(ORMModel):
+    product_kind: str = "car"
     needs_admin_review_at: datetime | None = None
     id: uuid.UUID
     listing_id: uuid.UUID
@@ -450,6 +453,7 @@ class TrainingPurchaseStatusUpdate(BaseModel):
 
 
 class ConversationMessageOut(ORMModel):
+    account_card_id: uuid.UUID | None = None
     id: uuid.UUID
     conversation_id: uuid.UUID
     deal_id: uuid.UUID | None = None
@@ -625,7 +629,7 @@ class SupportTicketCreate(BaseModel):
 
 class DealSupportCaseCreate(BaseModel):
     message: str = Field(min_length=2, max_length=4000)
-    screenshot_url: str = Field(min_length=1, max_length=2000)
+    screenshot_url: str = Field(default="", max_length=2000)
     client_request_id: uuid.UUID
 
 

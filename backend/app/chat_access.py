@@ -40,6 +40,13 @@ async def require_active_chat(session, conversation, actor):
         Conversation.id == conversation.id, active_thread_clause(),
     ))
     if not active:
+        # Read-only receipt history during the account credential grace period.
+        # Mutation commands still reject archived conversations independently.
+        if conversation.deal_id:
+            from .account_sales import accessible
+            deal = await session.get(Deal, conversation.deal_id)
+            if deal and deal.status == "completed" and accessible(deal):
+                return conversation
         raise HTTPException(status_code=409, detail="Чат сделки закрыт или не имеет активного предложения/покупки")
     return conversation
 

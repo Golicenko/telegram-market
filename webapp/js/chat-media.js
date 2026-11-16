@@ -93,5 +93,12 @@
     try{const blob=await api.request(path+"?preview=false",{responseType:"blob",signal:controller?.signal,retries:0});if(!dialog.open||scope!==captured)return;url=URL.createObjectURL(blob);img.src=url;}
     catch(error){if(dialog.open){status.textContent="Не удалось загрузить фото. Закройте просмотр и попробуйте ещё раз.";}}
   }
-  root.AutoFlowChatMedia={mount,leave,dismiss,image,take,hasSelection:()=>selected.length>0};
+  function privateImage(path, client){
+    api=client;
+    const box=button("",()=>{},"Открыть фотографию обращения");box.className="chat-photo";
+    const img=node("img");img.alt="Фотография обращения";img.loading="lazy";img.decoding="async";img.dataset.photoPath=path+"?preview=true";
+    box.append(img);box.onclick=()=>{if(box.classList.contains("has-error")){loadThumbnail(img);return;}void openViewer(path);};
+    requestAnimationFrame(()=>loadThumbnail(img));return box;
+  }
+  root.AutoFlowChatMedia={mount,leave,dismiss,image,privateImage,take,hasSelection:()=>selected.length>0};
 })(window);

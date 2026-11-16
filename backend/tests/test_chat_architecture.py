@@ -271,6 +271,9 @@ class FinancialSummaryResult:
 
 
 class FinancialSummarySession:
+    async def scalar(self, statement):
+        return 1
+
     async def execute(self, statement):
         self.statement = statement
         return FinancialSummaryResult()
@@ -285,6 +288,7 @@ async def test_admin_platform_summary_reports_commission_as_positive_platform_in
     )
     assert result == {
         "completed_deals": 3,
+        "completed_account_sales": 1,
         "platform_commission_af_coins": Decimal("90"),
     }
     assert "deals.status" in str(session.statement)

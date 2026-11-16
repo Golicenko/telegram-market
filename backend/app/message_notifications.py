@@ -83,7 +83,10 @@ async def claim_delivery(session, user_id, now):
                     continue
             if notice.notification_type in {"seller_order_reminder", "deal_created", "seller_order_accepted"}:
                 deal = await session.get(Deal, uuid.UUID(notice.payload["deal_id"]))
-                stale = not deal or deal.status not in {"paid", "seller_contacted"} or delivery_deadline_expired(deal, now)
+                stages = {"paid", "seller_contacted"}
+                if deal and deal.product_kind == "account" and notice.notification_type == "deal_created":
+                    stages = {"transfer_in_progress", "disputed"}
+                stale = not deal or deal.status not in stages or delivery_deadline_expired(deal, now)
                 if not stale and notice.notification_type == "seller_order_reminder":
                     from .seller_orders import utc
                     replied = await session.scalar(select(DealEvent.id).where(DealEvent.deal_id == deal.id,

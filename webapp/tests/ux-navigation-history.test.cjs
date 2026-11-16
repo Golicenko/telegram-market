@@ -34,7 +34,7 @@ test("Profile uses user-facing wallet and navigation labels", () => {
 test("wallet history hides ledger internals and presents understandable events", () => {
   assert.match(script, /function presentWalletTransaction/);
   assert.match(script, /"platform_commission", "purchase_completed"/);
-  assert.match(script, /protection_hold: "🚗 Покупка автомобиля"/);
+  assert.match(script, /protection_hold: "Покупка · средства под защитой"/);
   assert.match(script, /sale_income: "💰 Продажа автомобиля"/);
   assert.match(script, /seller_timeout_refund: "↩️ Возврат"/);
 });

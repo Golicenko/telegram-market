@@ -126,6 +126,8 @@ async def start_order(session, user, payload):
             listing = await session.scalar(select(Listing).where(Listing.id == payload.listing_id).with_for_update())
             if not listing or listing.seller_id != user.id:
                 raise HTTPException(404, "Объявление не найдено")
+            if listing.product_kind == "account":
+                raise HTTPException(409, "Для аккаунтов используется отдельный тариф VIP в Stars")
             if listing.status != "active" or listing.deleted_at is not None:
                 raise HTTPException(409, "Можно закрепить только активное объявление")
             if listing.pinned and listing.pinned_until and listing.pinned_until > datetime.now(UTC):
@@ -457,7 +459,7 @@ async def expire_once():
     async with SessionLocal() as session, session.begin():
         existing = select(VipExpiry.id).where(VipExpiry.listing_id == Listing.id,
             VipExpiry.pinned_until == Listing.pinned_until).exists()
-        listings = (await session.scalars(select(Listing).where(Listing.pinned_until <= now,
+        listings = (await session.scalars(select(Listing).where(Listing.pinned_until <= now, Listing.product_kind == "car",
             Listing.status == "active", Listing.deleted_at.is_(None), ~existing)
             .order_by(Listing.pinned_until, Listing.id).limit(100).with_for_update(skip_locked=True))).all()
         for listing in listings:

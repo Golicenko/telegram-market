@@ -95,6 +95,17 @@ class Settings(BaseSettings):
         return value
 
     debug: bool = False
+    # Fail closed until the owner configures keys, storage and launch approval.
+    account_sales_enabled: bool = False
+    account_secret_keys: dict[str, str] = Field(default_factory=dict, repr=False)
+    account_secret_active_key: str = ""
+    account_secret_retention_days: int = Field(default=1, ge=1, le=30)
+    account_s3_endpoint: str = ""
+    account_s3_region: str = "auto"
+    account_s3_bucket: str = ""
+    account_s3_access_key: str = Field(default="", repr=False)
+    account_s3_secret_key: str = Field(default="", repr=False)
+    account_video_max_bytes: int = Field(default=100*1024*1024, ge=1024, le=250*1024*1024)
     dev_telegram_id: int | None = None
     dev_telegram_name: str = "Local User"
     # Production is same-origin. Local cross-origin values belong in .env, not defaults.
