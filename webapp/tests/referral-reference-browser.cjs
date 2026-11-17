@@ -300,10 +300,14 @@ async function scenario(browser,width,{failure=false}={}) {
     for(const target of ['market','unique','training','profile']){
       await page.locator(`.bottom-nav [data-nav-target="${target}"]`).click();
       await page.locator(`[data-view="${target}"]`).waitFor({state:'visible'});
+      // The existing global reduced-motion rule sets .01ms transitions even
+      // on static controls. Compare the rendered theme after the next paint,
+      // not an intermediate computed color before Chromium commits that frame.
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
       assert.equal(await page.locator('.referral-header-art').isVisible(),false,`${target} never receives the More decoration`);
       assert.equal(await page.evaluate(()=>document.body.classList.contains('more-open')),false);
       if(target!=='profile'){
-        assert.equal(await page.locator('.header-avatar').evaluate(node=>getComputedStyle(node).borderColor),'rgb(7, 139, 234)','original non-More avatar style is restored');
+        assert.equal(await page.locator('.header-avatar').evaluate(node=>getComputedStyle(node).borderColor),'rgb(7, 139, 234)',`${target}: original non-More avatar style is restored`);
         assert.match(await page.locator('#infoButton').evaluate(node=>getComputedStyle(node).backgroundImage),/rgb\(255, 173, 23\)/,'other sections keep the original orange Information button');
       }
     }
