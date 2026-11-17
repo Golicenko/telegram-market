@@ -68,12 +68,12 @@ async function scenario(browser,width,{failure=false}={}) {
   const errors=[],requests=[],financialWrites=[],imageRequests=[];
   page.on('pageerror',error=>errors.push(error.message));
   page.on('request',request=>{if(request.resourceType()==='image')imageRequests.push(request.url());});
-  const user={id:'referral-viewer',telegram_id:725123456,role:'user',first_name:'Александр',last_name:width===414?'ОченьДлиннаяФамилияДляПроверки':'Петров',username:width===320?null:'referral_fixture',photo_url:width===320?null:width===360?'/referral-test-broken-avatar':'/referral-test-avatar.svg'};
+  const user={id:'referral-viewer',telegram_id:725123456,role:'user',first_name:width===390?'Maxim':'Александр',last_name:width===390?null:width===414?'ОченьДлиннаяФамилияДляПроверки':'Петров',username:width===320?null:'referral_fixture',photo_url:width===320?null:width===360?'/referral-test-broken-avatar':'/referral-test-avatar.svg'};
   let invited=0, completed=[false,false,false], balance=width===414?987654321.99:123.45;
   let summaryError=failure, summaryDelay=failure?450:0, shareError=0, summaryRequests=0, shareRequests=0, meRequests=0, navigationMetrics=null;
   const referralUrl='https://t.me/FixtureAutoFlowBot?startapp=Zz9pQ62A';
   const makeWallet=()=>({available_balance:balance,earned_balance:balance,purchased_balance:0,bonus_balance:0,frozen_balance:0});
-  const summary=()=>({referralCode:'Zz9pQ62A',referralUrl,shareText:'Александр приглашает тебя в AutoFlow Market',referralCount:invited,referralLimit:20,commissionPercent:5,canInvite:invited<20,
+  const summary=()=>({referralCode:'Zz9pQ62A',referralUrl,shareText:`${user.first_name} приглашает тебя в AutoFlow Market`,referralCount:invited,referralLimit:20,commissionPercent:5,canInvite:invited<20,
     milestones:targets.map((count,index)=>({count,reward:rewards[index],completed:completed[index]}))});
   await context.route('**/api/**',async route=>{
     const request=route.request(),url=new URL(request.url()),endpoint=url.pathname.slice(4),method=request.method();
@@ -185,6 +185,7 @@ async function scenario(browser,width,{failure=false}={}) {
     }
     await page.locator('#referralContent').waitFor({state:'visible'});
     await page.evaluate(()=>document.fonts.ready);
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     await page.waitForFunction(()=>document.querySelectorAll('#referralMilestones [data-referral-milestone]').length===3);
     await page.evaluate(()=>{window.__originalMilestoneCards=[...document.querySelectorAll('#referralMilestones [data-referral-milestone]')];});
     assert.equal(await page.locator('.referral-milestone.is-newly-complete').count(),0,'initial render never replays a paid reward animation');
@@ -195,7 +196,7 @@ async function scenario(browser,width,{failure=false}={}) {
     assert.equal(await page.locator('.bottom-nav').count(),1);
     assert.deepEqual(await page.locator('.bottom-nav button').evaluateAll(nodes=>nodes.map(node=>node.dataset.navTarget)),['unique','training','market','profile','more']);
     assert.equal(await page.locator('.bottom-nav [aria-current="page"]').getAttribute('data-nav-target'),'more');
-    assert.equal(await page.locator('#headerAvatarName').textContent(),[user.first_name,user.last_name].join(' '));
+    assert.equal(await page.locator('#headerAvatarName').textContent(),[user.first_name,user.last_name].filter(Boolean).join(' '));
     assert.equal(await page.locator('#headerAvatarName').isVisible(),true);
     for(const selector of ['#appHeader','#infoButton','.header-balance','#referralHeaderTopup']){
       const box=await page.locator(selector).boundingBox();
@@ -205,10 +206,19 @@ async function scenario(browser,width,{failure=false}={}) {
       const name=document.getElementById('headerAvatarName').getBoundingClientRect(),wallet=document.querySelector('.header-balance').getBoundingClientRect();
       return name.bottom<=wallet.top||name.top>=wallet.bottom||name.right<=wallet.left-2;
     }),'long header identity never extends behind the wallet');
-    const banner=page.locator('#referralBannerImage');await banner.evaluate(image=>image.decode());
-    assert.equal(await banner.isVisible(),true,'dedicated banner asset is visible in More');
-    assert(['cover','contain'].includes(await banner.evaluate(image=>getComputedStyle(image).objectFit)),'banner preserves image proportions');
-    const bannerUrl=await banner.evaluate(image=>image.currentSrc),bannerReads=imageRequests.filter(url=>url===bannerUrl).length;
+    assert.equal(await page.locator('#referralBannerImage').count(),0,'old city/car banner is removed from the DOM');
+    assert.equal(await page.locator('.referral-header-art').isVisible(),true);
+    assert.equal(await page.locator('.referral-header-monogram').innerText(),'AF');
+    assert.equal(await page.locator('#appHeader .logo').isVisible(),true,'real text logo replaces the old image');
+    assert.equal(await page.locator('.referral-header-art path').count(),2,'only the two fine reference curves are drawn');
+    assert.equal(await page.locator('.header-avatar').evaluate(node=>getComputedStyle(node).borderColor),'rgb(0, 166, 242)');
+    assert.match(await page.locator('#referralHeaderTopup').evaluate(node=>getComputedStyle(node).backgroundImage),/rgb\(23, 44, 61\)/,'topup is navy, not gold');
+    assert(await page.locator('#appHeader').evaluate(header=>{
+      const rect=selector=>header.querySelector(selector).getBoundingClientRect(),wallet=rect('.header-balance'),plus=rect('#referralHeaderTopup'),logo=rect('.logo__market'),info=rect('#infoButton');
+      return plus.left>=wallet.left&&plus.right<=wallet.right&&plus.top>=wallet.top&&plus.bottom<=wallet.bottom
+        && (logo.right<=info.left||logo.bottom<=info.top||logo.top>=info.bottom);
+    }),'plus stays visually inside wallet and Information never overlaps the logo');
+    assert.equal(imageRequests.filter(url=>url.includes('referral-hero-20261020')).length,0,'More never requests the removed city image');
     if(width===320||width===360)await page.waitForFunction(()=>document.getElementById('headerAvatarImage').hidden&&!document.getElementById('headerAvatarFallback').hidden);
     else {await page.locator('#headerAvatarImage').evaluate(image=>image.decode());assert.equal(await page.locator('#headerAvatarImage').isVisible(),true);}
     const milestoneBoxes=await more.locator('[data-referral-milestone]').evaluateAll(nodes=>nodes.map(node=>{const rect=node.getBoundingClientRect();return{x:rect.x,y:rect.y,width:rect.width,height:rect.height};}));
@@ -237,6 +247,7 @@ async function scenario(browser,width,{failure=false}={}) {
     await page.evaluate(()=>window.scrollTo(0,0));await wait(400);
     await page.screenshot({path:path.join(evidence,`referral-count-1-${width}.png`),animations:'disabled'});
     await page.screenshot({path:path.join(evidence,`referral-count-1-${width}-full.png`),fullPage:true,animations:'disabled'});
+    await page.locator('#appHeader').screenshot({path:path.join(evidence,`referral-header-${width}.png`),animations:'disabled'});
     const section=await more.evaluate(view=>{
       const top=view.querySelector('.referral-heading').getBoundingClientRect(),bottom=view.querySelector('.referral-milestones').getBoundingClientRect();
       return{x:top.x,y:top.y,width:top.width,height:bottom.bottom-top.y};
@@ -287,6 +298,21 @@ async function scenario(browser,width,{failure=false}={}) {
     assert.equal(await page.locator('#help-referrals').evaluate(node=>node.open),true,'Information opens existing referral help article');
     await page.clock.fastForward(500);
     await page.evaluate(()=>window.__referralFixture.back());await more.waitFor({state:'visible'});
+    for(const target of ['market','unique','training','profile']){
+      await page.locator(`.bottom-nav [data-nav-target="${target}"]`).click();
+      await page.locator(`[data-view="${target}"]`).waitFor({state:'visible'});
+      // The existing global reduced-motion rule sets .01ms transitions even
+      // on static controls. Compare the rendered theme after the next paint,
+      // not an intermediate computed color before Chromium commits that frame.
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      assert.equal(await page.locator('.referral-header-art').isVisible(),false,`${target} never receives the More decoration`);
+      assert.equal(await page.evaluate(()=>document.body.classList.contains('more-open')),false);
+      if(target!=='profile'){
+        assert.equal(await page.locator('.header-avatar').evaluate(node=>getComputedStyle(node).borderColor),'rgb(7, 139, 234)',`${target}: original non-More avatar style is restored`);
+        assert.match(await page.locator('#infoButton').evaluate(node=>getComputedStyle(node).backgroundImage),/rgb\(255, 173, 23\)/,'other sections keep the original orange Information button');
+      }
+    }
+    await backMore();assert.equal(await page.locator('.referral-header-art').isVisible(),true);
     const beforeNav=summaryRequests,listeners=await page.evaluate(()=>window.__referralFixture.listeners),nativeBackRegistrations=await page.evaluate(()=>window.__referralFixture.backRegistrations),resizeObservers=await page.evaluate(()=>window.__referralFixture.resizeObservers);
     await page.evaluate(()=>{for(let index=0;index<80;index++)document.querySelector(`.bottom-nav [data-nav-target="${['market','more','profile','more'][index%4]}"]`).click();});
     await more.waitFor({state:'visible'});await wait(100);await stableCards();
@@ -296,7 +322,7 @@ async function scenario(browser,width,{failure=false}={}) {
     assert.equal(await page.evaluate(()=>window.__referralFixture.resizeObservers),resizeObservers,'header ResizeObserver is reused instead of created on each tab visit');
     assert.equal(await more.evaluate(node=>node.classList.contains('is-first-open')),false,'returning to More does not replay the initial entrance animation');
     navigationMetrics={switches:80,summaryReads:summaryRequests-beforeNav,addedListeners:(await page.evaluate(()=>window.__referralFixture.listeners))-listeners,addedNativeBackHandlers:(await page.evaluate(()=>window.__referralFixture.backRegistrations))-nativeBackRegistrations,addedResizeObservers:(await page.evaluate(()=>window.__referralFixture.resizeObservers))-resizeObservers};
-    assert.equal(imageRequests.filter(url=>url===bannerUrl).length,bannerReads,'tab navigation reuses the existing banner image');
+    assert.equal(imageRequests.filter(url=>url.includes('referral-hero-20261020')).length,0,'repeated navigation cannot restore the old banner');
     await openReward(3);
     await card(3).click();await modal.waitFor({state:'visible'});
     await page.evaluate(()=>document.querySelector('.bottom-nav [data-nav-target="profile"]').click());await page.locator('[data-view="profile"]').waitFor({state:'visible'});await assertClosed();await backMore();

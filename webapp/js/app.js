@@ -983,7 +983,6 @@ function handleClick(event) {
     if (viewName === "help") void loadHelpRules();
     const viewEvent = { market: "market_viewed", training: "training_list_view", topup: "topup_screen_opened", support: "support_opened" }[viewName];
     if (viewEvent) track(viewEvent);
-    if (viewName === "more") loadReferralBanner();
     if (viewName === "deal-chat") updateChatViewport();
     if (viewName === "withdraw") void loadWithdrawalBalance();
     updateFloatingChatVisibility();
@@ -4014,15 +4013,6 @@ async function hideCurrentConversation() {
     if (!article) return;
     article.open = true;
     article.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
-  }
-
-  function loadReferralBanner() {
-    const banner = document.getElementById("referralBannerImage");
-    if (!banner || banner.getAttribute("src")) return;
-    banner.onload = () => document.body.classList.add("has-referral-art");
-    banner.onerror = () => { document.body.classList.remove("has-referral-art"); banner.removeAttribute("src"); };
-    // No image request at startup in Market/Profile: load once, only in More.
-    banner.src = banner.dataset.referralBannerSrc;
   }
 
   function syncReferralHeader(active) {

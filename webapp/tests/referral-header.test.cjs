@@ -23,3 +23,11 @@ test('older WebViews install one passive resize fallback, not one per visit',()=
   const h=header(false);for(let n=0;n<40;n++){h.sync(true);h.sync(false);}assert.equal(h.observers,0);assert.equal(h.bindings,1);
   h.balance.offsetLeft=200;h.window.resize();assert.equal(h.name.style.maxWidth,'115px');
 });
+
+test('More uses vector/header text only; removed city banner has no loader or image node',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+  assert.doesNotMatch(html,/referralBannerImage|referral-hero-20261020/);
+  assert.doesNotMatch(source,/loadReferralBanner|has-referral-art/);
+  assert.match(html,/class="referral-header-art" aria-hidden="true"/);
+  assert.match(html,/class="referral-header-monogram">AF<\/span>/);
+});
