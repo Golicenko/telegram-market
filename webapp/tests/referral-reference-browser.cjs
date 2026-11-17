@@ -214,6 +214,21 @@ async function scenario(browser,width,{failure=false}={}) {
     assert(Math.max(...milestoneBoxes.map(rect=>rect.height))-Math.min(...milestoneBoxes.map(rect=>rect.height))<=1,'milestones have equal height');
     assert(Math.max(...milestoneBoxes.map(rect=>rect.y))-Math.min(...milestoneBoxes.map(rect=>rect.y))<=1,'three milestone cards stay on one row');
     milestoneBoxes.forEach(rect=>assert(rect.width>=44&&rect.height>=44&&rect.x>=0&&rect.x+rect.width<=width+1));
+    const appearance=await more.evaluate(view=>{
+      const css=selector=>getComputedStyle(view.querySelector(selector));
+      const stats=[...view.querySelector('.referral-stats').children].map(node=>node.getBoundingClientRect());
+      const text=[...view.querySelectorAll('.referral-heading h1 span,.referral-heading p,.referral-commission>span,.referral-count>span,.referral-milestone__title,.referral-milestone__amount,.referral-milestone__status')];
+      return {page:getComputedStyle(document.body).backgroundColor,title:css('.referral-heading h1 span').color,accent:css('.referral-heading h1 span:last-child').color,
+        banner:css('.referral-heading').backgroundImage,card:css('.referral-milestone').backgroundImage,iconVisible:css('.referral-count__icon').display!=='none',
+        statsAligned:Math.abs(stats[0].y-stats[1].y)<1&&Math.abs(stats[0].height-stats[1].height)<1,
+        clipped:text.filter(node=>node.scrollWidth>node.clientWidth+1).map(node=>node.className||node.tagName)};
+    });
+    assert.equal(appearance.page,'rgb(2, 14, 24)','More uses the navy reference canvas');
+    assert.equal(appearance.title,'rgb(246, 248, 250)');assert.equal(appearance.accent,'rgb(255, 179, 27)');
+    assert.match(appearance.banner,/rgb\(8, 27, 41\)/);assert.match(appearance.card,/rgb\(7, 27, 41\)/);
+    assert(appearance.iconVisible,'friend icon stays visible even at 320px');
+    assert(appearance.statsAligned,'commission and friend count stay in the same row');
+    assert.deepEqual(appearance.clipped,[],'reference text and AF amounts are not clipped inside their cards');
     await noOverflow();
     await page.clock.install();
     for(const target of targets)await openReward(target);
@@ -221,6 +236,11 @@ async function scenario(browser,width,{failure=false}={}) {
     await page.evaluate(()=>window.scrollTo(0,0));await wait(400);
     await page.screenshot({path:path.join(evidence,`referral-count-1-${width}.png`),animations:'disabled'});
     await page.screenshot({path:path.join(evidence,`referral-count-1-${width}-full.png`),fullPage:true,animations:'disabled'});
+    const section=await more.evaluate(view=>{
+      const top=view.querySelector('.referral-heading').getBoundingClientRect(),bottom=view.querySelector('.referral-milestones').getBoundingClientRect();
+      return{x:top.x,y:top.y,width:top.width,height:bottom.bottom-top.y};
+    });
+    await page.screenshot({path:path.join(evidence,`referral-navy-section-${width}.png`),clip:section,animations:'disabled'});
     await openReward(3,'x');await openReward(10,'understood');await openReward(20,'backdrop');await openReward(3,'escape');await openReward(10,'native');
     if(width===414)for(let index=0;index<6;index++)await openReward(targets[index%3],index%2?'escape':'backdrop');
     const copy=more.locator('.referral-actions [data-copy-referral]');
