@@ -185,6 +185,7 @@ async function scenario(browser,width,{failure=false}={}) {
     }
     await page.locator('#referralContent').waitFor({state:'visible'});
     await page.evaluate(()=>document.fonts.ready);
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     await page.waitForFunction(()=>document.querySelectorAll('#referralMilestones [data-referral-milestone]').length===3);
     await page.evaluate(()=>{window.__originalMilestoneCards=[...document.querySelectorAll('#referralMilestones [data-referral-milestone]')];});
     assert.equal(await page.locator('.referral-milestone.is-newly-complete').count(),0,'initial render never replays a paid reward animation');
