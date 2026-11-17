@@ -107,6 +107,7 @@ async function scenario(browser,width,{failure=false}={}) {
     invited=count;completed=[...flags];balance=serverBalance;
     await page.clock.fastForward(31000);
     await page.waitForFunction(({count,completed})=>document.getElementById('referralCount').textContent===String(count)&&[...document.querySelectorAll('#referralMilestones [data-referral-milestone]')].every((node,index)=>node.classList.contains('is-complete')===completed[index]),{count,completed});
+    assert(await more.locator('.referral-count').evaluate(node=>[node.children[1],node.children[2]].every(item=>item.scrollWidth<=item.clientWidth+1)),`${width}px friend label/count ${count} stay inside their own grid columns`);
     await page.waitForFunction(expected=>document.querySelector('.header-balance [data-balance]').textContent===expected,balance.toFixed(2));
     await stableCards();await noOverflow();
   };
