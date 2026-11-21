@@ -1791,6 +1791,7 @@ function handleClick(event) {
     if (!listing) return notify("Объявление не найдено");
     if (listing.status !== "active") return notify("Объявление уже недоступно");
     if (state.me?.user.id === listing.seller_id) return notify("Нельзя купить собственное объявление");
+    if (listing.product_kind === "account" && !await accountSales.available()) return;
     const price = Number(listing.effective_price_af_coins ?? listing.price_af_coins);
     state.purchaseFlow = { listing, stage: "confirm", busy: false, intentId: null };
     track("order_checkout_started", listing.id);
@@ -2375,6 +2376,7 @@ function handleClick(event) {
   }
 
   async function deleteListing(id) {
+    if (findListing(id)?.product_kind === "account" && !await accountSales.available()) return;
     if (!(await confirmAction("Удалить объявление? Это действие нельзя отменить."))) return;
     try { await api.request(`/listings/${id}`, { method: "DELETE" }); await refreshMarketplace(); notify("Объявление удалено"); }
     catch (error) { notify(error.message); }

@@ -2,12 +2,16 @@
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from .models import ContentSeenState, Listing, TrainingProduct, User
+from . import account_sales
 
 
 def catalogue(section):
     if section == "training":
         return TrainingProduct, (TrainingProduct.published.is_(True), TrainingProduct.deleted_at.is_(None))
-    return Listing, (Listing.listing_type == "unique", Listing.status.in_(("active", "reserved")), Listing.deleted_at.is_(None))
+    visible = (Listing.listing_type == "unique", Listing.status.in_(("active", "reserved")), Listing.deleted_at.is_(None))
+    if not account_sales.is_enabled():
+        visible += (Listing.product_kind != "account",)
+    return Listing, visible
 
 
 async def next_publication_revision(session):

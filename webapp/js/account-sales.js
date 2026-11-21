@@ -42,6 +42,26 @@
       dialog.append(button("🚗 Автомобиль — продать машину в Car Parking", () => { dialog.close(); openCar(); }, "publish-button account-sale-choice"));
       dialog.append(button("👤 Аккаунт — продать игровой аккаунт", () => { dialog.close(); void editor(); }, "publish-button account-sale-choice"));
     }
+    function unavailable() {
+      const dialog = modal("Эта функция временно недоступна.");
+      dialog.append(node("p", "Следите за обновлениями здесь:"));
+      const link = node("a", "https://t.me/AutoFlowStore");
+      link.href = "https://t.me/AutoFlowStore"; link.target = "_blank"; link.rel = "noopener noreferrer";
+      link.onclick = event => {
+        if (typeof root.Telegram?.WebApp?.openTelegramLink !== "function") return;
+        try { root.Telegram.WebApp.openTelegramLink(link.href); event.preventDefault(); } catch (_) { /* Normal link fallback. */ }
+      };
+      dialog.append(link, button("Понятно", () => dialog.close(), "publish-button"));
+    }
+    async function available() {
+      // Read the server's existing switch, never a separate frontend flag.
+      try {
+        const rules = await api.request("/account-publication-rules", { retries: 0 });
+        if (rules.enabled === true) return rules;
+        unavailable();
+      } catch (error) { notify(error.message); }
+      return null;
+    }
     function explainAutodelivery(rules) {
       const dialog = modal("Как работает автовыдача?"); dialog.classList.add("account-autodelivery-help");
       dialog.append(node("p", "Вы указываете email или логин и пароль игрового аккаунта. Маркет хранит их в зашифрованном виде — в объявлении они не видны."));
@@ -60,9 +80,8 @@
       Object.assign(input, options); label.append(input); form.append(label); return input;
     }
     async function editor(listing = null) {
-      let rules;
-      try { rules = await api.request("/account-publication-rules", { retries: 0 }); if (!rules.enabled) throw new Error("Продажа аккаунтов ещё не включена. Публикация автомобилей доступна как прежде."); }
-      catch (error) { notify(error.message); return; }
+      let rules = await available();
+      if (!rules) return;
       const scope = listing?.id || "new";
       if (draft?.dialog.dataset.busy && draft.scope !== scope) { notify("Дождитесь завершения публикации текущего аккаунта."); return; }
       if (draft?.scope === scope) { draft.updateRules(rules); showEditor?.(draft.dialog, listing); return; }
@@ -303,14 +322,15 @@
     }
     async function pin(listing, alreadyConfirmed = false) {
       try {
-        const rules = await api.request("/account-publication-rules", { retries: 0 });
+        const rules = await available();
+        if (!rules) return;
         if (!alreadyConfirmed && !await prompt("VIP аккаунта", `Закрепить на ${rules.vip_hours} ч. за ${rules.vip_stars} Telegram Stars? Тариф автомобилей не меняется.`, `Оплатить ${rules.vip_stars} ⭐`)) return;
         if (typeof root.Telegram?.WebApp?.openInvoice !== "function") throw new Error("Откройте оплату внутри Telegram");
         const result = await api.request(`/account-products/${listing.id}/pin`, { method: "POST", body: JSON.stringify({ request_id: root.crypto.randomUUID() }), retries: 0 });
         root.Telegram.WebApp.openInvoice(result.invoice_url, async status => { try { const receipt = await api.request(`/account-pins/${result.id}`, { retries: 0 }); await refresh(); notify(receipt.status === "completed" ? "Аккаунт закреплён" : status === "cancelled" || status === "failed" ? "Аккаунт опубликован без VIP. Закрепление можно оплатить позже." : "Проверяем оплату закрепления. Повторно платить не нужно."); } catch (_) { notify("Объявление опубликовано. Статус VIP можно проверить позже в профиле."); } });
       } catch (error) { notify(error.message); }
     }
-    return { choose, editor, dismiss, panel, controls, video, pauseVideos, pin };
+    return { choose, editor, dismiss, panel, controls, video, pauseVideos, pin, available };
   }
   root.AutoFlowAccountSales = { create };
 })(window);

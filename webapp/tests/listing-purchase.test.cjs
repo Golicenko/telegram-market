@@ -8,6 +8,21 @@ const source = fs.readFileSync(path.join(__dirname, "..", "js", "app.js"), "utf8
 const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
 const css = fs.readFileSync(path.join(__dirname, "..", "css", "style.css"), "utf8");
 
+for (const [kind, enabled] of [['account',false],['account',true],['car',false]]) test(`${kind} checkout checks the existing account switch (${enabled}) without affecting cars`,async()=>{
+  const events=[];let checks=0;
+  const listing={id:'cached-or-direct-listing',status:'active',seller_id:'seller',product_kind:kind,price_af_coins:100};
+  const context={state:{regular:[listing],unique:[],me:{user:{id:'buyer'}}},
+    accountSales:{async available(){checks++;return enabled?{enabled:true}:null;}},
+    notify:message=>events.push(message),track:()=>events.push('track'),openDialog:()=>events.push('dialog'),
+    formatNumber:String,coin:()=>({}),document:{createTextNode:value=>value},
+    elements:{purchaseModalTitle:{},purchaseModalText:{},purchaseModalAmount:{replaceChildren(){}},purchaseModalNote:{},purchaseModalAction:{}}};
+  vm.runInNewContext(source.slice(source.indexOf('async function buyNowFlow'),source.indexOf('async function closePurchaseFlow')),context);
+  await context.buyNowFlow(listing.id);
+  assert.equal(checks,kind==='account'?1:0);
+  assert.deepEqual(events,kind==='account'&&!enabled?[]:['track','dialog']);
+  assert.equal(Boolean(context.state.purchaseFlow),kind!=='account'||enabled);
+});
+
 for (const kind of ['car','account']) test(`${kind} purchase reuses success animation once and opens the exact chat without a timer delay`,async()=>{
   const events=[];
   const context={state:{purchaseFlow:{}},elements:{purchaseModal:{open:true,close(){events.push('close');}},successOverlay:{hidden:false}},

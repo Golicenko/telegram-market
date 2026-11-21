@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
+from . import account_sales
 from .auth import get_current_user, require_admin
 from .admin_access import require_support, staff_access
 from .broadcasts import create_admin_broadcast, parse_broadcast_command, run_admin_broadcast
@@ -1593,6 +1594,8 @@ async def list_listings(
         raise HTTPException(status_code=422, detail="Цена от не может быть больше цены до")
     await expire_promotions(session)
     query = select(Listing).where(Listing.listing_type == listing_type, Listing.status.in_(["active", "reserved"]))
+    if not account_sales.is_enabled():
+        query = query.where(Listing.product_kind != "account")
     if product_kind:
         query = query.where(Listing.product_kind == product_kind)
     if game_version:
@@ -1640,6 +1643,7 @@ async def get_listing_details(
     listing = await session.get(Listing, listing_id)
     if not listing or listing.status == "deleted":
         raise HTTPException(status_code=404, detail="Объявление не найдено")
+    await account_sales.require_listing_access(session, listing, user)
     return await listing_out(session, listing, user.id)
 
 
@@ -1652,6 +1656,7 @@ async def record_listing_view(
     listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
     if not listing or listing.status == "deleted":
         raise HTTPException(status_code=404, detail="Объявление не найдено")
+    await account_sales.require_listing_access(session, listing, user)
     if listing.seller_id == user.id:
         return await listing_engagement(session, listing, user.id)
 
@@ -1688,6 +1693,7 @@ async def like_listing(
     listing = await session.get(Listing, listing_id)
     if not listing or listing.status == "deleted":
         raise HTTPException(status_code=404, detail="Объявление не найдено")
+    await account_sales.require_listing_access(session, listing, user)
     if listing.seller_id == user.id:
         raise HTTPException(status_code=403, detail="Нельзя поставить лайк собственному объявлению")
     await session.execute(
@@ -1708,6 +1714,7 @@ async def unlike_listing(
     listing = await session.get(Listing, listing_id)
     if not listing or listing.status == "deleted":
         raise HTTPException(status_code=404, detail="Объявление не найдено")
+    await account_sales.require_listing_access(session, listing, user)
     if listing.seller_id == user.id:
         raise HTTPException(status_code=403, detail="Нельзя менять лайк собственного объявления")
     await session.execute(delete(ListingLike).where(ListingLike.listing_id == listing.id, ListingLike.user_id == user.id))
@@ -1774,6 +1781,8 @@ async def remove_unique_listing(
 
 @router.get("/accounts", response_model=list[AccountListingOut])
 async def list_account_listings(session: AsyncSession = Depends(get_session)):
+    if not account_sales.is_enabled():
+        return []
     return list((await session.scalars(select(AccountListing).where(AccountListing.status == "active").order_by(AccountListing.created_at.desc()))).all())
 
 
@@ -1908,6 +1917,8 @@ async def content_unseen_section(session: AsyncSession, user_id: uuid.UUID, sect
         model = TrainingProduct
     else:
         visible = (Listing.listing_type == "unique", Listing.status.in_(["active", "reserved"]), Listing.deleted_at.is_(None), Listing.content_revision.is_not(None))
+        if not account_sales.is_enabled():
+            visible += (Listing.product_kind != "account",)
         model = Listing
     marker = int(await session.scalar(select(func.coalesce(func.max(model.content_revision), 0)).where(*visible)) or 0)
     unseen = int(await session.scalar(select(func.count(model.id)).where(*visible, model.content_revision > last_seen)) or 0)
@@ -2444,7 +2455,7 @@ async def get_cart(user: User = Depends(get_current_user), session: AsyncSession
     if not listing_ids:
         return []
     listings = list((await session.scalars(select(Listing).where(Listing.id.in_(listing_ids)))).all())
-    by_id = {item.id: item for item in listings}
+    by_id = {item.id: item for item in listings if item.product_kind != "account" or account_sales.is_enabled()}
     return [await listing_out(session, by_id[item_id], user.id) for item_id in listing_ids if item_id in by_id]
 
 
@@ -2453,6 +2464,8 @@ async def add_to_cart(listing_id: uuid.UUID, user: User = Depends(get_current_us
     listing = await session.get(Listing, listing_id)
     if not listing or listing.status != "active":
         raise HTTPException(status_code=409, detail="Listing is not available")
+    if listing.product_kind == "account":
+        account_sales.require_enabled()
     if listing.seller_id == user.id:
         raise HTTPException(status_code=400, detail="You cannot add your own listing to cart")
     if not await session.scalar(select(CartItem.id).where(CartItem.user_id == user.id, CartItem.listing_id == listing_id)):
@@ -2482,14 +2495,16 @@ async def get_favorites(user: User = Depends(get_current_user), session: AsyncSe
     if not listing_ids:
         return []
     listings = list((await session.scalars(select(Listing).where(Listing.id.in_(listing_ids)))).all())
-    by_id = {item.id: item for item in listings}
+    by_id = {item.id: item for item in listings if item.product_kind != "account" or account_sales.is_enabled()}
     return [await listing_out(session, by_id[item_id]) for item_id in listing_ids if item_id in by_id]
 
 
 @router.post("/favorites/{listing_id}", status_code=201)
 async def add_favorite(listing_id: uuid.UUID, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)):
-    if not await session.get(Listing, listing_id):
+    listing = await session.get(Listing, listing_id)
+    if not listing:
         raise HTTPException(status_code=404, detail="Listing not found")
+    await account_sales.require_listing_access(session, listing, user)
     if not await session.scalar(select(Favorite.id).where(Favorite.user_id == user.id, Favorite.listing_id == listing_id)):
         session.add(Favorite(user_id=user.id, listing_id=listing_id))
         await session.commit()

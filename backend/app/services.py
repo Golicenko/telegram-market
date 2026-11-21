@@ -9,6 +9,7 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from . import account_sales
 from .config import get_settings
 from .content_catalog import next_publication_revision
 from .deal_lifecycle import audit_deal, stop_reminders, delivery_deadline_expired, seller_has_accepted, escalate_accepted_delivery
@@ -452,6 +453,8 @@ async def delete_listing(session: AsyncSession, actor: User, listing_id: uuid.UU
             raise HTTPException(status_code=404, detail="Listing not found")
         if actor.role != "admin" and listing.seller_id != actor.id:
             raise HTTPException(status_code=403, detail="You cannot delete this listing")
+        if listing.product_kind == "account":
+            account_sales.require_enabled()
         active_deal = await session.scalar(
             select(Deal.id).where(Deal.listing_id == listing.id, Deal.status.not_in(["completed", "cancelled"]))
         )
@@ -477,8 +480,10 @@ async def set_listing_publication(session: AsyncSession, admin: User, listing_id
         listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update().execution_options(populate_existing=True))
         if not listing or listing.status in {"deleted", "sold", "reserved"}:
             raise HTTPException(status_code=409, detail="Listing publication state cannot be changed")
-        if published and listing.product_kind == "account" and listing.status != "active":
-            raise HTTPException(409, "Повторная публикация аккаунта требует новых данных доступа и проверки лимита")
+        if published and listing.product_kind == "account":
+            account_sales.require_enabled()
+            if listing.status != "active":
+                raise HTTPException(409, "Повторная публикация аккаунта требует новых данных доступа и проверки лимита")
         if published and listing.status != "active" and listing.listing_type == "regular":
             from .publication_quota import require_free_slot
             await require_free_slot(session, seller)
@@ -498,6 +503,7 @@ async def delete_special_listing(session: AsyncSession, admin: User, listing_id:
 
 
 async def create_account_listing(session: AsyncSession, admin: User, payload) -> AccountListing:
+    account_sales.require_enabled()
     async with session.begin():
         account = AccountListing(
             seller_id=admin.id,
@@ -521,6 +527,7 @@ async def create_account_listing(session: AsyncSession, admin: User, payload) ->
 
 
 async def update_account_listing(session: AsyncSession, admin: User, account_id: uuid.UUID, payload) -> AccountListing:
+    account_sales.require_enabled()
     async with session.begin():
         account = await session.scalar(select(AccountListing).where(AccountListing.id == account_id).with_for_update())
         if not account or account.status == "deleted":
@@ -537,6 +544,7 @@ async def update_account_listing(session: AsyncSession, admin: User, account_id:
 
 
 async def delete_account_listing(session: AsyncSession, admin: User, account_id: uuid.UUID) -> None:
+    account_sales.require_enabled()
     async with session.begin():
         account = await session.scalar(select(AccountListing).where(AccountListing.id == account_id).with_for_update())
         if not account or account.status == "deleted":
@@ -1121,6 +1129,7 @@ async def get_or_create_conversation(
         listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
         if not listing or listing.status not in {"active", "reserved", "sold"}:
             raise HTTPException(status_code=404, detail="Listing not found")
+        await account_sales.require_listing_access(session, listing, buyer)
         if listing.seller_id == buyer.id:
             raise HTTPException(status_code=400, detail="You cannot start a conversation with yourself")
         conversation = await session.scalar(
@@ -1165,6 +1174,8 @@ async def _get_or_create_negotiation_conversation_locked(
     listing = await session.scalar(select(Listing).where(Listing.id == listing_id).with_for_update())
     if not listing or listing.status != "active" or listing.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Listing not found")
+    if listing.product_kind == "account":
+        account_sales.require_enabled()
     if listing.seller_id == buyer.id:
         raise HTTPException(status_code=400, detail="You cannot negotiate with yourself")
     conversation = await session.scalar(
@@ -1446,6 +1457,9 @@ async def _create_price_offer_locked(session: AsyncSession, actor: User, convers
         raise HTTPException(status_code=404, detail="Conversation not found")
     if conversation.conversation_type != "deal" or conversation.archived_at is not None:
         raise HTTPException(status_code=409, detail="Предложение цены доступно только в ветке конкретного автомобиля")
+    listing = await session.get(Listing, conversation.listing_id)
+    if listing and listing.product_kind == "account":
+        account_sales.require_enabled()
     if conversation.deal_id:
         deal = await session.get(Deal, conversation.deal_id)
         if deal and deal.status not in {"completed", "cancelled"}:
@@ -1547,6 +1561,8 @@ async def respond_price_offer(session: AsyncSession, actor: User, offer_id: uuid
             listing = await session.scalar(select(Listing).where(Listing.id == offer.listing_id).with_for_update())
             if not listing or listing.status != "active":
                 raise HTTPException(status_code=409, detail="Listing is no longer available")
+            if listing.product_kind == "account":
+                account_sales.require_enabled()
             conversation.listing_id = offer.listing_id
             conversation.accepted_price_af_coins = offer.amount_af_coins
             await session.execute(
@@ -1887,6 +1903,8 @@ async def create_listing_payment_intent(
             raise HTTPException(status_code=409, detail="Объявление уже недоступно")
         if listing.seller_id == user.id:
             raise HTTPException(status_code=400, detail="Нельзя купить собственное объявление")
+        if listing.product_kind == "account":
+            account_sales.require_enabled()
         existing = await session.scalar(
             select(StarPaymentIntent)
             .where(
@@ -1962,7 +1980,8 @@ async def complete_listing_payment_intent(
         if intent.checkout_status in {"listing_unavailable", "failed"}:
             return intent, None, None
         listing = await session.scalar(select(Listing).where(Listing.id == intent.listing_id).with_for_update())
-        if not listing or listing.status != "active" or listing.deleted_at is not None:
+        if (not listing or listing.status != "active" or listing.deleted_at is not None
+                or (listing.product_kind == "account" and not account_sales.is_enabled())):
             intent.checkout_status = "listing_unavailable"
             await create_notification(
                 session,
@@ -2852,6 +2871,8 @@ async def create_star_payment_intent(
         listings = list((await session.scalars(select(Listing).where(Listing.id.in_(cart_listing_ids), Listing.status == "active"))).all())
         if len(listings) != len(cart_listing_ids):
             raise HTTPException(status_code=409, detail="Один из товаров уже недоступен")
+        if any(item.product_kind == "account" for item in listings):
+            account_sales.require_enabled()
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
         total = money(sum((money(item.price_af_coins) for item in listings), Decimal("0")))
         missing = money(total - (wallet.available_balance if wallet else Decimal("0")))
@@ -2916,6 +2937,17 @@ async def validate_star_pre_checkout(
         return False, "Срок действия счёта истёк"
     if intent.xtr_amount != total_amount:
         return False, "Сумма счёта не совпадает"
+    if not account_sales.is_enabled():
+        # Old invoice links must not start a new account order after a pause.
+        # successful_payment is still processed normally if Telegram already
+        # charged the user; completion leaves that top-up in the wallet.
+        ids = [intent.listing_id] if intent.purpose == "listing_checkout" else []
+        if intent.purpose == "cart_checkout":
+            ids = [uuid.UUID(value) for value in (intent.context or {}).get("listing_ids", [])]
+        if ids and await session.scalar(select(Listing.id).where(
+            Listing.id.in_(ids), Listing.product_kind == "account",
+        ).limit(1)):
+            return False, "Эта функция временно недоступна."
     return True, None
 
 
