@@ -7,7 +7,7 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from .account_sales import ready
+from .account_sales import is_enabled, ready
 from .account_video import router
 from .auth import get_current_user
 from .bot import call_bot_api
@@ -119,6 +119,8 @@ async def pin_status(
 
 
 async def validate_checkout(session, telegram_id, payload, currency, amount, query_id):
+    if not is_enabled():
+        return False, "Эта функция временно недоступна."
     try:
         order_id = uuid.UUID(payload.removeprefix(PREFIX))
     except ValueError:
@@ -200,7 +202,8 @@ async def receive_payment(session, telegram_id, payment):
                 raise HTTPException(409, "Платёж уже использован")
             return
         activate = bool(
-            not order.payment_id
+            is_enabled()
+            and not order.payment_id
             and order.status == "pending"
             and item
             and item.status == "active"

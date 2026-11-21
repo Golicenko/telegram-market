@@ -78,10 +78,38 @@ class AccountCreate(BaseModel):
     publication_fee_confirmed: bool = False
 
 
+def is_enabled():
+    """One switch for discovery, new orders, publication and account VIP."""
+    return get_settings().account_sales_enabled
+
+
+def require_enabled():
+    if not is_enabled():
+        raise HTTPException(503, {
+            "code": "account_sales_disabled",
+            "message": "Эта функция временно недоступна.",
+        })
+
+
 def ready():
-    if not get_settings().account_sales_enabled:
-        raise HTTPException(503, "Продажа аккаунтов ещё не включена администратором")
+    require_enabled()
     keyring()
+
+
+async def require_listing_access(session, listing, user):
+    # Pausing discovery must not cut off the seller, administration or the
+    # buyer of an existing deal from its history/evidence. No new purchase is
+    # authorised by this read-only exception.
+    if listing.product_kind != "account" or is_enabled():
+        return
+    if listing.seller_id == user.id or user.role == "admin":
+        return
+    participant = await session.scalar(select(Deal.id).where(
+        Deal.listing_id == listing.id,
+        Deal.buyer_id == user.id,
+    ).limit(1))
+    if not participant:
+        require_enabled()
 
 
 def validate_public(payload):
@@ -131,7 +159,7 @@ async def publication_rules(
 ):
     count = await account_count(session, user.id)
     return {
-        "enabled": get_settings().account_sales_enabled,
+        "enabled": is_enabled(),
         "free_limit": 3,
         "active_count": count,
         "price_af": 15,

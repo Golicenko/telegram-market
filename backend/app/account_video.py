@@ -15,11 +15,11 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 from starlette.responses import FileResponse
 
-from .account_sales import router, ready
+from .account_sales import router, ready, is_enabled
 from .auth import get_current_user
 from .config import get_settings
 from .database import AsyncSession, get_session
-from .models import AccountVideo, Listing, User
+from .models import AccountVideo, Deal, Listing, User
 from .account_video_volume import (
     PLAYBACK_TTL,
     object_path,
@@ -199,6 +199,7 @@ async def complete_video(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    ready()
     async with session.begin():
         video = await session.scalar(
             select(AccountVideo).where(AccountVideo.id == video_id).with_for_update()
@@ -281,6 +282,7 @@ async def retry_video(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
+    ready()
     async with session.begin():
         video = await session.scalar(
             select(AccountVideo).where(AccountVideo.id == video_id).with_for_update()
@@ -394,6 +396,13 @@ async def require_playback(session, video, user):
         )
         .limit(1)
     )
+    if not is_enabled() and video.owner_id != user.id and user.role != "admin":
+        # A public preview is hidden during the pause, but an existing buyer
+        # retains access to the purchased item's evidence in the deal.
+        listing = await session.scalar(select(Listing).join(Deal, Deal.listing_id == Listing.id).where(
+            Listing.video_asset_id == video.id,
+            Deal.buyer_id == user.id,
+        ).limit(1))
     if (
         not video.ready
         or user.is_blocked

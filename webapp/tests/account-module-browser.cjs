@@ -23,11 +23,11 @@ const server=http.createServer((req,res)=>{
   await page.setContent(`<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="${base}/css/style.css"><link rel="stylesheet" href="${base}/css/account-sales.css"><button id="launch">Продать</button><section id="editor-view" class="view form-view" hidden style="padding:12px"><header><button id="back">Назад</button><h1 id="editor-title"></h1></header><div id="editor-body"></div></section><main id="card"></main>`);
   await page.addScriptTag({url:base+'/js/account-sales.js'});
   await page.evaluate(width=>{
-   const fixture=window.testAccount={car:0,refresh:0,reveals:0,submissions:[],copies:0,support:0,uploads:0,pinStarts:0,invoices:0,notices:[],activeCount:width===320?0:width===390?3:4,retentionDays:width===430?3:1};
+   const fixture=window.testAccount={enabled:false,channels:[],car:0,refresh:0,reveals:0,submissions:[],copies:0,support:0,uploads:0,pinStarts:0,invoices:0,notices:[],activeCount:width===320?0:width===390?3:4,retentionDays:width===430?3:1};
    Object.defineProperty(navigator,'clipboard',{configurable:true,value:{async writeText(){fixture.copies++;}}});
-   window.Telegram={WebApp:{openInvoice(_url,callback){fixture.invoices++;callback(width===430?'paid':'cancelled');}}};
+   window.Telegram={WebApp:{openTelegramLink(url){fixture.channels.push(url);},openInvoice(_url,callback){fixture.invoices++;callback(width===430?'paid':'cancelled');}}};
    const api={async request(path,options={}){
-    if(path==='/account-publication-rules')return {enabled:true,active_count:fixture.activeCount,free_limit:3,price_af:15,vip_stars:5,vip_hours:24,video_max_bytes:104857600,secret_retention_days:fixture.retentionDays};
+    if(path==='/account-publication-rules')return {enabled:fixture.enabled,active_count:fixture.activeCount,free_limit:3,price_af:15,vip_stars:5,vip_hours:24,video_max_bytes:104857600,secret_retention_days:fixture.retentionDays};
     if(path==='/account-videos')return {id:'00000000-0000-4000-a000-000000000005',upload_url:width===390?'/account-videos/00000000-0000-4000-a000-000000000005/content':'https://isolated-storage.example/upload',upload_transport:width===390?'miniapp':'s3',content_type:'video/mp4'};
     if(path.endsWith('/cancel')){fixture.cancelled=true;return {status:'cancelled'};}
     if(path.endsWith('/status'))return {id:'video-fixture',ready:false,status:'uploading'};
@@ -60,6 +60,25 @@ const server=http.createServer((req,res)=>{
   await page.locator('dialog.account-modal').evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
   await page.screenshot({path:path.join(out,`sale-choice-${width}.png`)});
   await page.getByRole('button',{name:/🚗 Автомобиль/}).click();await waitForModalCleanup(page);assert.equal(await page.evaluate(()=>testAccount.car),1);
+  await page.locator('#launch').click();await page.getByRole('button',{name:/👤 Аккаунт/}).click();
+  const paused=page.getByRole('dialog',{name:'Эта функция временно недоступна.',exact:true});await paused.waitFor();
+  assert.match(await paused.innerText(),/Следите за обновлениями здесь:/);
+  const channel=paused.getByRole('link',{name:'https://t.me/AutoFlowStore',exact:true});
+  assert.equal(await channel.getAttribute('href'),'https://t.me/AutoFlowStore');assert.equal(await channel.getAttribute('target'),'_blank');
+  await channel.click();assert.deepEqual(await page.evaluate(()=>testAccount.channels),['https://t.me/AutoFlowStore']);
+  assert.equal(await page.locator('#editor-body form').count(),0);
+  await page.waitForFunction(()=>document.querySelectorAll('dialog.account-modal').length===1);
+  await paused.evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished)));
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.screenshot({path:path.join(out,`account-paused-${width}.png`)});
+  await paused.getByRole('button',{name:'Понятно',exact:true}).click();await waitForModalCleanup(page);
+  // Direct edit and VIP entry points use the same server status, not only +.
+  for(const action of ['editor','pin']){
+   await page.evaluate(action=>accountModule[action]({id:'test-account'}),action);
+   await paused.waitFor();await paused.getByRole('button',{name:'Понятно',exact:true}).click();await waitForModalCleanup(page);
+  }
+  assert.deepEqual(await page.evaluate(()=>[testAccount.submissions.length,testAccount.uploads,testAccount.pinStarts,testAccount.invoices]),[0,0,0,0]);
+  await page.evaluate(()=>{testAccount.enabled=true;});
   await page.locator('#launch').click();await page.getByRole('button',{name:/👤 Аккаунт/}).click();
   const form=page.locator('#editor-body form.account-form');await form.waitFor();await waitForModalCleanup(page);
   assert.equal(await form.evaluate(el=>el.closest('dialog')===null),true,'Full app page, not a modal');
