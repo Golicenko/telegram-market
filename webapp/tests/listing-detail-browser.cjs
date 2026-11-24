@@ -68,6 +68,7 @@ const server=http.createServer((req,res)=>{
   await page.waitForFunction(()=>document.querySelector('#listingGallery .listing-gallery__controls span').textContent==='2 / 3');
   await page.getByRole('button',{name:'Открыть фото на весь экран',exact:true}).click();
   const lightbox=page.getByRole('dialog',{name:'Фотографии автомобиля на весь экран'});await lightbox.waitFor();
+  await page.waitForFunction(()=>document.querySelector('.listing-lightbox .listing-gallery__controls span')?.textContent==='2 / 3');
   assert.match(await lightbox.locator('.listing-gallery__controls').innerText(),/2 \/ 3/);
   await page.evaluate(()=>testBack());await lightbox.waitFor({state:'detached'});assert.equal(await page.locator('#listingPageTitle').innerText(),listings[0].brand);
   await page.locator('#listingSave').click();await page.waitForFunction(()=>document.querySelector('#listingSave').getAttribute('aria-pressed')==='true');assert(saved);
@@ -101,6 +102,7 @@ const server=http.createServer((req,res)=>{
   failContext=false;await page.locator('#listingSellerRetry').click();await page.locator('#listingSellerSales').filter({hasText:'7 успешных сделок'}).waitFor();
   assert(await page.locator('#listingOtherCars').isHidden());assert.match(await page.locator('#listingGallery').innerText(),/Фотографий пока нет/);
   await page.locator('.bottom-nav [data-nav-target="market"]').click();await page.locator('#marketCars [data-listing-card="car-14"] h3').click();
+  await page.waitForFunction(()=>document.querySelector('#listingPageTitle').textContent==='Nissan GTR R35'&&document.querySelector('#listingGallery .listing-gallery__controls span').textContent==='1 / 1');
   assert(await page.locator('#listingGallery .listing-gallery__dots').isHidden());assert.match(await page.locator('#listingGallery .listing-gallery__controls').innerText(),/1 \/ 1/);
   if(width===320){
    listings[14].images=Array.from({length:10},(_,index)=>`/fixture-photo-${index+1}.svg`);
