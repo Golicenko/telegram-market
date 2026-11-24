@@ -16,6 +16,8 @@ body.car-detail-open .floating-chat-button{display:none}
 .listing-gallery__dots button{display:grid;place-items:center;width:22px;height:27px;padding:0;border:0;background:transparent}
 .listing-gallery__dots button::after{content:"";width:6px;height:6px;border-radius:50%;background:#8c9299b0;box-shadow:0 1px 5px #000}
 .listing-gallery__dots button[aria-pressed=true]::after{background:#fff}
+.listing-gallery__dots--many{left:8px;right:85px;transform:none;justify-content:center}
+.listing-gallery__dots--many button{flex:1;min-width:0;max-width:22px}
 .listing-gallery__controls{position:absolute;z-index:2;right:5px;bottom:5px;display:flex;align-items:center;gap:4px;min-height:25px;padding:0 3px 0 8px;border:1px solid #ffffff20;border-radius:9px;background:#0009;color:#fff;font-size:10px;font-variant-numeric:tabular-nums}
 .listing-gallery__controls button{display:grid;place-items:center;width:27px;height:27px;padding:4px;border:0;background:transparent}
 .listing-gallery__controls svg,.listing-detail-toolbar svg,.listing-page--car .listing-page__specs svg,.listing-page--car .listing-page__message svg,.listing-page--car .listing-page__negotiate svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}

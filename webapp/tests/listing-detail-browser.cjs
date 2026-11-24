@@ -98,6 +98,11 @@ const server=http.createServer((req,res)=>{
   assert(await page.locator('#listingOtherCars').isHidden());assert.match(await page.locator('#listingGallery').innerText(),/Фотографий пока нет/);
   await page.locator('.bottom-nav [data-nav-target="market"]').click();await page.locator('#marketCars [data-listing-card="car-14"] h3').click();
   assert(await page.locator('#listingGallery .listing-gallery__dots').isHidden());assert.match(await page.locator('#listingGallery .listing-gallery__controls').innerText(),/1 \/ 1/);
+  if(width===320){
+   listings[14].images=Array.from({length:10},(_,index)=>`/fixture-photo-${index+1}.svg`);
+   await page.locator('.bottom-nav [data-nav-target="market"]').click();await page.locator('#marketCars [data-listing-card="car-14"] h3').click();
+   await page.locator('#listingGallery button[aria-label="Фото 10"]').click();await page.waitForFunction(()=>document.querySelector('#listingGallery .listing-gallery__controls span').textContent==='10 / 10');
+  }
   await page.locator('.bottom-nav [data-nav-target="market"]').click();await page.locator('#marketCars [data-listing-card="car-16"] h3').click();
   await page.locator('.listing-gallery__missing').filter({hasText:'Фото недоступно'}).waitFor();
   assert(await page.locator('#listingGallery .listing-gallery__dots').isHidden());

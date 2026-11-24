@@ -41,6 +41,7 @@
       });
       const controls = node("div", null, "listing-gallery__controls"), count = node("span");
       const dots = node("div", null, "listing-gallery__dots"); dots.hidden = urls.length < 2;
+      dots.classList.toggle("listing-gallery__dots--many", urls.length > 5);
       const move = (index, smooth = true) => rail.scrollTo({ left: rail.clientWidth * index, behavior: smooth && !root.matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "instant" });
       urls.forEach((_, index) => { const dot = node("button"); dot.type = "button"; dot.setAttribute("aria-label", `Фото ${index + 1}`); dot.onclick = () => move(index); dots.append(dot); });
       const currentIndex = () => Math.max(0, Math.min(urls.length - 1, Math.round(rail.scrollLeft / (rail.clientWidth || 1))));
@@ -166,6 +167,7 @@
       if (signature !== gallerySignature) { gallerySignature = signature; track = gallery(galleryHost, Array.isArray(listing.images) ? listing.images : []); }
       if (current?.id === listing.id) { current = listing; return; }
       leave(); current = listing; controller = new AbortController(); restorePosition = null;
+      requestAnimationFrame(() => { if (current?.id === listing.id && !restorePosition) track?.move(0, false); });
       otherTrack.replaceChildren(); otherTrack.scrollLeft = 0;
       context = cache.get(listing.id) || null;
       get("listingSellerName").textContent = "Продавец"; get("listingSellerSales").textContent = "Загрузка информации…";
