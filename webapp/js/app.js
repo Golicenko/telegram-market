@@ -221,6 +221,8 @@
   });
   document.getElementById("marketGameFilter")?.closest(".market-tools")?.before(productFilter);
   let criticalRecoveryUsed = false;
+  const listingDetail = window.AutoFlowListingDetail.create({ api, notify,
+    title: listingTitle, formatNumber, mediaUrl: absoluteMediaUrl, thumbnail: profileThumbnailUrl });
   let optionalRecoveryTimer = null;
   let startupRecoveryTimer = null;
   let initializedTelegram = null;
@@ -899,6 +901,7 @@ function handleClick(event) {
   }
 
   async function goBack() {
+    if (listingDetail.dismiss()) return;
     if (accountSales.dismiss()) return;
     if (window.AutoFlowChatMedia?.dismiss()) return;
     if (window.AutoFlowDealConfirmation.dismiss()) return;
@@ -909,11 +912,15 @@ function handleClick(event) {
     if (primaryViews.has(state.currentView) || Date.now() < state.backBlockedUntil) return;
     state.backBlockedUntil = Date.now() + 450;
     const entry = state.navigationStack.pop();
+    if (entry?.view === "listing-detail" && entry.listingId) {
+      const sourceView = state.currentView, sourceVersion = state.navigationVersion;
+      if (!await openListingDetails(entry.listingId, { back: true, restore: entry }) && state.currentView === sourceView && state.navigationVersion === sourceVersion) state.navigationStack.push(entry);
+      return;
+    }
     const fallback = ["training-detail", "training-editor"].includes(state.currentView) ? "training" : "profile";
     if (entry?.conversation) state.currentConversation = entry.conversation;
-    await navigate(entry?.view || fallback, { back: true });
+    await navigate(entry?.view || fallback, { back: true, restore: entry });
     if (entry?.view === "deal-chat" && entry.conversation?.id) await openConversation(entry.conversation.id, null, null, entry.conversation.deal?.id);
-    if (entry?.view === "listing-detail" && entry.listingId) await openListingDetails(entry.listingId);
   }
 
   function syncBackNavigation() {
@@ -933,6 +940,7 @@ function handleClick(event) {
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
     if (viewName !== "listing-detail") accountSales.pauseVideos();
+    if (viewName !== "listing-detail") listingDetail.leave();
     state.navigationVersion = (state.navigationVersion || 0) + 1;
     const transition = { from: state.currentView, to: viewName, phase: "requested", at: Math.round(performance.now()) };
     state.navigationTrace ||= []; state.navigationTrace.push(transition);
@@ -953,10 +961,11 @@ function handleClick(event) {
     }
     if (viewName !== state.currentView && !options.back) {
       if (primaryViews.has(viewName)) state.navigationStack = [];
-      else state.navigationStack.push({
+      else state.navigationStack.push(state.currentView === "listing-detail" ? listingNavigationEntry() : {
         view: state.currentView,
         conversation: state.currentView === "deal-chat" ? state.currentConversation : null,
         listingId: state.selectedListing?.id,
+        scrollY: window.scrollY,
       });
     }
     state.currentView = viewName;
@@ -965,6 +974,8 @@ function handleClick(event) {
     document.body.classList.toggle("admin-open", viewName === "admin");
     document.body.classList.toggle("profile-open", viewName === "profile");
     document.body.classList.toggle("more-open", viewName === "more");
+    document.body.classList.toggle("car-detail-open", viewName === "listing-detail" && state.selectedListing?.product_kind !== "account");
+    document.body.classList.toggle("listing-native-back", Boolean(telegram?.initData && telegram?.BackButton?.show));
     elements.views.forEach((view) => {
       const active = view === next;
       view.hidden = !active;
@@ -992,7 +1003,7 @@ function handleClick(event) {
     if (viewName === "profile") switchProfileTab("listings");
     if (viewName === "add") void loadPublicationOptions();
     if (viewName === "admin") void loadPublicationAdmin();
-    window.scrollTo({ top: 0, behavior: primaryViews.has(viewName) ? "instant" : "smooth" });
+    window.scrollTo({ top: options.restore?.scrollY || 0, behavior: options.restore || primaryViews.has(viewName) || viewName === "listing-detail" ? "instant" : "smooth" });
     observeVisibleListingCards();
     transition.phase = "initialized";
     } catch (error) {
@@ -1684,8 +1695,13 @@ function handleClick(event) {
   async function recordListingView(id) {
     if (state.listingViewRequests.has(id) || !state.serverAvailable) return;
     state.listingViewRequests.add(id);
+    const likeVersion = state.listingLikeVersions?.get(id) || 0;
     try {
-      const engagement = await api.request(`/listings/${id}/view`, { method: "POST" });
+      let engagement = await api.request(`/listings/${id}/view`, { method: "POST" });
+      if (state.listingLikeRequests.has(id) || likeVersion !== (state.listingLikeVersions?.get(id) || 0)) {
+        const current = findListing(id);
+        if (current) engagement = { ...engagement, likes_count: current.likes_count, liked_by_me: current.liked_by_me };
+      }
       applyListingEngagement(id, engagement);
     } catch (error) {
       state.listingViewRequests.delete(id);
@@ -1698,6 +1714,8 @@ function handleClick(event) {
     if (!listing || state.listingLikeRequests.has(id)) return;
     if (listing.seller_id === state.me?.user.id) return notify("Нельзя поставить лайк собственному объявлению");
     state.listingLikeRequests.add(id);
+    state.listingLikeVersions ||= new Map();
+    state.listingLikeVersions.set(id, (state.listingLikeVersions.get(id) || 0) + 1);
     listingLikeButtons(id).forEach(button => { button.disabled = true; button.setAttribute("aria-busy", "true"); });
     try {
       const engagement = await api.request(`/listings/${id}/like`, { method: listing.liked_by_me ? "DELETE" : "POST" });
@@ -1735,14 +1753,14 @@ function handleClick(event) {
       .filter(Boolean)
       .forEach((items) => items.forEach((item) => {
         if (String(item.id) === String(id)) Object.assign(item, {
-          views_count: Number(engagement.views_count || 0),
+          views_count: Math.max(Number(item.views_count || 0), Number(engagement.views_count || 0)),
           likes_count: Number(engagement.likes_count || 0),
           liked_by_me: Boolean(engagement.liked_by_me),
         });
       }));
     if (String(state.selectedListing?.id) === String(id)) {
       Object.assign(state.selectedListing, {
-        views_count: Number(engagement.views_count || 0),
+        views_count: Math.max(Number(state.selectedListing.views_count || 0), Number(engagement.views_count || 0)),
         likes_count: Number(engagement.likes_count || 0),
         liked_by_me: Boolean(engagement.liked_by_me),
       });
@@ -2266,30 +2284,47 @@ function handleClick(event) {
     openDialog(elements.purchaseModal);
   }
 
-  function findListing(id) { return [...state.regular, ...state.unique, ...(state.profile?.active_listings || [])].find((item) => item.id === id); }
+  function findListing(id) { return [state.selectedListing, ...state.regular, ...state.unique, ...(state.profile?.active_listings || [])].filter(Boolean).find((item) => item.id === id); }
 
-  async function openListingDetails(id) {
+  function listingNavigationEntry() {
+    return { view: "listing-detail", listingId: state.selectedListing?.id, scrollY: window.scrollY, ...listingDetail.snapshot() };
+  }
+
+  async function openListingDetails(id, options = {}) {
+    const opening = state.listingOpening = (state.listingOpening || 0) + 1;
+    const navigationVersion = state.navigationVersion || 0;
     try {
       const listing = await api.request(`/listings/${id}`);
+      if (opening !== state.listingOpening || navigationVersion !== (state.navigationVersion || 0)) return false;
+      if (!options.back && state.currentView === "listing-detail" && state.selectedListing?.id !== listing.id) state.navigationStack.push(listingNavigationEntry());
       state.selectedListing = listing;
       track("listing_viewed", listing.id);
       state.previousView = state.currentView === "listing-detail" ? state.previousView : state.currentView;
       renderListingPage();
-      await navigate("listing-detail");
+      await navigate("listing-detail", { back: options.back, restore: options.restore });
+      if (options.restore) {
+        listingDetail.restore(options.restore);
+        requestAnimationFrame(() => { if (state.currentView === "listing-detail" && state.selectedListing?.id === listing.id) window.scrollTo({ top: options.restore.scrollY || 0, behavior: "instant" }); });
+      }
       window.setTimeout(() => { if (state.selectedListing?.id === id && state.currentView === "listing-detail") void recordListingView(id); }, 750);
-    } catch (error) { notify(error.message); }
+      return true;
+    } catch (error) { if (opening === state.listingOpening) notify(error.message); return false; }
   }
 
   function renderListingPage() {
     const listing = state.selectedListing;
     if (!listing) return;
+    const changedListing = state.renderedListingId !== listing.id;
+    state.renderedListingId = listing.id;
+    const isCar = listing.product_kind !== "account";
+    listingDetail.render(listing);
     const imageUrl = safeArray(listing.images)[0];
     const sold = listing.status !== "active";
     elements.listingPageImage.parentElement.classList.toggle("is-sold", sold);
     elements.listingPageSold.hidden = !sold;
-    elements.listingPageImage.hidden = sold || !imageUrl;
+    elements.listingPageImage.hidden = isCar || sold || !imageUrl;
     elements.listingPageImagePlaceholder.hidden = sold || Boolean(imageUrl);
-    if (imageUrl) elements.listingPageImage.src = imageUrl;
+    if (imageUrl && !isCar) elements.listingPageImage.src = imageUrl;
     else elements.listingPageImage.removeAttribute("src");
     elements.listingPageKind.textContent = listing.listing_type === "unique" ? "Уникальная машина" : "Объявление";
     if (listing.product_kind === "account") elements.listingPageKind.textContent = "Аккаунт · ⚡ Автовыдача";
@@ -2306,7 +2341,10 @@ function handleClick(event) {
       `Максимальная скорость: ${listing.max_speed_kph} км/ч`,
       `Передача: ${deliveryTimeLabel(listing.delivery_time_estimate)}`,
       `Статус: ${statusLabel(listing.status)}`,
-    ]).map((value) => { const item = document.createElement("span"); item.textContent = value; return item; }));
+    ]).map((value, index) => { const item = document.createElement("span");
+      if (isCar) { item.append(listingDetail.icon(["engine", "speed", "time", "status"][index]), document.createTextNode(value.replace(/^(Мощность: |Максимальная скорость: |Передача: |Статус: )/, ""))); }
+      else item.textContent = value;
+      return item; }));
     let video = document.getElementById("accountListingVideo");
     if (!video) { video = document.createElement("div"); video.id = "accountListingVideo"; video.className = "account-video"; elements.listingPageImage.parentElement.append(video); }
     accountSales.video(video, listing);
@@ -2315,20 +2353,24 @@ function handleClick(event) {
     const isOwner = listing.seller_id === state.me?.user.id;
     elements.listingPageLike.disabled = isOwner;
     elements.listingPageBuy.hidden = isOwner;
+    document.getElementById("listingPageActions").hidden = isOwner;
     elements.listingPageChat.hidden = isOwner;
-    elements.listingPageOfferButton.hidden = isOwner;
-    elements.listingPageOffer.hidden = true;
+    if (changedListing || isOwner) elements.listingPageOfferButton.hidden = isOwner;
+    if (isCar) {
+      elements.listingPageChat.replaceChildren(listingDetail.icon("chat"), document.createTextNode("Написать"));
+      elements.listingPageOfferButton.replaceChildren(listingDetail.icon("offer"), document.createTextNode("Предложить цену"));
+    } else {
+      elements.listingPageChat.textContent = "Написать продавцу"; elements.listingPageOfferButton.textContent = "Предложить свою цену";
+    }
+    if (changedListing || isOwner) elements.listingPageOffer.hidden = true;
     elements.listingPageBuy.disabled = listing.status !== "active";
     elements.listingPageBuy.textContent = `Купить за ${formatNumber(effectivePrice)} AF`;
-    elements.listingOfferAmount.value = formatNumber(effectivePrice);
+    if (changedListing || elements.listingPageOffer.hidden) elements.listingOfferAmount.value = String(effectivePrice);
   }
 
   async function likeSelectedListing() {
     if (!state.selectedListing) return;
     await toggleListingLike(state.selectedListing.id);
-    const refreshed = await api.request(`/listings/${state.selectedListing.id}`);
-    state.selectedListing = refreshed;
-    renderListingPage();
   }
 
   function buySelectedListing() {
@@ -5645,10 +5687,18 @@ async function hideCurrentConversation() {
   }
 
   async function openListingDeepLink() {
-    const listingId = state.pendingListingDeepLink;
+    const start = String(launchParams.get("startapp") || telegram?.initDataUnsafe?.start_param || "");
+    const sharedId = /^listing_([0-9a-f-]{36})$/i.exec(start)?.[1];
+    const listingId = state.pendingListingDeepLink || sharedId;
     if (!listingId || !state.me) return;
-    await openListingDetails(encodeURIComponent(listingId));
-    state.pendingListingDeepLink = null;
+    if (state.openedListingDeepLink === listingId || state.openingListingDeepLink) return;
+    state.openingListingDeepLink = true;
+    try {
+      if (await openListingDetails(encodeURIComponent(listingId))) {
+        state.openedListingDeepLink = listingId;
+        state.pendingListingDeepLink = null;
+      }
+    } finally { state.openingListingDeepLink = false; }
   }
 
   async function openVipRenewalDeepLink() {

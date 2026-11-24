@@ -1,0 +1,90 @@
+/* Car detail only: catalogue cards, account pages and bottom navigation retain their styles. */
+.listing-page--car{padding-bottom:66px;min-width:0}
+body.car-detail-open.listing-native-back .listing-page__header{display:none}
+body.car-detail-open .floating-chat-button{display:none}
+.listing-page--car .listing-page__media{position:relative;display:block;place-items:normal;min-height:0;border:1px solid #28313b;border-radius:13px;background:#050b10;box-shadow:none}
+.listing-page--car #listingPageImage{display:none}
+.listing-page--car #listingPageImagePlaceholder{display:none}
+.listing-page--car .listing-page__sold{background:#030912cf}
+#listingGallery{position:relative;width:100%;min-width:0;overflow:hidden;border-radius:12px}
+.listing-gallery__track{display:flex;width:100%;aspect-ratio:2.38;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x mandatory;scrollbar-width:none;touch-action:pan-x pan-y pinch-zoom}
+.listing-gallery__track::-webkit-scrollbar,.listing-detail-others__track::-webkit-scrollbar{display:none}
+.listing-gallery__frame{position:relative;display:grid;place-items:center;flex:0 0 100%;min-width:0;height:100%;scroll-snap-align:start;scroll-snap-stop:always;background:#050a10}
+.listing-page--car .listing-gallery__frame img{width:100%;height:100%;max-height:none;position:absolute;inset:0;object-fit:contain}
+.listing-gallery__missing{color:#84929e;font-size:12px;text-align:center}
+.listing-gallery__dots{position:absolute;z-index:2;bottom:1px;left:50%;display:flex;gap:0;transform:translateX(-50%)}
+.listing-gallery__dots button{display:grid;place-items:center;width:22px;height:27px;padding:0;border:0;background:transparent}
+.listing-gallery__dots button::after{content:"";width:6px;height:6px;border-radius:50%;background:#8c9299b0;box-shadow:0 1px 5px #000}
+.listing-gallery__dots button[aria-pressed=true]::after{background:#fff}
+.listing-gallery__dots--many{left:8px;right:85px;transform:none;justify-content:center}
+.listing-gallery__dots--many button{flex:1;min-width:0;max-width:22px}
+.listing-gallery__controls{position:absolute;z-index:2;right:5px;bottom:5px;display:flex;align-items:center;gap:4px;min-height:25px;padding:0 3px 0 8px;border:1px solid #ffffff20;border-radius:9px;background:#0009;color:#fff;font-size:10px;font-variant-numeric:tabular-nums}
+.listing-gallery__controls button{display:grid;place-items:center;width:27px;height:27px;padding:4px;border:0;background:transparent}
+.listing-gallery__controls svg,.listing-detail-toolbar svg,.listing-page--car .listing-page__specs svg,.listing-page--car .listing-page__message svg,.listing-page--car .listing-page__negotiate svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+.listing-page--car .listing-page__body{position:relative;padding:7px 0 0}
+.listing-page--car .listing-page__game{margin:0 100px 3px 0;display:block;font-size:9px;line-height:15px}
+.listing-page--car .listing-page__game strong{display:inline-block;padding:0 7px;border-radius:10px;color:#f6e5b6;background:linear-gradient(100deg,#56401b,#30240e);font-weight:750}
+.listing-page--car #listingPageGameNote,.listing-page--car .listing-page__brand{display:none}
+.listing-page--car .listing-page__body h1{margin:0 85px 0 0;font-size:20px;line-height:1.12;letter-spacing:-.025em;overflow-wrap:anywhere}
+.listing-page--car .listing-page__price{gap:5px;flex-wrap:wrap;margin:3px 0 7px;color:#ffc21a;min-height:24px;line-height:1}
+.listing-page--car .listing-page__price strong{font-size:23px;font-weight:850}
+.listing-page--car .listing-page__price>.af-coin{width:21px;height:21px}
+.listing-page--car .listing-page__price>span:not(.af-coin){font-size:12px;font-weight:750}
+.listing-page--car .listing-page__price>.listing-page__engagement{margin:0 0 0 auto;gap:7px;min-height:24px;font-size:8px}
+.listing-page--car .listing-page__price>.listing-page__engagement button{min-height:24px}
+.listing-detail-toolbar{position:absolute;top:7px;right:0;display:flex;gap:6px}
+.listing-detail-toolbar button{display:grid;place-items:center;width:34px;height:34px;padding:7px;border:1px solid #ffffff16;border-radius:11px;background:#0b151e;color:#e6ebee}
+.listing-detail-toolbar button[aria-pressed=true]{color:#ffc11b;border-color:#b78625;background:#372a13}
+.listing-detail-toolbar button[aria-pressed=true] svg{fill:#ffc11b33}
+.listing-detail-toolbar button:disabled{opacity:.45}
+.listing-page--car .listing-detail-specs{padding:0;margin:0 0 5px;border:0;border-radius:0;background:none}
+.listing-page--car .listing-detail-specs>h2{display:none}
+.listing-page--car .listing-page__specs{grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+.listing-page--car .listing-page__specs>span{display:flex;flex-direction:column;justify-content:center;align-items:center;gap:4px;min-height:43px;padding:5px 2px;border-radius:8px;background:#0c1720;color:#e5e9ed;font-size:9px;line-height:1.2;text-align:center;overflow-wrap:anywhere}
+.listing-page--car .listing-page__specs svg{width:18px;height:18px;color:#a5afb9}
+.listing-page--car .listing-page__specs>span:last-child svg{color:#85e373}
+.listing-page--car .listing-detail-description{margin:0 0 7px;padding:8px 10px;border:1px solid #ffffff14;border-radius:13px;background:linear-gradient(120deg,#0b151d,#0a141c);box-shadow:inset 0 0 0 2px #ffffff02}
+.listing-page--car .listing-detail-description h2{font-size:11px;margin:0 0 4px}
+.listing-page--car .listing-detail-description__heading{display:block;margin-bottom:4px}
+.listing-page--car .listing-detail-description__heading h2{margin:0}
+.listing-page--car .listing-detail-description__heading .listing-page__engagement{margin:0;min-height:24px}
+.listing-page--car .listing-detail-description__heading .listing-page__engagement button{min-height:24px}
+.listing-page--car .listing-detail-description p{font-size:10.5px;line-height:1.35;color:#e0e5ea}
+.listing-page--car .listing-page__engagement{justify-content:flex-end;gap:10px;margin:0 0 5px;font-size:9px;min-height:24px;color:#a3aeb9}
+.listing-page--car .listing-page__engagement button{min-height:26px;font-size:10px;padding:3px 7px}
+.listing-page--car .listing-detail-seller{display:grid;gap:5px;margin-bottom:9px;padding:7px 9px;border:1px solid #ffffff16;border-radius:13px;background:linear-gradient(120deg,#0c1720,#09121a);box-shadow:inset 0 0 0 2px #ffffff02}
+.listing-detail-seller__identity{display:flex;align-items:center;gap:12px;min-width:0;padding:0 5px 0 4px}
+.listing-detail-seller__identity>div:last-child{min-width:0}
+.listing-detail-seller__identity strong{font-size:12px;overflow-wrap:anywhere}
+.listing-detail-seller__identity p{margin:4px 0 2px;color:#e2e7eb;font-size:10px}
+.listing-detail-avatar{position:relative;display:grid;place-items:center;flex:none;width:47px;height:47px;overflow:hidden;border:1.5px solid #ffd128;border-radius:50%;background:#1a2733;box-shadow:0 0 9px #ffbb0028;color:#8c9dad}
+.listing-detail-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.listing-detail-avatar svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.4}
+.listing-page--car .listing-detail-seller>button{display:flex;align-items:center;justify-content:center;gap:5px;width:100%;min-height:32px;padding:6px;border-radius:10px;font-size:13px;font-weight:800}
+.listing-page--car .listing-page__message{border:0;background:linear-gradient(110deg,#ffd21b,#ff8700);color:#201705}
+.listing-page--car .listing-page__negotiate{border:1px solid #d7ab32;background:#0b141d;color:#ffd02c}
+.listing-detail-others{min-width:0;margin:0 0 9px}
+.listing-detail-others h2{font-size:11px;font-weight:750;margin:0 0 7px;color:#f1dfc2}
+.listing-detail-others__track{display:flex;gap:7px;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain;scroll-snap-type:x proximity;max-width:100%;padding:0 0 2px}
+.listing-other-card{flex:0 0 calc((100% - 14px)/3);min-width:0;overflow:hidden;padding:0 0 5px;border:1px solid #ffffff12;border-radius:10px;background:#0c1720;text-align:left;scroll-snap-align:start}
+.listing-other-card__media{position:relative;aspect-ratio:2.6;overflow:hidden;background:linear-gradient(135deg,#14212b,#071019)}
+.listing-other-card__media img{width:100%;height:100%;object-fit:cover}
+.listing-other-card__media>span{position:absolute;top:3px;right:3px;padding:1px 4px;border-radius:6px;color:#191300;background:#f5ca36;font-size:8px;font-weight:900}
+.listing-other-card strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:5px 5px 3px;font-size:9px;font-weight:750}
+.listing-other-card b{display:block;margin:0 5px;color:#ffcc1a;font-size:12px}
+.listing-page--car .listing-page__actions{position:fixed;z-index:29;left:50%;width:min(calc(100% - 22px),498px);transform:translateX(-50%);bottom:calc(88px + var(--safe-bottom));padding:7px 0 5px;background:linear-gradient(0deg,#030912 80%,#03091200);margin:0}
+.listing-page--car .listing-page__buy{min-height:42px;border-radius:12px;background:linear-gradient(110deg,#ffd21b,#ff8700);font-size:15px;font-weight:850}
+.listing-page--car .listing-page__buy:disabled{background:#172330;color:#92a0ac}
+.listing-page--car .listing-page__offer{margin:0 0 8px}
+#listingSellerRetry,#listingOtherRetry{border:0;background:none;color:#ffca36;font-size:11px;padding:5px 0;min-height:30px}
+.listing-lightbox{position:fixed;inset:0;width:100%;max-width:none;height:100%;max-height:none;margin:0;padding:0;border:0;background:#020609;color:#fff;overflow:hidden}
+.listing-lightbox::backdrop{background:#000}
+.listing-lightbox__close{position:absolute;z-index:3;right:max(12px,env(safe-area-inset-right));top:max(12px,env(safe-area-inset-top));width:44px;height:44px;border:1px solid #ffffff36;border-radius:50%;background:#111d2acc;color:white;font-size:26px}
+.listing-lightbox__gallery{position:relative;width:100%;height:100%}
+.listing-lightbox .listing-gallery__track,.listing-lightbox .listing-gallery__frame{height:100%;aspect-ratio:auto}
+.listing-lightbox .listing-gallery__frame img{width:100%;height:100%;object-fit:contain}
+.listing-lightbox .listing-gallery__dots{bottom:max(18px,env(safe-area-inset-bottom))}
+.listing-lightbox .listing-gallery__controls{bottom:max(20px,env(safe-area-inset-bottom));right:12px}
+.listing-page--car button:focus-visible,.listing-lightbox button:focus-visible,.listing-gallery__track:focus-visible{outline:2px solid #ffd545;outline-offset:2px}
+@media(min-width:430px){.listing-page--car .listing-page__body h1{font-size:24px}.listing-page--car .listing-detail-description p{font-size:12px}.listing-page--car .listing-detail-seller>button{min-height:37px}.listing-page--car .listing-page__specs>span{min-height:49px;font-size:10px}.listing-other-card strong{font-size:9px}.listing-detail-seller__identity strong{font-size:14px}.listing-detail-seller__identity p{font-size:11px}.listing-page--car .listing-page__buy{min-height:47px}}
+@media(prefers-reduced-motion:no-preference){.listing-page--car .listing-detail-seller,.listing-page--car .listing-detail-description{animation:carDetailAppear .18s ease-out}@keyframes carDetailAppear{from{opacity:.5;transform:translateY(3px)}to{opacity:1;transform:none}}}

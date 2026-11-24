@@ -9,6 +9,8 @@ def test_build_script_stamps_all_assets_with_one_content_hash(tmp_path, monkeypa
     (webapp / "js").mkdir()
     (webapp / "css" / "style.css").write_text("body{}", encoding="utf-8")
     (webapp / "css" / "account-sales.css").write_text("account{}", encoding="utf-8")
+    (webapp / "css" / "listing-detail.css").write_text("listing{}", encoding="utf-8")
+    (webapp / "js" / "listing-detail.js").write_text("listing-detail", encoding="utf-8")
     (webapp / "js" / "account-sales.js").write_text("account-sales", encoding="utf-8")
     (webapp / "js" / "api.js").write_text("api", encoding="utf-8")
     (webapp / "js" / "chat-media.js").write_text("chat-media", encoding="utf-8")
@@ -26,6 +28,8 @@ def test_build_script_stamps_all_assets_with_one_content_hash(tmp_path, monkeypa
         '<meta name="autoflow-build" content="source">'
         '<link href="css/style.css?v=old">'
         '<link href="css/account-sales.css?v=old">'
+        '<link href="css/listing-detail.css?v=old">'
+        '<script src="js/listing-detail.js?v=old"></script>'
         '<script src="js/account-sales.js?v=old"></script>'
         '<script src="js/api.js?v=old"></script>'
         '<script src="js/chat-media.js?v=old"></script>'

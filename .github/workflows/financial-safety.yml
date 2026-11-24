@@ -43,6 +43,8 @@ jobs:
         run: |
           npm install --no-save --ignore-scripts --package-lock=false playwright@1.62.1
           npx playwright install --with-deps chromium
+      - name: Car detail reference, gallery, seller context, actions and nested Back history (fixtures only)
+        run: node webapp/tests/listing-detail-browser.cjs
       - name: Private chat photos, signed participants and real isolated PostgreSQL
         run: python -m pytest -q -s tests/test_chat_media_browser_postgres.py
         working-directory: backend

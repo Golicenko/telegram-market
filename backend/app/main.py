@@ -32,6 +32,7 @@ from .owner_finance import router as owner_finance_router
 from .chat_media import router as chat_media_router
 from .account_sales import run_cleanup as run_account_cleanup
 from .account_pins import router as account_sales_router
+from .listing_details import router as listing_details_router
 from .account_video_processing import run_worker as run_account_video_worker
 from .support_media import router as support_media_router
 
@@ -161,6 +162,7 @@ app.include_router(deal_reminder_router)
 app.include_router(owner_finance_router)
 app.include_router(chat_media_router)
 app.include_router(account_sales_router)
+app.include_router(listing_details_router)
 app.include_router(support_media_router)
 
 

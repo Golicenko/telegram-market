@@ -70,8 +70,8 @@ test("market has no cart UI and buyer cards expose only one primary action", () 
 
 test("listing details keep primary, secondary and negotiation actions vertically separated", () => {
   assert.match(html, /class="listing-page__buy"[^>]*>Купить</);
-  assert.match(html, /class="listing-page__message"[^>]*>Написать продавцу</);
-  assert.match(html, /class="listing-page__negotiate"[^>]*>Предложить свою цену</);
+  assert.match(html, /class="listing-page__message"[^>]*>Написать</);
+  assert.match(html, /class="listing-page__negotiate"[^>]*>Предложить цену</);
   assert.match(css, /\.listing-page__actions\{display:grid;gap:8px\}/);
 });
 
