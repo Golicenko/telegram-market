@@ -107,7 +107,10 @@
     }
     async function loadContext(append = false) {
       if (!current || busy) return;
-      const id = current.id, version = sequence; busy = true; const offset = append ? context?.items.length || 0 : 0;
+      const id = current.id, version = sequence; busy = true; let followDuplicatePage = false;
+      // Advance by fetched rows, not unique rendered cards: concurrent new
+      // publications may otherwise make an offset page repeat indefinitely.
+      const offset = append ? (context?.nextOffset ?? context?.items.length ?? 0) : 0;
       get("listingOtherRetry").hidden = true;
       try {
         const data = await api.request(`/listings/${encodeURIComponent(id)}/seller-context?limit=12&offset=${offset}`, { signal: controller.signal, retries: 0 });
@@ -115,18 +118,21 @@
         if (!Array.isArray(data.items) || !Number.isInteger(data.completed_sales) || !Number.isInteger(data.other_active_count)) throw Error("Не удалось загрузить информацию продавца");
         const previous = append ? context.items : [];
         const items = [...new Map([...previous, ...data.items].filter(item => item.id !== id && item.status === "active" && (item.product_kind || "car") === "car").map(item => [item.id, item])).values()];
-        context = { ...data, items }; renderContext(context); remember();
+        const duplicatePages = append && items.length === previous.length ? (context.duplicatePages || 0) + 1 : 0;
+        context = { ...data, items, nextOffset: offset + data.items.length, has_more: data.has_more && data.items.length > 0, duplicatePages }; renderContext(context); remember();
+        followDuplicatePage = duplicatePages > 0 && duplicatePages < 3 && context.has_more;
+        if (duplicatePages >= 3 && context.has_more) get("listingOtherRetry").hidden = false;
       } catch (error) {
         if (version !== sequence || controller.signal.aborted) return;
         if (!context) { get("listingSellerSales").textContent = "Не удалось загрузить информацию"; get("listingSellerRetry").hidden = false; }
         else get("listingOtherRetry").hidden = false;
-      } finally { if (version === sequence) busy = false; }
+      } finally { if (version === sequence) { busy = false; if (followDuplicatePage) void loadContext(true); } }
     }
     otherTrack.addEventListener("scroll", () => {
-      if (context?.has_more && otherTrack.scrollLeft > 0 && otherTrack.scrollLeft + otherTrack.clientWidth >= otherTrack.scrollWidth - 80) void loadContext(true);
+      if (context?.has_more && (context.duplicatePages || 0) < 3 && otherTrack.scrollLeft > 0 && otherTrack.scrollLeft + otherTrack.clientWidth >= otherTrack.scrollWidth - 80) void loadContext(true);
     }, { passive: true });
     ["pointerdown", "touchstart", "wheel"].forEach(event => otherTrack.addEventListener(event, () => { restorePosition = null; }, { passive: true }));
-    get("listingSellerRetry").onclick = () => void loadContext(); get("listingOtherRetry").onclick = () => void loadContext(Boolean(context?.has_more));
+    get("listingSellerRetry").onclick = () => void loadContext(); get("listingOtherRetry").onclick = () => { if (context) context.duplicatePages = 0; void loadContext(Boolean(context?.has_more)); };
     save.onclick = async () => {
       if (!current || !context || save.disabled) return;
       const id = current.id, saved = context.saved_by_me; save.disabled = true;

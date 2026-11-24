@@ -35,7 +35,11 @@ const server=http.createServer((req,res)=>{
    else if(p==='/listings')body=url.searchParams.get('type')==='regular'?listings:[];
    else if(p.match(/^\/listings\/[^/]+\/seller-context$/)){
     const item=findListing(p.split('/')[2]);if(failContext){status=503;body={detail:'Unavailable'};}
-    else {const all=listings.filter(i=>i.seller_id===item.seller_id&&i.id!==item.id);const offset=Number(url.searchParams.get('offset')||0);body={name:'Тестовый продавец',photo_url:null,completed_sales:7,saved_by_me:saved,other_active_count:item.seller_id==='no-other'?0:all.length,items:item.seller_id==='no-other'?[]:all.slice(offset,offset+12),has_more:offset+12<all.length};}
+    else {const all=listings.filter(i=>i.seller_id===item.seller_id&&i.id!==item.id);const offset=Number(url.searchParams.get('offset')||0);body={name:'Тестовый продавец',photo_url:null,completed_sales:7,saved_by_me:saved,other_active_count:item.seller_id==='no-other'?0:all.length,items:item.seller_id==='no-other'?[]:all.slice(offset,offset+12),has_more:offset+12<all.length};
+     // Simulate an offset page repeating after concurrent seller publications.
+     if(width===390&&item.id==='car-0'&&offset===12)Object.assign(body,{items:all.slice(0,12),has_more:true});
+     if(width===390&&item.id==='car-0'&&offset===24)Object.assign(body,{items:all.slice(12),has_more:false});
+    }
    }else if(p.match(/^\/listings\/[^/]+\/share-link$/)){shareCalls++;body={url:`https://t.me/AutoFlowStoreBot?startapp=listing_${p.split('/')[2]}`};}
    else if(p.match(/^\/listings\/[^/]+\/purchase$/)){purchases.push(p.split('/')[2]);status=409;body={detail:'Тест завершён до списания'};}
    else if(p.match(/^\/conversations\/listing\/[^/]+$/)){messages.push(p.split('/')[3]);status=409;body={detail:'Тестовый чат'};}
@@ -69,7 +73,7 @@ const server=http.createServer((req,res)=>{
   await page.locator('#listingSave').click();await page.waitForFunction(()=>document.querySelector('#listingSave').getAttribute('aria-pressed')==='true');assert(saved);
   await page.locator('#listingShare').click();await page.waitForFunction(()=>Boolean(window.testShare));assert.equal(shareCalls,1);
   assert.match(await page.evaluate(()=>testShare),/startapp%3Dlisting_car-0/);
-  await page.locator('#listingPageLike').click();assert.match(await page.locator('#listingPageLike').innerText(),/3/);
+  await page.locator('#listingPageLike').click();await page.waitForFunction(()=>document.querySelector('#listingPageLike').getAttribute('aria-pressed')==='true'&&document.querySelector('#listingPageLike').textContent==='3');
   const horizontal=page.locator('#listingOtherTrack');await horizontal.evaluate(el=>el.scrollLeft=el.scrollWidth);
   await page.waitForFunction(()=>document.querySelectorAll('#listingOtherTrack button').length===14);
   assert.equal(await horizontal.evaluate(el=>getComputedStyle(el).flexWrap),'nowrap');

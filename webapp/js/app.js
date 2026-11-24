@@ -1695,8 +1695,13 @@ function handleClick(event) {
   async function recordListingView(id) {
     if (state.listingViewRequests.has(id) || !state.serverAvailable) return;
     state.listingViewRequests.add(id);
+    const likeVersion = state.listingLikeVersions?.get(id) || 0;
     try {
-      const engagement = await api.request(`/listings/${id}/view`, { method: "POST" });
+      let engagement = await api.request(`/listings/${id}/view`, { method: "POST" });
+      if (state.listingLikeRequests.has(id) || likeVersion !== (state.listingLikeVersions?.get(id) || 0)) {
+        const current = findListing(id);
+        if (current) engagement = { ...engagement, likes_count: current.likes_count, liked_by_me: current.liked_by_me };
+      }
       applyListingEngagement(id, engagement);
     } catch (error) {
       state.listingViewRequests.delete(id);
@@ -1709,6 +1714,8 @@ function handleClick(event) {
     if (!listing || state.listingLikeRequests.has(id)) return;
     if (listing.seller_id === state.me?.user.id) return notify("Нельзя поставить лайк собственному объявлению");
     state.listingLikeRequests.add(id);
+    state.listingLikeVersions ||= new Map();
+    state.listingLikeVersions.set(id, (state.listingLikeVersions.get(id) || 0) + 1);
     listingLikeButtons(id).forEach(button => { button.disabled = true; button.setAttribute("aria-busy", "true"); });
     try {
       const engagement = await api.request(`/listings/${id}/like`, { method: listing.liked_by_me ? "DELETE" : "POST" });
@@ -1746,14 +1753,14 @@ function handleClick(event) {
       .filter(Boolean)
       .forEach((items) => items.forEach((item) => {
         if (String(item.id) === String(id)) Object.assign(item, {
-          views_count: Number(engagement.views_count || 0),
+          views_count: Math.max(Number(item.views_count || 0), Number(engagement.views_count || 0)),
           likes_count: Number(engagement.likes_count || 0),
           liked_by_me: Boolean(engagement.liked_by_me),
         });
       }));
     if (String(state.selectedListing?.id) === String(id)) {
       Object.assign(state.selectedListing, {
-        views_count: Number(engagement.views_count || 0),
+        views_count: Math.max(Number(state.selectedListing.views_count || 0), Number(engagement.views_count || 0)),
         likes_count: Number(engagement.likes_count || 0),
         liked_by_me: Boolean(engagement.liked_by_me),
       });
@@ -2277,7 +2284,7 @@ function handleClick(event) {
     openDialog(elements.purchaseModal);
   }
 
-  function findListing(id) { return [...state.regular, ...state.unique, ...(state.profile?.active_listings || [])].find((item) => item.id === id); }
+  function findListing(id) { return [state.selectedListing, ...state.regular, ...state.unique, ...(state.profile?.active_listings || [])].filter(Boolean).find((item) => item.id === id); }
 
   function listingNavigationEntry() {
     return { view: "listing-detail", listingId: state.selectedListing?.id, scrollY: window.scrollY, ...listingDetail.snapshot() };

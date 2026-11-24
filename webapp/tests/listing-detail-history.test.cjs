@@ -45,3 +45,18 @@ test('abandoned Back cannot put stale listing history back into a newly selected
  const back=h.c.goBack();await h.c.navigate('profile');resolve({id:'A'});await back;
  assert.equal(h.state.currentView,'profile');assert.equal(h.state.navigationStack.length,0);
 });
+for(const order of ['like-first','view-first'])test(`related car outside the cached catalog keeps server-confirmed like and monotonic views (${order})`,async()=>{
+ const item={id:'only-in-detail',seller_id:'seller',likes_count:2,liked_by_me:false,views_count:0};let viewResponse,likeResponse;
+ const state={currentView:'listing-detail',selectedListing:item,regular:[],unique:[],me:{user:{id:'buyer'}},serverAvailable:true,listingViewRequests:new Set(),listingLikeRequests:new Set()};
+ const c={state,document:{querySelectorAll:()=>[]},CSS:{escape:String},renderListingPage(){},listingLikeButtons:()=>[],notify(){},reportClientError(_tag,error){throw error;},
+  api:{request(url){return new Promise(resolve=>{if(url.endsWith('/view'))viewResponse=resolve;else likeResponse=resolve;});}}};
+ vm.runInNewContext(source.slice(source.indexOf('function findListing'),source.indexOf('function listingNavigationEntry')),c);
+ vm.runInNewContext(source.slice(source.indexOf('async function recordListingView'),source.indexOf('function listingLikeButtons')),c);
+ vm.runInNewContext(source.slice(source.indexOf('function applyListingEngagement'),source.indexOf('function renderTraining')),c);
+ const viewed=c.recordListingView(item.id),liked=c.toggleListingLike(item.id);
+ assert.equal(item.liked_by_me,false,'Never an optimistic success before the server response');
+ const view=()=>viewResponse({views_count:6,likes_count:2,liked_by_me:false});
+ const like=()=>likeResponse({views_count:5,likes_count:3,liked_by_me:true});
+ if(order==='like-first'){like();await liked;view();await viewed;}else{view();await viewed;like();await liked;}
+ assert.equal(item.liked_by_me,true);assert.equal(item.likes_count,3);assert.equal(item.views_count,6);
+});
