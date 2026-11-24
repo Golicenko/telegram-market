@@ -6,22 +6,24 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-7d5e0fb7deeb" />
-    <link rel="stylesheet" href="css/style.css?v=af-7d5e0fb7deeb" />
-    <link rel="stylesheet" href="css/account-sales.css?v=af-7d5e0fb7deeb" />
-    <script src="js/chat-media.js?v=af-7d5e0fb7deeb" defer></script>
+    <meta name="autoflow-build" content="af-0982b34a4626" />
+    <link rel="stylesheet" href="css/style.css?v=af-0982b34a4626" />
+    <link rel="stylesheet" href="css/account-sales.css?v=af-0982b34a4626" />
+    <link rel="stylesheet" href="css/listing-detail.css?v=af-0982b34a4626" />
+    <script src="js/chat-media.js?v=af-0982b34a4626" defer></script>
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-7d5e0fb7deeb" defer></script>
-    <script src="js/referrals.js?v=af-7d5e0fb7deeb" defer></script>
-    <script src="js/deal-confirmation.js?v=af-7d5e0fb7deeb" defer></script>
-    <script src="js/seller-deal.js?v=af-7d5e0fb7deeb" defer></script>
-    <script src="js/owner-finance.js?v=af-7d5e0fb7deeb" defer></script>
-    <script src="js/admin-operations.js?v=af-7d5e0fb7deeb" defer></script>
-    <script src="js/analytics.js?v=af-7d5e0fb7deeb" defer></script>
-    <script src="js/training-sales.js?v=af-7d5e0fb7deeb" defer></script>
-    <script src="js/help.js?v=af-7d5e0fb7deeb" defer></script>
-    <script src="js/account-sales.js?v=af-7d5e0fb7deeb" defer></script>
-    <script src="js/app.js?v=af-7d5e0fb7deeb" defer></script>
+    <script src="js/api.js?v=af-0982b34a4626" defer></script>
+    <script src="js/referrals.js?v=af-0982b34a4626" defer></script>
+    <script src="js/deal-confirmation.js?v=af-0982b34a4626" defer></script>
+    <script src="js/seller-deal.js?v=af-0982b34a4626" defer></script>
+    <script src="js/owner-finance.js?v=af-0982b34a4626" defer></script>
+    <script src="js/admin-operations.js?v=af-0982b34a4626" defer></script>
+    <script src="js/analytics.js?v=af-0982b34a4626" defer></script>
+    <script src="js/training-sales.js?v=af-0982b34a4626" defer></script>
+    <script src="js/help.js?v=af-0982b34a4626" defer></script>
+    <script src="js/account-sales.js?v=af-0982b34a4626" defer></script>
+    <script src="js/listing-detail.js?v=af-0982b34a4626" defer></script>
+    <script src="js/app.js?v=af-0982b34a4626" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -81,17 +83,21 @@
           </div>
           <div class="listing-page__media">
             <img id="listingPageImage" alt="Фотография автомобиля" hidden />
+            <div id="listingGallery" hidden></div>
             <div class="listing-page__placeholder" id="listingPageImagePlaceholder" aria-hidden="true">◇</div>
             <div class="listing-page__sold" id="listingPageSold" hidden>ПРОДАНО</div>
           </div>
           <article class="listing-page__body">
+            <div class="listing-detail-toolbar" id="listingDetailToolbar" hidden>
+              <button id="listingSave" type="button" aria-label="Сохранить объявление" aria-pressed="false"></button>
+              <button id="listingShare" type="button" aria-label="Поделиться объявлением"></button>
+            </div>
             <div class="listing-page__game"><strong id="listingPageGame"></strong><span id="listingPageGameNote"></span></div>
             <h1 id="listingPageTitle"></h1>
             <p class="listing-page__brand" id="listingPageBrand"></p>
             <div class="listing-page__price"><strong id="listingPagePrice">0</strong><span class="af-coin" aria-label="AF Coins"></span><span>AF Coins</span></div>
-            <section class="listing-page__section"><h2>Описание</h2><p id="listingPageDescription"></p></section>
-            <section class="listing-page__section"><h2>Характеристики</h2><div class="listing-page__specs" id="listingPageSpecs"></div></section>
-            <div class="listing-page__engagement"><span id="listingPageViews">👁 0 просмотров</span><button id="listingPageLike" type="button" aria-label="Нравится" aria-pressed="false">👍 0</button></div>
+            <section class="listing-page__section listing-detail-specs"><h2>Характеристики</h2><div class="listing-page__specs" id="listingPageSpecs"></div></section>
+            <section class="listing-page__section listing-detail-description"><div class="listing-detail-description__heading"><h2>Описание</h2><div class="listing-page__engagement"><span id="listingPageViews">👁 0 просмотров</span><button id="listingPageLike" type="button" aria-label="Нравится" aria-pressed="false">👍 0</button></div></div><p id="listingPageDescription"></p></section>
             <div class="listing-page__offer" id="listingPageOffer" hidden>
               <form id="listingOfferForm">
                 <label>Ваша цена<div><input id="listingOfferAmount" name="amount" type="number" min="1" step="0.01" inputmode="decimal" enterkeyhint="send" required /><span>AF</span></div></label>
@@ -99,10 +105,21 @@
                 <button type="button" data-close-listing-offer>Отмена</button>
               </form>
             </div>
+            <section class="listing-detail-seller">
+              <div class="listing-detail-seller__identity" id="listingSellerIdentity" hidden>
+                <div class="listing-detail-avatar" id="listingSellerAvatar" aria-hidden="true"></div>
+                <div><strong id="listingSellerName">Продавец</strong><p id="listingSellerSales" role="status">Загрузка информации…</p><button id="listingSellerRetry" type="button" hidden>Повторить</button></div>
+              </div>
+              <button class="listing-page__message" id="listingPageChat" type="button">Написать</button>
+              <button class="listing-page__negotiate" id="listingPageOfferButton" type="button">Предложить цену</button>
+            </section>
+            <section class="listing-detail-others" id="listingOtherCars" hidden>
+              <h2>🚘 Другие авто продавца (<span id="listingOtherCount">0</span>)</h2>
+              <div class="listing-detail-others__track" id="listingOtherTrack" aria-label="Другие автомобили продавца"></div>
+              <button id="listingOtherRetry" type="button" hidden>Повторить загрузку автомобилей</button>
+            </section>
             <div class="listing-page__actions" id="listingPageActions">
               <button class="listing-page__buy" id="listingPageBuy" type="button">Купить</button>
-              <button class="listing-page__message" id="listingPageChat" type="button">Написать продавцу</button>
-              <button class="listing-page__negotiate" id="listingPageOfferButton" type="button">Предложить свою цену</button>
             </div>
           </article>
         </section>

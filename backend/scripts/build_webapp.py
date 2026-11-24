@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WEBAPP = ROOT / "webapp"
 INDEX = WEBAPP / "index.html"
 ASSET_URLS = ("css/style.css", "css/account-sales.css", "js/api.js", "js/chat-media.js", "js/referrals.js", "js/deal-confirmation.js", "js/seller-deal.js", "js/admin-operations.js", "js/owner-finance.js", "js/analytics.js", "js/training-sales.js", "js/help.js", "js/account-sales.js", "js/app.js")
+ASSET_URLS += ("css/listing-detail.css", "js/listing-detail.js")
 ASSETS = tuple(WEBAPP / url for url in ASSET_URLS)
 
 
