@@ -6,24 +6,27 @@
     <meta name="theme-color" content="#030912" />
     <meta name="color-scheme" content="dark" />
     <title>AutoFlow Market</title>
-    <meta name="autoflow-build" content="af-844979d92c9a" />
-    <link rel="stylesheet" href="css/style.css?v=af-844979d92c9a" />
-    <link rel="stylesheet" href="css/account-sales.css?v=af-844979d92c9a" />
-    <link rel="stylesheet" href="css/listing-detail.css?v=af-844979d92c9a" />
-    <script src="js/chat-media.js?v=af-844979d92c9a" defer></script>
+    <meta name="autoflow-build" content="af-ac71a4f1e6b2" />
+    <link rel="stylesheet" href="css/style.css?v=af-ac71a4f1e6b2" />
+    <link rel="stylesheet" href="css/account-sales.css?v=af-ac71a4f1e6b2" />
+    <link rel="stylesheet" href="css/listing-detail.css?v=af-ac71a4f1e6b2" />
+    <link rel="stylesheet" href="css/more.css?v=af-ac71a4f1e6b2" />
+    <script src="js/chat-media.js?v=af-ac71a4f1e6b2" defer></script>
     <script id="telegramSdk" src="https://telegram.org/js/telegram-web-app.js" async></script>
-    <script src="js/api.js?v=af-844979d92c9a" defer></script>
-    <script src="js/referrals.js?v=af-844979d92c9a" defer></script>
-    <script src="js/deal-confirmation.js?v=af-844979d92c9a" defer></script>
-    <script src="js/seller-deal.js?v=af-844979d92c9a" defer></script>
-    <script src="js/owner-finance.js?v=af-844979d92c9a" defer></script>
-    <script src="js/admin-operations.js?v=af-844979d92c9a" defer></script>
-    <script src="js/analytics.js?v=af-844979d92c9a" defer></script>
-    <script src="js/training-sales.js?v=af-844979d92c9a" defer></script>
-    <script src="js/help.js?v=af-844979d92c9a" defer></script>
-    <script src="js/account-sales.js?v=af-844979d92c9a" defer></script>
-    <script src="js/listing-detail.js?v=af-844979d92c9a" defer></script>
-    <script src="js/app.js?v=af-844979d92c9a" defer></script>
+    <script src="js/api.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/referrals.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/deal-confirmation.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/seller-deal.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/owner-finance.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/admin-operations.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/analytics.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/training-sales.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/help.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/account-sales.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/listing-detail.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/more.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/seller-vip-pinning.js?v=af-ac71a4f1e6b2" defer></script>
+    <script src="js/app.js?v=af-ac71a4f1e6b2" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -327,7 +330,7 @@
           <div class="withdraw-terms"><span>Срок обработки: <strong>до 24 часов</strong></span><span>Комиссия: <strong>30%</strong></span></div>
           <div class="withdraw-balances" aria-live="polite"><div>Общий баланс<strong><span id="withdrawTotalBalance">—</span> AF</strong></div><div>Доступно для вывода<strong><span id="withdrawEarnedBalance">—</span> AF</strong></div></div><div id="withdrawBalanceStatus" role="status"></div>
           <details class="withdraw-explanation"><summary>Почему доступно для вывода меньше AF?</summary><p>Выводить можно только заработанные AF Coins — например, полученные за продажу автомобилей. Монеты, которые вы пополнили самостоятельно, можно использовать для покупок внутри AutoFlow Market, но вывести их нельзя. Реферальные бонусы также не выводятся. Средства в резерве временно недоступны.</p></details>
-          <form class="withdraw-form" id="withdrawForm"><label>Бюджет из заработанных AF Coins<input name="amount" type="number" inputmode="decimal" step="0.01" min="0.01" required /></label><label>Комментарий<textarea name="details" rows="2" maxlength="2000"></textarea></label><p>Администратор отправляет подарки Telegram вручную. Это подарки, а не пополнение личного баланса Stars. Комиссия уже включена в резерв.</p><div id="withdrawQuote" role="status" aria-live="polite"></div><button class="publish-button" type="submit">Рассчитать подарки</button></form>
+          <form class="withdraw-form" id="withdrawForm"><label>Бюджет из заработанных AF Coins<input name="amount" type="number" inputmode="decimal" step="0.01" min="0.01" required /></label><label>Комментарий<textarea name="details" rows="2" maxlength="2000"></textarea></label><p>Способ выплаты и итоговая сумма показаны в расчёте. Выплату выполняет администратор вручную. Комиссия уже включена в резерв.</p><div id="withdrawQuote" role="status" aria-live="polite"></div><button class="publish-button" type="submit">Рассчитать вывод</button></form>
         </section>
 
         <section class="view form-view" data-view="support" aria-labelledby="supportTitle" hidden>
@@ -342,7 +345,24 @@
         <section class="view form-view" data-view="admin" aria-labelledby="adminTitle" hidden>
           <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="adminTitle">Администрирование</h1></div><div class="admin-panel"><div class="admin-tabs"><button class="is-active" type="button" data-admin-tab="users">Пользователи</button><button type="button" data-admin-tab="training">Обучение</button><button type="button" data-admin-tab="listings">Объявления</button><button type="button" data-admin-tab="deals">Сделки</button><button type="button" data-admin-tab="withdrawals">Выводы</button><button type="button" data-admin-tab="support">Поддержка</button><button type="button" data-admin-tab="advertisement">Реклама</button></div><section data-admin-panel="users"><div class="admin-balance-panel"><h2>Управление балансом пользователя</h2><form class="admin-balance-lookup" id="adminBalanceLookupForm"><label>Username<input id="adminBalanceUsername" name="username" placeholder="@username" autocomplete="off" autocapitalize="none" spellcheck="false" required /></label><button type="submit">Найти пользователя</button></form><div class="admin-balance-message" id="adminBalanceLookupMessage" role="status" aria-live="polite"></div><div class="admin-balance-user" id="adminBalanceUserCard" hidden></div><form class="admin-balance-change" id="balanceAdjustmentForm" hidden><label>Сумма<input name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="50" required /></label><fieldset><legend>Операция</legend><div class="admin-balance-directions"><button class="is-active" type="button" data-balance-direction="credit">＋ Начислить</button><button type="button" data-balance-direction="debit">− Списать</button></div></fieldset><label>Причина / описание<textarea name="reason" placeholder="Необязательно"></textarea></label><button class="publish-button" type="submit">Подтвердить изменение</button></form><div class="admin-balance-result" id="adminBalanceResult" role="status" aria-live="polite"></div><div class="admin-user-history" id="adminUserHistory" hidden></div></div><h2>Все пользователи</h2><form class="admin-search" id="adminUserSearch"><input name="q" placeholder="Имя, username или Telegram ID" /><button type="submit">Найти</button></form><div id="adminUsers"></div></section><section data-admin-panel="training" hidden><div class="training-admin-heading"><div><span class="eyebrow">Каталог и библиотека</span><h2>Управление обучением</h2></div><button type="button" data-open-training>＋ Создать</button></div><div class="training-stat-grid" id="adminTrainingStats"></div><div class="training-admin-filters" id="adminTrainingFilters"><button class="is-active" type="button" data-training-filter="all">Все</button><button type="button" data-training-filter="published">Опубликованные</button><button type="button" data-training-filter="hidden">Скрытые</button><button type="button" data-training-filter="pinned">Закреплённые</button><button type="button" data-training-filter="personal">Персональные</button><button type="button" data-training-filter="automatic">Автовыдача</button></div><div id="adminTrainingProducts"></div><div class="training-admin-detail" id="adminTrainingDetail" hidden><div class="training-admin-detail__heading"><h3 id="adminTrainingDetailTitle">Управление продуктом</h3><button type="button" data-close-training-detail>×</button></div><div id="adminTrainingBuyers"></div><form class="training-material-form" id="trainingMaterialForm" hidden><input name="material_id" type="hidden" /><label>Название<input name="title" maxlength="180" required /></label><label>Тип<select name="material_type"><option value="text">Текст</option><option value="link">Ссылка</option><option value="photo">Фото</option><option value="video">Видео</option><option value="document">Документ</option></select></label><label>Порядок<input name="position" type="number" min="0" value="0" /></label><label>Текст, ссылка или Telegram file_id<textarea name="delivery_reference" rows="3"></textarea></label><label>Заменить файлом (до 20 МБ)<input name="file" type="file" /></label><button class="publish-button" type="submit">Сохранить материал</button></form><div id="adminTrainingMaterials"></div></div></section><section data-admin-panel="listings" hidden><div id="adminListings"></div></section><section data-admin-panel="deals" hidden><div id="adminDeals"></div></section><section data-admin-panel="withdrawals" hidden><h2>Заявки на вывод</h2><div id="adminWithdrawals"></div></section><section data-admin-panel="support" hidden><div id="adminSupportTickets"></div></section><section data-admin-panel="advertisement" hidden><form id="advertisementForm"><label>Изображение 1200 × 400, до 2 МБ<input name="image" type="file" accept="image/jpeg,image/png,image/webp" /></label><label>Ссылка перехода<input name="link_url" type="url" placeholder="https://..." /></label><label class="switch-row"><span>Показывать баннер</span><input name="is_active" type="checkbox" checked /><i aria-hidden="true"></i></label><div class="advertisement-preview" id="advertisementPreview">Баннер пока не загружен</div><button class="publish-button" type="submit">Сохранить рекламу</button><button class="ghost-button" id="deleteAdvertisementButton" type="button">Удалить рекламу</button></form></section></div>
         </section>
-        <section class="view referral-view" data-view="more" aria-labelledby="referralTitle" hidden>
+        <section class="view more-menu" data-view="more" aria-label="Ещё" hidden>
+          <nav class="more-menu__links" aria-label="Возможности AutoFlow Market">
+            <button type="button" class="more-menu__tile" data-more-page="referrals"><span class="more-menu__icon" aria-hidden="true">🔗</span><span>Реферальная программа</span></button>
+            <button type="button" class="more-menu__tile" data-more-page="seller-vip"><span class="more-menu__icon" aria-hidden="true">👑</span><span>VIP для продавцов</span><span class="more-menu__star" aria-hidden="true">★</span></button>
+            <button type="button" class="more-menu__tile" data-more-services><span class="more-menu__icon" aria-hidden="true">🛠</span><span>Услуги ГГ / читы</span></button>
+            <button type="button" class="more-menu__tile" data-more-page="about"><span class="more-menu__icon" aria-hidden="true">ℹ️</span><span>О нас</span></button>
+          </nav>
+        </section>
+        <section class="view seller-vip-view" data-view="seller-vip" aria-labelledby="sellerVipTitle" hidden>
+          <div class="more-internal-heading"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="sellerVipTitle">VIP для продавцов</h1></div>
+          <div id="sellerVipContent" aria-live="polite"></div>
+        </section>
+        <section class="view about-view" data-view="about" aria-labelledby="aboutTitle" hidden>
+          <div class="screen-heading screen-heading--back"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><h1 id="aboutTitle">О нас</h1></div>
+          <div id="aboutContent"></div>
+        </section>
+        <section class="view referral-view" data-view="referrals" aria-labelledby="referralTitle" hidden>
+          <div class="more-internal-heading"><button class="back-button" type="button" data-back aria-label="Назад">‹</button><span>Реферальная программа</span></div>
           <header class="referral-heading">
             <span class="referral-symbol" aria-hidden="true"><svg viewBox="0 0 48 40"><circle cx="18" cy="10" r="7"/><circle cx="34" cy="9" r="6"/><path d="M5 36v-6c0-13 26-13 26 0v6H5ZM30 18c13-3 16 6 16 11v4H34v-3c0-5-1-9-4-12Z"/></svg></span>
             <div><h1 id="referralTitle"><span>Реферальная</span><span>программа</span></h1><p>Приглашай друзей и получай бонусы</p></div>

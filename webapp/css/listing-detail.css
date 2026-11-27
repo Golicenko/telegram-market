@@ -57,6 +57,14 @@ body.car-detail-open .floating-chat-button{display:none}
 .listing-detail-seller__identity>div:last-child{min-width:0}
 .listing-detail-seller__identity strong{font-size:12px;overflow-wrap:anywhere}
 .listing-detail-seller__identity p{margin:4px 0 2px;color:#e2e7eb;font-size:10px}
+.listing-seller-vip{display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;margin-left:3px;padding:3px;min-width:32px;min-height:32px;border:0;background:transparent;color:#ffca47;cursor:pointer}
+.listing-seller-vip svg{width:22px;height:22px;filter:drop-shadow(0 0 3px #e9ad2733)}
+.listing-seller-vip svg path:first-child{fill:#594010;stroke:#edbd49;stroke-width:1}
+.listing-seller-vip svg path:last-child{fill:none;stroke:#ffe7a1;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.listing-vip-info{max-width:min(360px,calc(100% - 24px));color:#f4f5f7;background:#091725;border:1px solid #99742c;border-radius:18px;padding:22px}
+.listing-vip-info p{font-size:14px;line-height:1.5;color:#c2cbd5}
+.listing-vip-info button{width:100%;min-height:44px}
+.listing-vip-info::backdrop{background:#02050bb8;backdrop-filter:blur(5px)}
 .listing-detail-avatar{position:relative;display:grid;place-items:center;flex:none;width:47px;height:47px;overflow:hidden;border:1.5px solid #ffd128;border-radius:50%;background:#1a2733;box-shadow:0 0 9px #ffbb0028;color:#8c9dad}
 .listing-detail-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .listing-detail-avatar svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.4}

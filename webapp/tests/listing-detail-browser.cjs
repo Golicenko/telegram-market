@@ -36,6 +36,7 @@ const server=http.createServer((req,res)=>{
    else if(p.match(/^\/listings\/[^/]+\/seller-context$/)){
     const item=findListing(p.split('/')[2]);if(failContext){status=503;body={detail:'Unavailable'};}
     else {const all=listings.filter(i=>i.seller_id===item.seller_id&&i.id!==item.id);const offset=Number(url.searchParams.get('offset')||0);body={name:'Тестовый продавец',photo_url:null,completed_sales:7,saved_by_me:saved,other_active_count:item.seller_id==='no-other'?0:all.length,items:item.seller_id==='no-other'?[]:all.slice(offset,offset+12),has_more:offset+12<all.length};
+     Object.assign(body,{vip_active:item.id==='car-0',vip_expires_at:new Date(Date.now()+86400000).toISOString(),server_now:new Date().toISOString()});
      // Simulate an offset page repeating after concurrent seller publications.
      if(width===390&&item.id==='car-0'&&offset===12)Object.assign(body,{items:all.slice(0,12),has_more:true});
      if(width===390&&item.id==='car-0'&&offset===24)Object.assign(body,{items:all.slice(12),has_more:false});
@@ -56,6 +57,11 @@ const server=http.createServer((req,res)=>{
   await page.locator('#listingSellerSales').filter({hasText:'7 успешных сделок'}).waitFor();
   const detail=page.locator('.listing-page--car');await detail.waitFor();
   assert.equal(await page.locator('#listingOtherCount').innerText(),'14');
+  await page.locator('.listing-seller-vip').waitFor({state:'visible'});
+  await page.locator('.listing-seller-vip').click();
+  const vipInfo=page.getByRole('dialog',{name:'VIP-продавец',exact:true});await vipInfo.waitFor();
+  assert.match(await vipInfo.innerText(),/не подтверждает личность/);
+  await page.evaluate(()=>testBack());await vipInfo.waitFor({state:'detached'});
   assert.equal(await page.locator('#listingPageSpecs > span').count(),4);
   assert.equal(await page.locator('#listingGallery .listing-gallery__frame').count(),3);
   const geometry=await page.evaluate(()=>['.listing-page__media','#listingGallery','.listing-gallery__track','.listing-gallery__frame'].map(s=>{const e=document.querySelector(s),c=getComputedStyle(e),r=e.getBoundingClientRect();return {s,parent:e.parentElement.className,hidden:e.hidden,w:r.width,h:r.height,position:c.position,display:c.display,aspect:c.aspectRatio,cssWidth:c.width,cssHeight:c.height};}));
@@ -81,6 +87,7 @@ const server=http.createServer((req,res)=>{
   const firstState=await page.evaluate(()=>{window.scrollTo(0,110);const el=document.querySelector('#listingOtherTrack');el.scrollLeft=90;return {scrollY:window.scrollY,left:el.scrollLeft};});
   await page.locator('#listingOtherTrack [data-open-listing="car-2"]').click();
   await page.waitForFunction(()=>document.querySelector('#listingPageTitle').textContent==='Nissan GTR R35');
+  await page.waitForFunction(()=>document.querySelector('.listing-seller-vip').hidden);
   assert.equal(await page.evaluate(()=>scrollY),0);
   // All existing actions must follow the selected car, not the previous page.
   await page.locator('#listingPageChat').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent==='Тестовый чат');assert.deepEqual(messages,['car-2']);

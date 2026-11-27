@@ -540,6 +540,7 @@ class WithdrawalOut(ORMModel):
     gift_delivered_stars: int = 0
     gift_remaining_stars: int = 0
     payout_method: str
+    vip_priority: bool = False
     details: str
     status: str
     rejection_reason: str | None
@@ -551,6 +552,7 @@ class WithdrawalOut(ORMModel):
 
 
 class AdminWithdrawalOut(WithdrawalOut):
+    vip_snapshot: dict = Field(default_factory=dict)
     gift_deliveries: list[dict] = Field(default_factory=list)
     user_telegram_id: int
     user_name: str

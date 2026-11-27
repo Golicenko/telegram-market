@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateTable
 
 from test_chat_lifecycle_db import DB  # SQLite JSONB compiler; persistence, not PG locking.
-from app.models import User, Wallet, WalletTransaction, Notification, AdminAction, WithdrawalRequest, GiftWithdrawalQuote
+from app.models import User, Wallet, WalletTransaction, Notification, AdminAction, WithdrawalRequest, GiftWithdrawalQuote, SellerVipPlan, SellerVipSubscription
 from app.schemas import WithdrawalCreate
 from app.gift_withdrawals import calculate_quote, preview_withdrawal, reserve_gift_withdrawal
 from app.services import create_withdrawal, decide_withdrawal, cancel_withdrawal
@@ -46,7 +46,7 @@ def db(monkeypatch):
     monkeypatch.setattr(service, "available_gifts", catalog)
     engine = create_engine("sqlite://")
     with engine.begin() as connection:
-        for model in (User, Wallet, GiftWithdrawalQuote, WithdrawalRequest, WalletTransaction, Notification, AdminAction):
+        for model in (User, Wallet, GiftWithdrawalQuote, WithdrawalRequest, WalletTransaction, Notification, AdminAction, SellerVipPlan, SellerVipSubscription):
             connection.execute(CreateTable(model.__table__))
     session = Session(engine, expire_on_commit=False)
     user = User(id=uuid.uuid4(), telegram_id=1, first_name="Buyer", role="user")

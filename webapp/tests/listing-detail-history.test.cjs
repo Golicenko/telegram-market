@@ -4,8 +4,8 @@ function harness(){
  let now=1000,modal=false;const requests=[],restores=[];
  const state={currentView:'listing-detail',previousView:'market',selectedListing:{id:'A'},navigationVersion:1,navigationStack:[{view:'market',scrollY:40}]};
  const window={scrollY:120,setTimeout(){},scrollTo(value){window.scrollY=value.top;},AutoFlowDealConfirmation:{dismiss:()=>false}};
- const c={state,window,Date:{now:()=>now},primaryViews:new Set(['market','profile']),referralsPage:null,
-  document:{querySelector:()=>null},elements:{purchaseModal:{open:false}},accountSales:{dismiss:()=>false},
+ const c={state,window,Date:{now:()=>now},primaryViews:new Set(['market','profile']),referralsPage:null,morePages:null,
+  document:{querySelector:()=>null},elements:{purchaseModal:{open:false}},accountSales:{dismiss:()=>false},vipPinning:{dismiss:()=>false},
   listingDetail:{dismiss:()=>modal,snapshot:()=>({photoIndex:1,otherScrollLeft:90}),restore:value=>restores.push(value)},
   renderListingPage(){},recordListingView(){},track(){},notify(){},requestAnimationFrame:fn=>fn(),
   api:{async request(url){requests.push(url);return {id:url.split('/').at(-1)};}},

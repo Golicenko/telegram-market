@@ -80,6 +80,8 @@ async def create_draft(payload: ListingCreate, user: User = Depends(get_current_
         existing = await session.scalar(select(Listing.id).where(Listing.seller_id == user.id, Listing.client_request_id == payload.client_request_id))
         if existing:
             raise HTTPException(409, "Объявление уже опубликовано")
+        from .publication_quota import require_vip_slot
+        await require_vip_slot(session, locked_user)
         rules = await rules_out(session, locked_user)
         if not rules["payment_required"]:
             raise HTTPException(409, "Доступна бесплатная публикация. Повторите публикацию.")

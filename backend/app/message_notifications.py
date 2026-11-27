@@ -61,6 +61,22 @@ async def claim_delivery(session, user_id, now):
             return None
         relevant = []
         for notice in pending:
+            if notice.notification_type.startswith("seller_vip_"):
+                from .seller_vip import active_subscription, utc
+                from .models import SellerVipSubscription
+                subscription = await session.get(SellerVipSubscription, uuid.UUID(notice.payload["seller_vip_id"]))
+                valid = bool(subscription and subscription.user_id == user.id)
+                if valid and notice.notification_type == "seller_vip_expiring":
+                    valid = (subscription.status == "active" and now < utc(subscription.expires_at) <= now + timedelta(hours=24)
+                             and notice.payload.get("expires_at") == utc(subscription.expires_at).isoformat())
+                elif valid and notice.notification_type == "seller_vip_expired":
+                    valid = (subscription.status == "expired" and not await active_subscription(session, user.id))
+                elif valid and notice.notification_type == "seller_vip_purchased":
+                    valid = subscription.status == "active" and utc(subscription.expires_at) > now
+                if not valid:
+                    notice.delivery_status = "suppressed"
+                    notice.delivery_error = "seller_vip_notice_no_longer_relevant"
+                    continue
             if notice.notification_type == "deal_manual_reminder":
                 deal = await session.get(Deal, uuid.UUID(notice.payload["deal_id"]))
                 kind = notice.payload.get("kind")
@@ -131,7 +147,8 @@ async def claim_delivery(session, user_id, now):
                 return None
             latest = eligible[0]
             text = latest.body
-            params = ({"vip_renewal": latest.payload["renewal_id"]} if latest.notification_type == "vip_expired" else
+            params = ({"view": "seller-vip"} if latest.notification_type.startswith("seller_vip_") else
+                      {"vip_renewal": latest.payload["renewal_id"]} if latest.notification_type == "vip_expired" else
                       {"admin_user_id": latest.payload["seller_id"]}
                       if latest.notification_type in {"seller_blocked_bot", "seller_notice_failed"} else
                       {"admin_deal_id": latest.payload["admin_deal_id"]} if latest.payload.get("admin_deal_id") else

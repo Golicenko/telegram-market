@@ -835,6 +835,7 @@ body.more-open .header-spacer{display:none}
 .help-withdrawal-example{margin:12px 0;padding:12px;border:1px solid #4c658044;border-radius:10px;background:#0a1c2d}
 .help-withdrawal-example h3{margin:0 0 10px;color:#ebcb80;font-size:15px}.help-withdrawal-example dl{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin:0;font-size:13px;line-height:1.4}.help-withdrawal-example dt{min-width:0;color:#c3cfdf}.help-withdrawal-example dd{margin:0;color:#f5db9c;text-align:right;overflow-wrap:anywhere}.help-withdrawal-example p{font-size:12px;line-height:1.5}.help-withdrawal-example button{min-height:44px}
 .admin-withdrawal small{display:block;font-size:11px;overflow-wrap:anywhere;line-height:1.4}
+.admin-withdrawal--vip{border-color:#ba8b39;box-shadow:0 0 0 1px #eab85b18}.admin-withdrawal--vip>strong:first-child{color:#f5ce82}
 .admin-withdrawal__actions button{min-height:44px;font-size:11px;padding:6px 10px}
 .profile-view .profile-main-actions .conversation-unread{position:absolute;top:2px;right:4px;background:#f03140;color:#fff;border-radius:999px;padding:2px 5px;font-size:11px}
 .topup-form .topup-rate{margin:0 0 10px;font-size:13px;line-height:1.5;color:var(--muted)}

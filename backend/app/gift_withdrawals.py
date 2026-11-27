@@ -1,4 +1,4 @@
-"""Server-quoted, manually fulfilled gifts. This module never calls sendGift."""
+"""Server-quoted manual payouts. Never send gifts or call Fragment here."""
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
@@ -44,10 +44,10 @@ async def available_gifts():
         raise HTTPException(503, "Не удалось получить каталог подарков. Попробуйте позже.") from None
 
 
-def calculate_quote(budget, gifts):
+def calculate_quote(budget, gifts, *, payout_ceiling=None):
     budget = Decimal(budget)
     # The existing product requirement limits ordinary gift payouts to 350 Stars.
-    ceiling = get_settings().payout_nft_threshold_stars
+    ceiling = get_settings().payout_nft_threshold_stars if payout_ceiling is None else payout_ceiling
     limit = min(int((budget * WITHDRAWAL_NET).to_integral_value(rounding=ROUND_FLOOR)), ceiling)
     plans = [None] * (limit + 1)
     plans[0] = []
@@ -71,20 +71,48 @@ def calculate_quote(budget, gifts):
     }
 
 
+def fragment_payout(budget):
+    """Return an integer net quantity, never a gift-denomination approximation."""
+    settings = get_settings()
+    if not settings.fragment_withdrawals_enabled:
+        return None
+    payout = int((Decimal(budget) * WITHDRAWAL_NET).to_integral_value(rounding=ROUND_FLOOR))
+    if payout <= 50:
+        return None
+    if not settings.fragment_withdrawal_min_stars <= payout <= settings.fragment_withdrawal_max_stars:
+        raise HTTPException(422, {"code": "fragment_quantity_unavailable", "message":
+            f"Для ручной выплаты через Fragment сейчас подтверждён диапазон {settings.fragment_withdrawal_min_stars}–{settings.fragment_withdrawal_max_stars} Stars. Измените сумму или обратитесь в поддержку."})
+    gross = (Decimal(payout) / WITHDRAWAL_NET).quantize(Decimal("0.01"), rounding=ROUND_CEILING)
+    return {"gross_af": gross, "fee_af": gross - payout, "payout_stars": payout,
+        "unspent_af": Decimal(budget) - gross, "gift_plan": [], "payout_method": "manual_fragment"}
+
+
+def validate_fragment_recipient(user):
+    from .withdrawal_support import validated_username
+    if not validated_username(user.username):
+        raise HTTPException(422, {"code": "fragment_username_required", "message":
+            "Для ручной выплаты через Fragment укажите публичный username в настройках Telegram и заново откройте Mini App. Либо обратитесь в поддержку."})
+
+
 async def preview_withdrawal(session, user, budget):
     async with session.begin():
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
         if not wallet or wallet.earned_balance < budget:
             raise insufficient_earned(wallet.earned_balance if wallet else 0)
-    gifts = await available_gifts()
+    values = fragment_payout(budget)
+    if values:
+        validate_fragment_recipient(user)
+    else:
+        gifts = await available_gifts()
+        values = {**calculate_quote(budget, gifts, payout_ceiling=50 if get_settings().fragment_withdrawals_enabled else None),
+            "payout_method": "manual_gift"}
     async with session.begin():
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id))
         if not wallet or wallet.earned_balance < budget:
             raise insufficient_earned(wallet.earned_balance if wallet else 0)
-        values = calculate_quote(budget, gifts)
         quote = GiftWithdrawalQuote(user_id=user.id, budget=budget,
             gross_af=values["gross_af"], fee_af=values["fee_af"], payout_stars=values["payout_stars"],
-            gift_plan=values["gift_plan"], expires_at=datetime.now(UTC) + timedelta(minutes=5))
+            gift_plan=values["gift_plan"], payout_method=values["payout_method"], expires_at=datetime.now(UTC) + timedelta(minutes=5))
         session.add(quote)
         await session.flush()
     return {"quote_id": str(quote.id), "expires_at": quote.expires_at, **values}
@@ -98,7 +126,11 @@ async def reserve_gift_withdrawal(session, user, quote_id, details):
         existing = await session.scalar(select(WithdrawalRequest).where(WithdrawalRequest.gift_quote_id == quote_id, WithdrawalRequest.user_id == user.id))
         if existing:
             return existing
-    catalog = {gift["id"]: gift["star_count"] for gift in await available_gifts()}
+        preview = await session.get(GiftWithdrawalQuote, quote_id)
+        if not preview or preview.user_id != user.id:
+            raise HTTPException(404, "Расчёт заявки не найден")
+        method = preview.payout_method
+    catalog = {gift["id"]: gift["star_count"] for gift in await available_gifts()} if method == "manual_gift" else {}
     async with session.begin():
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == user.id).with_for_update())
         existing = await session.scalar(select(WithdrawalRequest).where(WithdrawalRequest.gift_quote_id == quote_id, WithdrawalRequest.user_id == user.id))
@@ -110,6 +142,14 @@ async def reserve_gift_withdrawal(session, user, quote_id, details):
         expiry = quote.expires_at.replace(tzinfo=UTC) if quote.expires_at.tzinfo is None else quote.expires_at
         if expiry <= datetime.now(UTC):
             raise HTTPException(409, "Расчёт устарел. Рассчитайте заявку заново.")
+        if quote.payout_method == "manual_fragment":
+            if fragment_payout(quote.budget) is None:
+                raise HTTPException(409, "Ручные выплаты через Fragment временно недоступны. Рассчитайте заявку заново.")
+            validate_fragment_recipient(user)
+            if quote.gift_plan or fragment_payout(quote.budget)["payout_stars"] != quote.payout_stars:
+                raise HTTPException(409, "Условия выплаты изменились. Рассчитайте заявку заново.")
+        elif quote.payout_method != "manual_gift":
+            raise HTTPException(409, "Неизвестный способ выплаты. Рассчитайте заявку заново.")
         if any(catalog.get(item["gift_id"]) != item["star_count"] for item in quote.gift_plan):
             raise HTTPException(409, "Каталог подарков изменился. Рассчитайте заявку заново.")
         if not wallet or wallet.earned_balance < quote.gross_af:
@@ -118,18 +158,28 @@ async def reserve_gift_withdrawal(session, user, quote_id, details):
         wallet.earned_balance = money(wallet.earned_balance - quote.gross_af)
         wallet.earned_frozen_balance = money(wallet.earned_frozen_balance + quote.gross_af)
         wallet.version += 1
-        request = WithdrawalRequest(user_id=user.id, amount=quote.gross_af, payout_method="manual_gift",
-            details=details or "Подарки Telegram", status="pending", gift_quote_id=quote.id,
+        from .seller_vip import active_subscription
+        subscription = await active_subscription(session, user.id)
+        priority = bool(subscription)
+        snapshot = {"subscription_id": str(subscription.id), "plan_code": subscription.plan_code,
+            "expires_at": subscription.expires_at.isoformat()} if subscription else {}
+        request = WithdrawalRequest(user_id=user.id, amount=quote.gross_af, payout_method=quote.payout_method,
+            details=details or ("Fragment — ручная выплата" if method == "manual_fragment" else "Подарки Telegram"),
+            vip_priority=priority, vip_snapshot=snapshot, status="pending", gift_quote_id=quote.id,
             fee_af=quote.fee_af, payout_stars=quote.payout_stars, gift_plan=quote.gift_plan)
         session.add(request)
         await session.flush()
         session.add(wallet_transaction(wallet, "withdrawal_reserved", -request.amount, before_available, before_frozen,
-            f"Резерв ручной выдачи подарков: {quote.payout_stars} Stars стоимости, комиссия {quote.fee_af} AF", withdrawal_id=request.id))
+            f"Резерв ручной выплаты ({quote.payout_method}): {quote.payout_stars} Stars, комиссия {quote.fee_af} AF", withdrawal_id=request.id))
         admins = list((await session.scalars(select(User).where(User.role == "admin"))).all())
         username = validated_username(user.username)
         for admin in admins:
             await create_notification(session, admin.id, "withdrawal_created", f"Заявка на вывод {request.public_id}",
-                f"💸 Заявка на вывод {request.public_id}\nК отправке: {request.payout_stars} ⭐\n"
+                ("👑 VIP-ПОЛЬЗОВАТЕЛЬ — ПРИОРИТЕТНЫЙ ВЫВОД\n" if priority else "")
+                + f"💸 Заявка на вывод {request.public_id}\nПользователь: {user.first_name}\nTelegram ID: {user.telegram_id}\n"
+                + f"Сумма списания: {request.amount} AF\nКомиссия: {request.fee_af} AF\nК отправке: {request.payout_stars} ⭐\n"
+                + ("Способ выплаты: Fragment\n" if method == "manual_fragment" else "Способ выплаты: Telegram-подарок\n")
+                + ("Статус: VIP\n" if priority else "Статус: обычный\n")
                 + (f"Username: @{username}" if username else "Username отсутствует"),
                 {"withdrawal_id": str(request.id), "admin_withdrawal_id": str(request.id),
                  "withdrawal_user_id": str(user.id)})

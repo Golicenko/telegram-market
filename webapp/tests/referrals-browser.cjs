@@ -61,7 +61,7 @@ const server = http.createServer((req, res) => {
         }
         await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
       });
-      const url = `http://127.0.0.1:${server.address().port}/?view=more`;
+      const url = `http://127.0.0.1:${server.address().port}/?view=referrals`;
       await page.goto(url);
       await page.locator("#referralContent").waitFor({ state: "visible" });
       assert.equal(await page.locator("#referralCount").textContent(), "7");
@@ -135,6 +135,7 @@ const server = http.createServer((req, res) => {
       await page.clock.fastForward(16000); // Existing finite navigation cache expires.
       await page.locator('.bottom-nav [data-nav-target="market"]').click();
       await page.locator('.bottom-nav [data-nav-target="more"]').click();
+      await page.locator('[data-more-page="referrals"]').click();
       await page.waitForFunction(() => document.getElementById("referralCount").textContent === "20");
       await page.waitForFunction(() => document.querySelector(".app-header [data-balance]").textContent === "188.45");
       assert.equal(await page.locator(".referral-milestone.is-complete").count(), 3);

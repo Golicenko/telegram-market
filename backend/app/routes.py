@@ -3424,6 +3424,7 @@ async def admin_withdrawals(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     withdrawal_id: uuid.UUID | None = None,
+    vip_priority: bool | None = None,
     admin: User = Depends(require_admin),
     session: AsyncSession = Depends(get_session),
 ):
@@ -3445,8 +3446,9 @@ async def admin_withdrawals(
             .join(User, User.id == WithdrawalRequest.user_id)
             .where(WithdrawalRequest.public_number == int(number) if number else True,
                    WithdrawalRequest.status == status if status else True,
-                   WithdrawalRequest.id == withdrawal_id if withdrawal_id else True)
-            .order_by(WithdrawalRequest.public_number.desc()).limit(limit).offset(offset)
+                   WithdrawalRequest.id == withdrawal_id if withdrawal_id else True,
+                   WithdrawalRequest.vip_priority == vip_priority if vip_priority is not None else True)
+            .order_by(WithdrawalRequest.vip_priority.desc(), WithdrawalRequest.public_number.desc()).limit(limit).offset(offset)
         )
     ).all()
 
@@ -3454,6 +3456,7 @@ async def admin_withdrawals(
         AdminWithdrawalOut(
             **WithdrawalOut.model_validate(withdrawal).model_dump(),
             gift_deliveries=withdrawal.gift_deliveries or [],
+            vip_snapshot=withdrawal.vip_snapshot or {},
             user_telegram_id=user.telegram_id,
             user_name=" ".join(
                 filter(None, [user.first_name, user.last_name])

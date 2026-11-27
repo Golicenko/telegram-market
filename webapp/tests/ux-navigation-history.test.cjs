@@ -7,16 +7,28 @@ const root = path.resolve(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const script = fs.readFileSync(path.join(root, "js", "app.js"), "utf8");
 
-test("More is the referral page; legacy Settings stays removed", () => {
+test("More is the menu with nested referrals; legacy Settings stays removed", () => {
   const profile = html.match(/<section class="view profile-view"[\s\S]*?<\/section>/)?.[0] || "";
   assert.doesNotMatch(html, /data-view="settings"/);
   assert.match(html, /data-view="more"/);
+  assert.match(html, /data-view="referrals"/);
   assert.doesNotMatch(html, /moreUpdatesModal/);
   assert.match(profile, /data-open-info/);
   assert.match(profile, /data-open-support/);
   assert.doesNotMatch(profile, /data-refresh-account|data-nav-target="settings"/);
   assert.match(profile, /class="profile-admin" type="button" data-open-admin data-admin-only hidden/);
   assert.match(profile, /data-open-admin/);
+});
+
+test("a new nested page clears the previous screen's Back guard but not a Back transition", async () => {
+  const vm = require("node:vm"), state = { backBlockedUntil: 99999 };
+  const start = script.indexOf('  async function navigate(viewName, options = {}) {');
+  const end = script.indexOf('    if (viewName !== "listing-detail")', start);
+  const actualPrefix = script.slice(start, end) + '\n}';
+  const navigate = vm.runInNewContext(`(${actualPrefix.trim()})`, { state, elements: { views: [{ dataset: { view: "about" } }] } });
+  await navigate("about", { back: true }); assert.equal(state.backBlockedUntil, 99999);
+  await navigate("missing"); assert.equal(state.backBlockedUntil, 99999);
+  await navigate("about"); assert.equal(state.backBlockedUntil, 0);
 });
 
 test("Profile uses user-facing wallet and navigation labels", () => {

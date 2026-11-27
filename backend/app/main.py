@@ -33,8 +33,10 @@ from .chat_media import router as chat_media_router
 from .account_sales import run_cleanup as run_account_cleanup
 from .account_pins import router as account_sales_router
 from .listing_details import router as listing_details_router
+from .about import router as about_router
 from .account_video_processing import run_worker as run_account_video_worker
 from .support_media import router as support_media_router
+from .seller_vip import router as seller_vip_router, run_worker as run_seller_vip_worker
 
 
 settings = get_settings()
@@ -87,6 +89,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(run_startup_job("analytics_retention", run_analytics_retention)),
         asyncio.create_task(run_startup_job("publication_recovery", run_publication_worker)),
         asyncio.create_task(run_startup_job("vip_recovery", run_promotion_worker)),
+        asyncio.create_task(run_startup_job("seller_vip_expiry", run_seller_vip_worker)),
     ]
     try:
         yield
@@ -163,7 +166,9 @@ app.include_router(owner_finance_router)
 app.include_router(chat_media_router)
 app.include_router(account_sales_router)
 app.include_router(listing_details_router)
+app.include_router(about_router)
 app.include_router(support_media_router)
+app.include_router(seller_vip_router)
 
 
 @app.get("/", include_in_schema=False)
