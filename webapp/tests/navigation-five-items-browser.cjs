@@ -102,7 +102,7 @@ const server = http.createServer((req, res) => {
         assert.equal(await page.evaluate(() => window.__backVisible), false);
         assert.equal(await nav.locator('[aria-current="page"]').getAttribute('data-nav-target'), 'more');
         assert(!await page.locator(`[data-view="${view}"]`).isVisible(), 'More is a full page');
-        assert(await page.locator('.app-header').isVisible(), 'Shared header preserved');
+        assert(!await page.locator('.app-header').isVisible(), 'More menu contains only the four requested tiles, without wallet/header');
       }
       // Rapid opening keeps one page, with no modal or overlay.
       await more.evaluate(button => { button.click(); button.click(); });
@@ -110,7 +110,7 @@ const server = http.createServer((req, res) => {
       await page.evaluate(async () => { await window.__back(); await window.__back(); });
       assert(await referralPage.isVisible());
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-      // Legacy ?view=more now opens the referral screen.
+      // Direct More route opens its new menu, without modifying bottom navigation.
       await page.goto(url + '?view=more');
       await referralPage.waitFor({ state: 'visible' });
       assert(!await page.locator('[data-view="market"]').isVisible());

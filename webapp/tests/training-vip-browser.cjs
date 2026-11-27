@@ -58,13 +58,15 @@ const server = http.createServer((req,res)=>{
       backendPaid=true;
       await page.locator('#purchaseModal').waitFor({state:'hidden'});
       await page.locator('[data-edit-listing="car"]').first().click();
+      // Editing no longer implicitly buys a pin; request the paid benefit explicitly.
+      await page.locator('#carForm input[name="promote_for_24h"]').check();
       await page.locator('#carForm button[type=submit]').click();
       await page.locator('#purchaseModal').waitFor();
       assert.equal(edits,1); assert.equal(legacyPins,0); assert.equal(posts,2);
       assert.match(await page.locator('#purchaseModal').innerText(),/Доплатить: 3 ⭐/);
       await page.evaluate(()=>document.querySelector('#purchaseModal').dispatchEvent(new Event('cancel',{cancelable:true})));
       await page.locator('#purchaseModal').waitFor({state:'hidden'});
-      await page.locator('[data-nav-target="profile"]').click();
+      await page.locator('.nav-item[data-nav-target="profile"]').click();
       await page.locator('[data-open-admin]').click();
       await page.locator('[data-admin-tab="training"]').click();
       await page.locator('#trainingSales').getByText('Username отсутствует',{exact:true}).waitFor();

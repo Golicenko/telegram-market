@@ -96,7 +96,8 @@ const server = http.createServer((req, res) => {
       await page.locator('.bottom-nav [data-nav-target=profile]').click();
       await page.locator('.profile-main-actions [data-open-info]').click();
       await page.waitForFunction(()=>document.getElementById('helpRulesStatus').textContent.includes('получены с сервера'));
-      assert.equal(await page.locator('#helpArticles details').count(),16);
+      assert.equal(await page.locator('#helpArticles details').count(),17);
+      assert.match(await page.locator('#help-more-update').textContent(),/VIP/);
       await page.locator('#help-withdraw summary').click();
       assert((await page.locator('#help-withdraw').innerText()).includes('30%'));
       await page.waitForFunction(()=>!document.getElementById('toast').classList.contains('is-visible'));

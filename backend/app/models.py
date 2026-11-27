@@ -11,6 +11,83 @@ class Base(DeclarativeBase):
     pass
 
 
+class SellerVipPlan(Base):
+    __tablename__ = "seller_vip_plans"
+    code: Mapped[str] = mapped_column(String(32), primary_key=True)
+    title: Mapped[str] = mapped_column(String(128), nullable=False)
+    duration_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_af: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    pins_72h: Mapped[int] = mapped_column(Integer, nullable=False)
+    pins_24h: Mapped[int] = mapped_column(Integer, nullable=False)
+    car_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    account_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    __table_args__ = (CheckConstraint("duration_days > 0 AND price_af > 0 AND pins_72h >= 0 AND pins_24h >= 0 AND car_limit > 0 AND account_limit >= 0", name="ck_seller_vip_plan_values"),)
+
+
+class SellerVipSubscription(Base):
+    __tablename__ = "seller_vip_subscriptions"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    plan_code: Mapped[str] = mapped_column(ForeignKey("seller_vip_plans.code", ondelete="RESTRICT"), nullable=False)
+    quote_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    title: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    price_paid: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    purchased_af: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    earned_af: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    bonus_af: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    transaction_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("wallet_transactions.id", ondelete="RESTRICT"), unique=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    pins_72h_total: Mapped[int] = mapped_column(Integer, nullable=False)
+    pins_72h_remaining: Mapped[int] = mapped_column(Integer, nullable=False)
+    pins_24h_total: Mapped[int] = mapped_column(Integer, nullable=False)
+    pins_24h_remaining: Mapped[int] = mapped_column(Integer, nullable=False)
+    car_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    account_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    warning_notification_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("notifications.id", ondelete="RESTRICT"))
+    expiry_notification_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("notifications.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("user_id", "request_id", name="uq_seller_vip_purchase_request"),
+        CheckConstraint("status IN ('active','expired','disabled') AND source IN ('purchase','admin')", name="ck_seller_vip_subscription_status"),
+        CheckConstraint("expires_at > starts_at AND price_paid >= 0 AND purchased_af >= 0 AND earned_af >= 0 AND bonus_af >= 0 AND price_paid = purchased_af + earned_af + bonus_af", name="ck_seller_vip_subscription_funding"),
+        CheckConstraint("pins_72h_remaining BETWEEN 0 AND pins_72h_total AND pins_24h_remaining BETWEEN 0 AND pins_24h_total AND car_limit > 0 AND account_limit >= 0", name="ck_seller_vip_subscription_allowance"),
+        Index("uq_seller_vip_active_user", "user_id", unique=True, postgresql_where=sql_text("status = 'active'"), sqlite_where=sql_text("status = 'active'")),
+    )
+
+
+class SellerVipPinUsage(Base):
+    __tablename__ = "seller_vip_pin_usages"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("seller_vip_subscriptions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    listing_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("listings.id", ondelete="RESTRICT"), nullable=False)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    duration_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    pinned_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("user_id", "request_id", name="uq_seller_vip_pin_request"),
+        CheckConstraint("duration_hours IN (24,72)", name="ck_seller_vip_pin_hours"),
+    )
+
+
+class SellerVipAdminCommand(Base):
+    __tablename__ = "seller_vip_admin_commands"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    admin_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    parameters: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("seller_vip_subscriptions.id", ondelete="RESTRICT"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (UniqueConstraint("admin_id", "request_id", name="uq_seller_vip_admin_request"),)
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -920,6 +997,7 @@ class GiftWithdrawalQuote(Base):
     fee_af: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     payout_stars: Mapped[int] = mapped_column(Integer, nullable=False)
     gift_plan: Mapped[list] = mapped_column(JSONB, nullable=False)
+    payout_method: Mapped[str] = mapped_column(String(64), nullable=False, default="manual_gift", server_default="manual_gift")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     __table_args__ = (CheckConstraint("gross_af > 0 AND gross_af <= budget AND payout_stars > 0 AND fee_af = gross_af - payout_stars", name="ck_gift_quote_amounts"),)
 
@@ -936,6 +1014,8 @@ class WithdrawalRequest(Base, TimestampMixin):
     gift_plan: Mapped[list | None] = mapped_column(JSONB)
     gift_deliveries: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     payout_method: Mapped[str] = mapped_column(String(64), nullable=False)
+    vip_priority: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false", index=True)
+    vip_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     details: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending", index=True)
     rejection_reason: Mapped[str | None] = mapped_column(Text)

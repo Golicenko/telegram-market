@@ -44,7 +44,7 @@ async def test_100_parallel_requests_unique_numbers_and_quote_replay(monkeypatch
         async with sessions() as session:
             job = await claim_delivery(session, admin.id, datetime.now(UTC))
         assert "💸 Заявка на вывод #" in job["text"] and "К отправке: 15 ⭐" in job["text"]
-        assert "Telegram ID" not in job["text"] and "Резерв" not in job["text"]
+        assert "Telegram ID: 9601" in job["text"] and "Способ выплаты: Telegram-подарок" in job["text"]
         assert job["contact_url"] == "tg://user?id=9601"
         assert "admin_withdrawal_id" in job["params"]
         admin.role = "admin"

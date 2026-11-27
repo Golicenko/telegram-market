@@ -23,12 +23,18 @@ def test_build_script_stamps_all_assets_with_one_content_hash(tmp_path, monkeypa
     (webapp / "js" / "analytics.js").write_text("analytics", encoding="utf-8")
     (webapp / "js" / "training-sales.js").write_text("training-sales", encoding="utf-8")
     (webapp / "js" / "help.js").write_text("help", encoding="utf-8")
+    (webapp / "css" / "more.css").write_text("more{}", encoding="utf-8")
+    (webapp / "js" / "more.js").write_text("more", encoding="utf-8")
+    (webapp / "js" / "seller-vip-pinning.js").write_text("vip-pinning", encoding="utf-8")
     index = webapp / "index.html"
     index.write_text(
         '<meta name="autoflow-build" content="source">'
         '<link href="css/style.css?v=old">'
         '<link href="css/account-sales.css?v=old">'
         '<link href="css/listing-detail.css?v=old">'
+        '<link href="css/more.css?v=old">'
+        '<script src="js/more.js?v=old"></script>'
+        '<script src="js/seller-vip-pinning.js?v=old"></script>'
         '<script src="js/listing-detail.js?v=old"></script>'
         '<script src="js/account-sales.js?v=old"></script>'
         '<script src="js/api.js?v=old"></script>'

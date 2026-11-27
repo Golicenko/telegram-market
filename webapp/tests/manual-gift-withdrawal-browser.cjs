@@ -14,7 +14,7 @@ const server=http.createServer((req,res)=>{
   try{
     for(const width of [320,360,390,430]){
       const page=await browser.newPage({viewport:{width,height:844},isMobile:true,hasTouch:true});
-      let quotes=0,reserves=0,failNext=true,paid=0,loseDeliveryResponse=true;
+      let quotes=0,reserves=0,failNext=true,paid=0,loseDeliveryResponse=true,lastPriority=null;
       const deliveryCommands=[];
       const errors=[],quoteIds=[];
       const user={id:'user-1',telegram_id:1,first_name:'Admin',role:'admin',username:null,photo_url:null};
@@ -30,15 +30,21 @@ const server=http.createServer((req,res)=>{
         else if(endpoint==='/content/unseen')body={training:{unseen_count:0,marker:0},unique:{unseen_count:0,marker:0}};
         else if(endpoint==='/conversations/unread-summary')body={total_unread:0,conversations:[]};
         else if(endpoint==='/withdrawals/quote'){
-          quotes++;assert.equal(route.request().postDataJSON().amount,'43');
-          body={quote_id:'quote-1',gross_af:'42.86',fee_af:'12.86',payout_stars:30,unspent_af:'0.14',gift_plan:request.gift_plan};
+          quotes++;
+          if(request.payout_method==='manual_fragment'){
+            assert.equal(route.request().postDataJSON().amount,'75.72');
+            body={quote_id:'quote-fragment',gross_af:'75.72',fee_af:'22.72',payout_stars:53,unspent_af:'0',gift_plan:[],payout_method:'manual_fragment'};
+          }else{
+            assert.equal(route.request().postDataJSON().amount,'43');
+            body={quote_id:'quote-1',gross_af:'42.86',fee_af:'12.86',payout_stars:30,unspent_af:'0.14',gift_plan:request.gift_plan};
+          }
         }else if(endpoint==='/withdrawals'&&route.request().method()==='POST'){
           reserves++;quoteIds.push(route.request().postDataJSON().quote_id);
           assert.equal(route.request().postDataJSON().amount,undefined);
           if(failNext){failNext=false;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({detail:'Временно недоступно'})});}
           wallet.available_balance='57.14';wallet.earned_balance='57.14';wallet.frozen_balance='42.86';
           body={...request,status:'pending'};
-        }else if(endpoint==='/admin/withdrawals')body=[request];
+        }else if(endpoint==='/admin/withdrawals'){lastPriority=new URL(route.request().url()).searchParams.get('vip_priority');body=[request];}
         else if(endpoint==='/admin/withdrawals/request-1/gifts/delivered'){
           const command=route.request().postDataJSON();deliveryCommands.push(command);
           if(!request.gift_deliveries.some(row=>row.request_id===command.request_id)){
@@ -47,7 +53,11 @@ const server=http.createServer((req,res)=>{
           if(loseDeliveryResponse){loseDeliveryResponse=false;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({detail:'Ответ потерян после записи'})});}
           body=request;
         }
-        else if(endpoint==='/admin/withdrawals/request-1/paid'){assert.equal(request.gift_remaining_stars,0);paid++;request.status='paid';body=request;}
+        else if(endpoint==='/admin/withdrawals/request-1/paid'){
+          if(request.payout_method==='manual_fragment')assert.equal(route.request().postDataJSON().payout_reference,'fragment-test-proof');
+          else assert.equal(request.gift_remaining_stars,0);
+          paid++;request.status='paid';body=request;
+        }
         return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
       });
       await page.goto(`http://127.0.0.1:${server.address().port}/`);
@@ -99,6 +109,34 @@ const server=http.createServer((req,res)=>{
       await page.locator('.admin-withdrawal').waitFor({state:'visible'});
       assert.equal(paid,1);assert.deepEqual(errors,[]);
       console.log(`${width}px: server quote, reserve retry, partial gift records, lost-response retry same ID, final confirmation OK`);
+      Object.assign(request,{amount:'75.72',fee_af:'22.72',payout_stars:53,gift_plan:[],gift_deliveries:[],gift_delivered_stars:0,gift_remaining_stars:53,
+        payout_method:'manual_fragment',vip_priority:true,vip_snapshot:{plan_code:'month',expires_at:'2026-11-28T12:00:00Z'},status:'approved'});
+      wallet.earned_balance=wallet.available_balance=100;
+      await page.locator('.bottom-nav [data-nav-target=profile]').click();
+      await page.locator('[data-view="profile"] [data-open-withdraw]').click();
+      await form.locator('[name=amount]').fill('75.72');
+      await button.click();
+      await page.waitForFunction(()=>document.querySelector('#withdrawQuote').textContent.includes('Fragment'));
+      assert.match(await page.locator('#withdrawQuote').innerText(),/53 Stars/);
+      assert.doesNotMatch(await page.locator('#withdrawQuote').innerText(),/подарки стоимостью|Останется на балансе/);
+      await page.locator('.bottom-nav [data-nav-target=profile]').click();
+      await page.locator('[data-open-admin]').click();
+      await page.locator('[data-admin-tab=withdrawals]').click();
+      await page.locator('.admin-withdrawal--vip').waitFor({state:'visible'});
+      assert.match(await page.locator('.admin-withdrawal').innerText(),/VIP — приоритетный вывод/);
+      await page.locator('#withdrawalFilters [name=vip_priority]').selectOption('true');
+      await page.locator('#withdrawalFilters button[type=submit]').click();
+      await page.waitForFunction(()=>document.querySelector('.admin-withdrawal--vip'));
+      assert.equal(lastPriority,'true');
+      await page.locator('.admin-withdrawal summary').click();
+      assert.equal(await page.locator('.gift-delivery-form').count(),0);
+      await page.locator('.admin-withdrawal [name=payout_reference]').fill('fragment-test-proof');
+      await page.locator('[data-withdrawal-action=paid]').click();
+      await dialog.getByRole('button',{name:'Да, выплата выполнена',exact:true}).click();
+      await page.waitForFunction(()=>!document.querySelector('[data-withdrawal-action=paid]'));
+      assert.equal(paid,2);assert.deepEqual(errors,[]);
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+      console.log(`${width}px: exact Fragment quote, persistent VIP marker/filter, required manual proof and confirmed settlement UI OK`);
       await page.close();
     }
   }finally{await browser.close();server.close();}

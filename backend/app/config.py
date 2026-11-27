@@ -54,9 +54,15 @@ class Settings(BaseSettings):
     analytics_retention_days: int = Field(default=180, ge=7, le=365)
     railway_public_domain: str | None = None
     public_base_url: str | None = None
+    about_founder_photo_url: str = ""
     upload_dir: str | None = None
     min_withdrawal_af_coins: int = 15
     payout_nft_threshold_stars: int = Field(default=350, ge=1, le=5000)
+    # Manual Fragment payouts are opt-in after an operator verifies the actual
+    # available quantities/recipient requirements. No Fragment API is called.
+    fragment_withdrawals_enabled: bool = False
+    fragment_withdrawal_min_stars: int = Field(default=51, ge=51, le=1000000)
+    fragment_withdrawal_max_stars: int = Field(default=1000000, ge=51, le=1000000)
     listing_promotion_cost_af_coins: int = 5
     listing_promotion_hours: int = 24
     vip_renewal_price_stars: int = Field(default=10, ge=1, le=10000)

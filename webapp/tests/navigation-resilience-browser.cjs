@@ -152,6 +152,14 @@ async function runCase(browser, name, task) {
   finally { await app.close(); }
 }
 
+async function openReferrals(app, label = 'open referral program') {
+  await app.click('more', label);
+  if (!baseline) {
+    await app.page.locator('[data-more-page="referrals"]').click();
+    await app.page.locator('[data-view="referrals"]').waitFor({ state:'visible' });
+  }
+}
+
 async function chains(browser) {
   await runCase(browser, 'requested-chains', async app => {
     for (const view of ['profile','training','unique','more','market']) await app.click(view, 'warmup');
@@ -266,7 +274,7 @@ async function stalls(browser) {
   });
   await runCase(browser, 'cold-referral-wallet', async app => {
     const referral = app.hold('/referrals'), me = app.hold('/me');
-    await app.click('more'); await app.arrived(referral); referral.release(); await app.arrived(me);
+    await openReferrals(app); await app.arrived(referral); referral.release(); await app.arrived(me);
     await app.page.locator('#referralContent').waitFor({ state:'visible', timeout:2000 });
     check('first referral summary renders before authoritative wallet refresh', await app.page.locator('#referralContent').isVisible());
     check('pending wallet does not invent a local balance', await app.page.locator('.header-balance [data-balance]').textContent() === '123.45');
@@ -276,12 +284,12 @@ async function stalls(browser) {
   });
   await runCase(browser, 'stalled-referral-wallet', async app => {
     const referral = app.hold('/referrals'), me = app.hold('/me');
-    await app.click('more'); await app.arrived(referral); await app.click('market', 'leave pending referrals');
+    await openReferrals(app); await app.arrived(referral); await app.click('market', 'leave pending referrals');
     referral.release(); await wait(60); check('late summary leaves Market selected', (await app.visible()).join() === 'market');
-    await app.click('more', 'reopen known referrals');
+    await openReferrals(app, 'reopen known referrals');
     await app.page.locator('#referralContent').waitFor({ state:'visible' }); await app.arrived(me);
     const reads = app.requests.filter(request => request.endpoint === '/me').length;
-    for (let index=0;index<8;index++) { await app.click('market'); await app.click('more'); }
+    for (let index=0;index<8;index++) { await app.click('market'); await openReferrals(app); }
     check('pending wallet refresh remains singleflight', app.requests.filter(request => request.endpoint === '/me').length === reads);
     check('referral content is visible before wallet refresh', await app.page.locator('#referralContent').isVisible());
     app.setBalance(654.32); me.release();

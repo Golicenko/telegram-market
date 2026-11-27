@@ -116,6 +116,14 @@ async function scenario(browser, count) {
     await page.waitForFunction(expected=>document.querySelectorAll('#marketCars [data-listing-card]').length===expected,count);
     await settle();
     await page.evaluate(()=>{window.__firstMarketCard=document.querySelector('#marketCars [data-listing-card]');});
+    // The referral program is now an internal More page. Mount it explicitly
+    // before the benchmark checkpoints (for the old baseline too), so all
+    // subsequent listener/node/request growth limits remain strict and comparable.
+    await click('more');await painted('more');
+    if(!baseline){await page.locator('[data-more-page="referrals"]').click();await painted('referrals');}
+    await page.locator('#referralContent').waitFor({state:'visible'});
+    await page.waitForFunction(()=>document.querySelectorAll('#referralMilestones [data-referral-milestone]').length===3);
+    await click('market');await painted('market');await settle();
     const checkpoints=[await snapshot('initial')], timings=[];
     const sequence=['profile','training','unique','more','market'];
     for(let index=0;index<50;index++){

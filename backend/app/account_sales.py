@@ -158,12 +158,17 @@ async def publication_rules(
     user: User = Depends(get_current_user), session: AsyncSession = Depends(get_session)
 ):
     count = await account_count(session, user.id)
+    from .seller_vip import active_limits
+    vip = await active_limits(session, user.id)
+    limit = vip["account_limit"] if vip else 3
     return {
         "enabled": is_enabled(),
-        "free_limit": 3,
+        "free_limit": limit,
         "active_count": count,
         "price_af": 15,
-        "payment_required": count >= 3,
+        "payment_required": not vip and count >= limit,
+        "vip_active": bool(vip),
+        "vip_limit_reached": bool(vip and count >= limit),
         "vip_stars": 5,
         "vip_hours": 24,
         "secret_retention_days": get_settings().account_secret_retention_days,
@@ -227,7 +232,9 @@ async def publish(session, user, payload):
         )
         if not video or video.owner_id != user.id or not video.ready:
             raise HTTPException(422, "Загрузите и дождитесь проверки видео аккаунта")
-        paid = await account_count(session, user.id) >= 3
+        from .publication_quota import require_vip_slot
+        vip = await require_vip_slot(session, user, "account")
+        paid = not vip and await account_count(session, user.id) >= 3
         if paid and not payload.publication_fee_confirmed:
             raise HTTPException(
                 402,

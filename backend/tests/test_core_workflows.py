@@ -132,7 +132,9 @@ class FakeSession:
         return FakeTransaction()
 
     async def scalar(self, _query):
-        from app.models import PublicationDraft
+        from app.models import PublicationDraft, SellerVipSubscription
+        if _query.column_descriptions[0].get("entity") is SellerVipSubscription:
+            return None
         if _query.column_descriptions[0].get("name") == "count":
             return 0
         if self.quota_user is not None and _query.column_descriptions[0].get("entity") is PublicationDraft:

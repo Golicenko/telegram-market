@@ -238,6 +238,12 @@ async def create_listing(
             if listing is None:
                 if seller.is_blocked:
                     raise HTTPException(403, "Публикация заблокированного аккаунта требует проверки администратора")
+                # Paid publication receipts and unique/admin routes cannot bypass
+                # a subscription's total simultaneous-active cap.
+                if quota_user is None:
+                    await session.scalar(select(User.id).where(User.id == seller.id).with_for_update(key_share=True))
+                from .publication_quota import require_vip_slot
+                await require_vip_slot(session, seller)
                 if quota_user and request_id and not publication:
                     if saved_draft:
                         if saved_draft.payload != payload.model_dump(mode="json"):
@@ -484,9 +490,11 @@ async def set_listing_publication(session: AsyncSession, admin: User, listing_id
             account_sales.require_enabled()
             if listing.status != "active":
                 raise HTTPException(409, "Повторная публикация аккаунта требует новых данных доступа и проверки лимита")
-        if published and listing.status != "active" and listing.listing_type == "regular":
-            from .publication_quota import require_free_slot
-            await require_free_slot(session, seller)
+        if published and listing.status != "active":
+            from .publication_quota import require_free_slot, require_vip_slot
+            await require_vip_slot(session, seller, listing.product_kind)
+            if listing.listing_type == "regular":
+                await require_free_slot(session, seller)
         listing.status = "active" if published else "paused"
         if published and listing.listing_type == "unique" and listing.content_revision is None:
             listing.content_revision = await next_publication_revision(session)
@@ -2701,7 +2709,7 @@ async def create_withdrawal(session: AsyncSession, user: User, payload) -> Withd
 
 
 async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: uuid.UUID, action: str, reason: str | None, payout_reference: str | None = None) -> WithdrawalRequest:
-    if admin.role != "admin":
+    if admin.role != "admin" or getattr(admin, "is_blocked", False):
         raise HTTPException(403, "Доступен только администратору")
     targets = {"approve": "approved", "paid": "paid", "reject": "rejected"}
     expected = {"approve": {"pending"}, "paid": {"approved"}, "reject": {"pending", "approved"}}[action]
@@ -2720,6 +2728,8 @@ async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: u
             raise HTTPException(409, "Часть подарков уже отправлена. Отклонение с полным возвратом запрещено; требуется ручная сверка и завершение оставшейся отправки.")
         if action == "paid" and request.gift_deliveries and request.gift_remaining_stars:
             raise HTTPException(409, "Сначала зафиксируйте отправку всех оставшихся подарков")
+        if action == "paid" and request.payout_method == "manual_fragment" and len((payout_reference or "").strip()) < 3:
+            raise HTTPException(422, "Укажите подтверждение уже выполненной ручной выплаты Fragment")
         wallet = await session.scalar(select(Wallet).where(Wallet.user_id == request.user_id).with_for_update())
         if not wallet:
             raise HTTPException(status_code=409, detail="Wallet not found")
@@ -2734,9 +2744,11 @@ async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: u
                 raise HTTPException(status_code=409, detail="Frozen balance is insufficient")
             wallet.earned_frozen_balance = money(wallet.earned_frozen_balance - request.amount)
             request.paid_at = now
-            request.payout_reference = payout_reference
+            request.payout_reference = payout_reference.strip() if payout_reference else None
             description = (f"Подарки стоимостью {request.payout_stars} Stars отправлены вручную; комиссия {request.fee_af} AF Coins"
-                           if request.payout_method == "manual_gift" else "Ручная выплата отмечена администратором")
+                           if request.payout_method == "manual_gift" else
+                           f"Ручная выплата через Fragment: {request.payout_stars} Stars; комиссия {request.fee_af} AF Coins"
+                           if request.payout_method == "manual_fragment" else "Ручная выплата отмечена администратором")
             transaction = wallet_transaction(wallet, "withdrawal_paid", -request.amount, before_available, before_frozen, description, withdrawal_id=request.id)
         elif action == "reject":
             if wallet.earned_frozen_balance < request.amount:
@@ -2749,9 +2761,12 @@ async def decide_withdrawal(session: AsyncSession, admin: User, withdrawal_id: u
         if transaction:
             session.add(transaction)
         session.add(AdminAction(admin_id=admin.id, action=f"withdrawal_{target}", target_type="withdrawal", target_id=request.id, reason=reason,
-            metadata_json={"public_number": request.public_number, "to_status": target, "payout_reference": request.payout_reference}))
-        text = {"approved": f"Вывод {request.public_id} в обработке. Вывод в течение 24 часов. Подарки отправит администратор вручную.",
-                "paid": (f"Вывод {request.public_id} выполнен: {request.payout_stars} ⭐. Подарки отправлены."
+            metadata_json={"public_number": request.public_number, "to_status": target, "payout_reference": request.payout_reference,
+                "payout_method": request.payout_method, "vip_priority": request.vip_priority}))
+        method_note = "Выплата через Fragment выполняется администратором вручную." if request.payout_method == "manual_fragment" else "Подарки отправит администратор вручную."
+        paid_note = " Выплата через Fragment подтверждена." if request.payout_method == "manual_fragment" else " Подарки отправлены."
+        text = {"approved": f"Вывод {request.public_id} в обработке. Вывод в течение 24 часов. {method_note}",
+                "paid": (f"Вывод {request.public_id} выполнен: {request.payout_stars} ⭐.{paid_note}"
                          if request.payout_stars is not None else f"Вывод {request.public_id} выполнен."),
                 "rejected": f"Вывод {request.public_id} отклонён: {reason}. Зарезервированные AF Coins возвращены. Обратитесь в поддержку по номеру заявки."}[target]
         await create_notification(session, request.user_id, f"withdrawal_{target}", "Статус заявки на вывод изменён", text, {"withdrawal_id": str(request.id)})

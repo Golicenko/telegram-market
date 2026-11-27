@@ -49,7 +49,7 @@
   /** @param {ReferralPageOptions} options */
   function create({ api, notify, refreshWallet }) {
     const get = id => document.getElementById(id);
-    const root = document.querySelector('[data-view="more"]');
+    const root = document.querySelector('[data-view="referrals"]');
     const share = /** @type {HTMLButtonElement} */ (get("referralShare")), shareLabel = get("referralShareLabel");
     const copies = /** @type {HTMLButtonElement[]} */ ([...root.querySelectorAll("[data-copy-referral]")]);
     const milestonesRoot = get("referralMilestones"), modal = /** @type {HTMLDialogElement} */ (get("referralRewardModal"));
@@ -153,7 +153,7 @@
       }
       if (restoreFocus && active && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
       returnFocus = null; openedCount = null;
-      if (wasOpen) telegramBack("hide");
+      if (wasOpen) telegramBack(active ? "show" : "hide");
     }
 
     function closeReward(immediate = false, restoreFocus = true) {

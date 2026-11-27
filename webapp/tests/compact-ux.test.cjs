@@ -18,7 +18,7 @@ test("profile contains only the requested primary actions",()=>{
 
 test("help retains existing guides and adds account delivery/rules",()=>{
   const help=fs.readFileSync(path.join(root,"js/help.js"),"utf8");
-  assert.equal((help.match(/id: "/g)||[]).length,16);
+  assert.equal((help.match(/id: "/g)||[]).length,17);
   assert.match(help,/id: "account-sales"/); assert.match(help,/id: "account-rules"/);
   for(const anchor of html.matchAll(/data-help-anchor="help-([^"]+)"/g)) assert(help.includes(`id: "${anchor[1]}"`));
   assert.doesNotMatch(html,/id="infoModal"/);

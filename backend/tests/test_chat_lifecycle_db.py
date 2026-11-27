@@ -54,7 +54,8 @@ class DB:
 def db():
     engine = create_engine("sqlite://")
     # Table constraints are real; PostgreSQL expression indexes are checked separately.
-    models = (User, Listing, ListingImage, Conversation, ConversationMessage, Deal, DealEvent, PriceOffer, Wallet, WalletTransaction, Notification)
+    from app.models import SellerVipSubscription
+    models = (User, Listing, ListingImage, Conversation, ConversationMessage, Deal, DealEvent, PriceOffer, Wallet, WalletTransaction, Notification, SellerVipSubscription)
     with engine.begin() as connection:
         for model in models:
             connection.execute(CreateTable(model.__table__))

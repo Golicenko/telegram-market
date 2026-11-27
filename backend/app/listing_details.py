@@ -24,6 +24,9 @@ class SellerContext(BaseModel):
     other_active_count: int
     items: list[ListingOut]
     has_more: bool
+    vip_active: bool = False
+    vip_expires_at: datetime | None = None
+    server_now: datetime | None = None
 
 
 async def car(session, listing_id):
@@ -112,6 +115,8 @@ async def seller_context(
             )
         )
     )
+    from .seller_vip import active_subscription
+    vip = await active_subscription(session, seller.id)
     return SellerContext(
         name=" ".join(filter(None, [seller.first_name, seller.last_name])).strip()
         or seller.username
@@ -122,6 +127,9 @@ async def seller_context(
         other_active_count=total,
         items=await listing_collection_out(session, items, user.id),
         has_more=offset + len(items) < total,
+        vip_active=bool(vip),
+        vip_expires_at=vip.expires_at if vip else None,
+        server_now=datetime.now(UTC),
     )
 
 

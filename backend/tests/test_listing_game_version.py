@@ -71,7 +71,8 @@ async def test_http_create_edit_get_and_database_reopen(tmp_path):
         # SQLite tests cover HTTP/serialization only, not PostgreSQL locking.
         connection.create_function("pg_advisory_xact_lock", 1, lambda _key: None)
     with engine.begin() as connection:
-        for model in (User, Listing, ListingImage, ListingLike, Conversation, AdminAction):
+        from app.models import SellerVipSubscription
+        for model in (User, Listing, ListingImage, ListingLike, Conversation, AdminAction, SellerVipSubscription):
             connection.execute(CreateTable(model.__table__))
     user = User(id=uuid.uuid4(), telegram_id=77, first_name="Seller", role="admin")
     with Session(engine) as session, session.begin():

@@ -25,7 +25,27 @@
     const save = get("listingSave"), share = get("listingShare");
     save.append(icon("save")); share.append(icon("share"));
     let current = null, track = null, gallerySignature = "", context = null, busy = false;
-    let controller = null, sequence = 0, lightbox = null, restorePosition = null;
+    let controller = null, sequence = 0, lightbox = null, restorePosition = null, vipDialog = null, vipTimer = null;
+    const vipBadge = node("button", null, "listing-seller-vip"); vipBadge.type = "button"; vipBadge.hidden = true;
+    vipBadge.setAttribute("aria-label", "Информация о VIP-продавце");
+    vipBadge.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 1 3 2 3.6.3 1.1 3.4L22 9.5l-1 3.4.3 3.6-3.1 1.8-2.1 2.9-3.5-.4L9.2 22 6.5 19.6 3 18.7l-.4-3.6L1 12l1.9-3.1.7-3.5 3.5-.8L9.5 2Z"/><path d="m7 12 3 3 7-7"/></svg>';
+    get("listingSellerName").after(vipBadge);
+    vipBadge.onclick = () => {
+      if (vipBadge.hidden || vipDialog) return;
+      const dialog = node("dialog", null, "modal listing-vip-info");
+      dialog.setAttribute("aria-label", "VIP-продавец");
+      const close = node("button", "Понятно", "publish-button"); close.type = "button"; close.onclick = () => dialog.close();
+      dialog.append(node("h2", "👑 VIP-продавец"), node("p", "Этот пользователь пользуется VIP-подпиской AutoFlow Market и имеет доступ к дополнительным возможностям для продавцов. VIP не подтверждает личность и не гарантирует безопасность сделки."), close);
+      document.body.append(dialog); const overflow = document.body.style.overflow; document.body.style.overflow = "hidden";
+      vipDialog = dialog; dialog.addEventListener("close", () => { document.body.style.overflow = overflow; vipDialog = null; dialog.remove(); }, { once: true }); dialog.showModal(); close.focus();
+    };
+    function renderVip(data) {
+      clearTimeout(vipTimer); vipTimer = null;
+      // Use elapsed monotonic time since the server observation, not phone time.
+      const remaining = Date.parse(data.vip_expires_at) - Date.parse(data.server_now) - (performance.now() - (data.vipObservedAt ?? performance.now()));
+      vipBadge.hidden = !(data.vip_active && remaining > 0);
+      if (!vipBadge.hidden) vipTimer = setTimeout(() => renderVip(data), Math.min(remaining + 10, 3600000));
+    }
     const cache = new Map();
     const number = value => new Intl.NumberFormat("ru-RU").format(value);
 
@@ -67,7 +87,7 @@
       lightbox = dialog; dialog.addEventListener("close", () => { document.body.style.overflow = overflow; lightbox = null; dialog.remove(); }, { once: true });
       dialog.showModal(); gallery(host, urls, index, true);
     }
-    function dismiss() { if (!lightbox) return false; lightbox.close(); return true; }
+    function dismiss() { if (vipDialog) { vipDialog.close(); return true; } if (!lightbox) return false; lightbox.close(); return true; }
     function snapshot() { return { photoIndex: track?.index() || 0, otherScrollLeft: otherTrack.scrollLeft }; }
     function restore(position) {
       if (!position) return;
@@ -90,6 +110,7 @@
     }
     function renderContext(data) {
       get("listingSellerName").textContent = data.name;
+      renderVip(data);
       get("listingSellerSales").textContent = `✓ ${number(data.completed_sales)} ${data.completed_sales % 10 === 1 && data.completed_sales % 100 !== 11 ? "успешная сделка" : data.completed_sales % 10 >= 2 && data.completed_sales % 10 <= 4 && !(data.completed_sales % 100 >= 12 && data.completed_sales % 100 <= 14) ? "успешные сделки" : "успешных сделок"}`;
       avatar(data.name, data.photo_url); get("listingSellerRetry").hidden = true;
       save.disabled = false; save.setAttribute("aria-pressed", String(data.saved_by_me)); save.setAttribute("aria-label", data.saved_by_me ? "Убрать из сохранённого" : "Сохранить объявление");
@@ -119,7 +140,7 @@
         const previous = append ? context.items : [];
         const items = [...new Map([...previous, ...data.items].filter(item => item.id !== id && item.status === "active" && (item.product_kind || "car") === "car").map(item => [item.id, item])).values()];
         const duplicatePages = append && items.length === previous.length ? (context.duplicatePages || 0) + 1 : 0;
-        context = { ...data, items, nextOffset: offset + data.items.length, has_more: data.has_more && data.items.length > 0, duplicatePages }; renderContext(context); remember();
+        context = { ...data, vipObservedAt: performance.now(), items, nextOffset: offset + data.items.length, has_more: data.has_more && data.items.length > 0, duplicatePages }; renderContext(context); remember();
         followDuplicatePage = duplicatePages > 0 && duplicatePages < 3 && context.has_more;
         if (duplicatePages >= 3 && context.has_more) get("listingOtherRetry").hidden = false;
       } catch (error) {
@@ -156,7 +177,7 @@
       } catch (error) { if (error.name !== "AbortError") notify(error.message); }
       finally { share.disabled = false; }
     };
-    function leave() { dismiss(); controller?.abort(); sequence++; current = null; busy = false; }
+    function leave() { dismiss(); clearTimeout(vipTimer); vipTimer = null; vipBadge.hidden = true; controller?.abort(); sequence++; current = null; busy = false; }
     function render(listing) {
       const isCar = (listing.product_kind || "car") === "car";
       page.classList.toggle("listing-page--car", isCar); galleryHost.hidden = !isCar;

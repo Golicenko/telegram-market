@@ -98,9 +98,9 @@ async function scenario(browser,width,{failure=false}={}) {
     else if(endpoint==='/help/rules')body={publication:{enabled:true,free_limit:5,remaining:5,price_stars:7},af_per_star:1,car_seller_percent:100,withdrawal_fee_percent:30,withdrawal_hours:24,seller_response_hours:24,vip_cost_af:15,vip_hours:24,renewal_stars:10,renewal_hours:72};
     await route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
   });
-  const more=page.locator('[data-view="more"]'),modal=page.locator('#referralRewardModal');
+  const more=page.locator('[data-view="referrals"]'),modal=page.locator('#referralRewardModal');
   const card=target=>more.locator(`[data-referral-milestone="${target}"]`);
-  const backMore=async()=>{await page.locator('.bottom-nav [data-nav-target="more"]').click();await more.waitFor({state:'visible'});};
+  const backMore=async()=>{await page.locator('.bottom-nav [data-nav-target="more"]').click();await page.locator('[data-more-page="referrals"]').click();await more.waitFor({state:'visible'});};
   const noOverflow=async()=>assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`${width}px referral horizontal overflow`);
   const stableCards=async()=>assert(await page.evaluate(()=>window.__originalMilestoneCards.every((node,index)=>node===document.querySelectorAll('#referralMilestones [data-referral-milestone]')[index])),'backend updates preserve milestone DOM identity');
   const next=async(count,flags,serverBalance=balance)=>{
@@ -117,7 +117,7 @@ async function scenario(browser,width,{failure=false}={}) {
     assert.equal(await page.evaluate(()=>document.body.classList.contains('referral-reward-open')),false);
     assert.notEqual(await page.evaluate(()=>document.body.style.overflow),'hidden','body scrolling restored');
     assert.equal(await page.locator('dialog[open]').count(),0);
-    assert.equal(await page.evaluate(()=>Boolean(window.__referralFixture.backVisible)),false,'native Back does not stay visible after the reward closes');
+    assert.equal(await page.evaluate(()=>Boolean(window.__referralFixture.backVisible)),await more.isVisible(),'native Back returns to the internal page after the reward closes');
     if(source)assert(await source.evaluate(node=>document.activeElement===node),'focus returns to the opening card');
     if(beforeScroll!=null){
       const afterScroll=await page.evaluate(()=>scrollY),drift=Math.abs(afterScroll-beforeScroll);
@@ -167,7 +167,7 @@ async function scenario(browser,width,{failure=false}={}) {
     try{await assertClosed(source,activationScroll??beforeScroll);}catch(error){console.error(JSON.stringify({modalScrollFailure:{count:invited,target,close,beforeClick:beforeScroll,activation:activationScroll,after:await page.evaluate(()=>scrollY)},trace:await page.evaluate(()=>window.__referralFixture.scrollTrace.slice(-20))}));throw error;}
   };
   try {
-    await page.goto(`http://127.0.0.1:${server.address().port}/?view=more`);
+    await page.goto(`http://127.0.0.1:${server.address().port}/?view=referrals`);
     await more.waitFor({state:'visible'});
     if(failure){
       await page.locator('#referralRetry').waitFor({state:'visible'});
@@ -177,6 +177,7 @@ async function scenario(browser,width,{failure=false}={}) {
       await page.locator('#referralRetry').click();await page.locator('#referralContent').waitFor({state:'visible'});
       const reads=summaryRequests;
       await page.evaluate(()=>{for(let index=0;index<80;index++)document.querySelector(`.bottom-nav [data-nav-target="${['market','more','profile','more'][index%4]}"]`).click();});
+      await page.locator('[data-more-page="referrals"]').click();
       await more.waitFor({state:'visible'});await wait(600);
       assert(summaryRequests<=reads+1,'slow loads remain single-flight across rapid tabs');
       assert.equal(await page.locator('#referralCount').textContent(),'0');
@@ -315,6 +316,7 @@ async function scenario(browser,width,{failure=false}={}) {
     await backMore();assert.equal(await page.locator('.referral-header-art').isVisible(),true);
     const beforeNav=summaryRequests,listeners=await page.evaluate(()=>window.__referralFixture.listeners),nativeBackRegistrations=await page.evaluate(()=>window.__referralFixture.backRegistrations),resizeObservers=await page.evaluate(()=>window.__referralFixture.resizeObservers);
     await page.evaluate(()=>{for(let index=0;index<80;index++)document.querySelector(`.bottom-nav [data-nav-target="${['market','more','profile','more'][index%4]}"]`).click();});
+    await page.locator('[data-more-page="referrals"]').click();
     await more.waitFor({state:'visible'});await wait(100);await stableCards();
     assert(summaryRequests<=beforeNav+1,'cached repeated tabs do not multiply summary reads');
     assert(await page.evaluate(()=>window.__referralFixture.listeners)<=listeners+5,'handlers do not accumulate on repeated tab visits');

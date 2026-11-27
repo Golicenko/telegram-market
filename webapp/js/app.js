@@ -3,6 +3,7 @@
   const primaryViews = new Set(["market", "unique", "training", "accounts", "profile", "more"]);
 
   const api = window.AutoFlowApi;
+  let referralsPage, morePages;
   const track = window.AutoFlowAnalytics.create(api, () => ({
     ready: Boolean(state.me && state.serverAvailable), staff: Boolean(adminTabs().length),
     platform: telegram?.platform, source: state.currentView.startsWith("training") ? "training" : ["listing-detail", "deal-chat"].includes(state.currentView) ? "listing" : "navigation",
@@ -223,6 +224,8 @@
   let criticalRecoveryUsed = false;
   const listingDetail = window.AutoFlowListingDetail.create({ api, notify,
     title: listingTitle, formatNumber, mediaUrl: absoluteMediaUrl, thumbnail: profileThumbnailUrl });
+  const vipPinning = window.AutoFlowVipPinning?.create({ api, openDialog, notify,
+    requestId: createRequestId, formatDate, refresh: refreshMarketplace });
   let optionalRecoveryTimer = null;
   let startupRecoveryTimer = null;
   let initializedTelegram = null;
@@ -305,6 +308,7 @@
 
   function bindEvents() {
     ensureBroadcastAdminUi();
+    if (window.AutoFlowMore) getMorePages().mountAdmin();
     const trainingForm = document.getElementById("trainingForm");
     const trainingVideoInput = ensureTrainingVideoInput(trainingForm);
     ensureTrainingTelegramUploadUi();
@@ -315,7 +319,7 @@
     trainingForm?.elements.price_af_coins?.setAttribute("min", "0.01");
     document.getElementById("trainingMaterialForm")?.elements.title?.removeAttribute("maxlength");
     document.addEventListener("click", handleClick);
-    bind(document.getElementById("infoButton"), "click", () => state.currentView === "more" ? openReferralInformation() : openSecondary("help"), "infoButton");
+    bind(document.getElementById("infoButton"), "click", () => state.currentView === "referrals" ? openReferralInformation() : openSecondary("help"), "infoButton");
     renderHelpCenter();
     bind(document.getElementById("topupAmount"), "input", renderTopupSelection, "topupSelection");
     renderTopupSelection();
@@ -487,7 +491,7 @@
     if (["deal_id", "conversation_id", "listing_id", "training_id", "support_deal_id", "support_case", "admin_user_id"].some(key => launchParams.has(key))) return;
     const view = launchParams.get("view");
     launchParams.delete("view");
-    if (["profile", "market", "unique", "training", "more", "help", "settings", "topup"].includes(view)) await navigate(view);
+    if (["profile", "market", "unique", "training", "more", "referrals", "seller-vip", "about", "help", "settings", "topup"].includes(view)) await navigate(view);
     else if (view === "support") await openSupport();
   }
 
@@ -885,9 +889,18 @@ function handleClick(event) {
     }
   }
 
-  let referralsPage;
+  function getMorePages() {
+    morePages ||= window.AutoFlowMore.create({
+      api, notify: notifyToast, navigate: openSecondary,
+      createRequestId,
+      topup: () => openSecondary("topup"), support: openSupport,
+      userId: () => state.me?.user.id,
+      async refreshWallet() { state.me = await api.request("/me"); renderBalance(); renderUser(); },
+    });
+    return morePages;
+  }
   function syncReferralsPage(viewName) {
-    if (!referralsPage && viewName === "more") {
+    if (!referralsPage && viewName === "referrals") {
       referralsPage = window.AutoFlowReferrals.create({
         api, notify: notifyToast,
         async refreshWallet() {
@@ -897,15 +910,17 @@ function handleClick(event) {
         },
       });
     }
-    referralsPage?.setActive(viewName === "more");
+    referralsPage?.setActive(viewName === "referrals");
   }
 
   async function goBack() {
     if (listingDetail.dismiss()) return;
+    if (vipPinning?.dismiss()) return;
     if (accountSales.dismiss()) return;
     if (window.AutoFlowChatMedia?.dismiss()) return;
     if (window.AutoFlowDealConfirmation.dismiss()) return;
     if (referralsPage?.dismiss()) return;
+    if (morePages?.dismiss()) return;
     const publicationModal = document.querySelector("dialog.publication-modal[open]");
     if (publicationModal) { publicationModal.dispatchEvent(new Event("cancel", { cancelable: true })); return; }
     if (elements.purchaseModal?.open) { await closePurchaseFlow(); return; }
@@ -939,6 +954,8 @@ function handleClick(event) {
     if (viewName === "settings") viewName = "profile";
     const next = elements.views.find((view) => view.dataset.view === viewName);
     if (!next) return;
+    // A newly opened screen must not inherit another screen's double-Back guard.
+    if (!options.back) state.backBlockedUntil = 0;
     if (viewName !== "listing-detail") accountSales.pauseVideos();
     if (viewName !== "listing-detail") listingDetail.leave();
     state.navigationVersion = (state.navigationVersion || 0) + 1;
@@ -973,7 +990,8 @@ function handleClick(event) {
     if (viewName !== "deal-chat") document.body.classList.remove("deal-details-required");
     document.body.classList.toggle("admin-open", viewName === "admin");
     document.body.classList.toggle("profile-open", viewName === "profile");
-    document.body.classList.toggle("more-open", viewName === "more");
+    document.body.classList.toggle("more-open", ["referrals", "seller-vip"].includes(viewName));
+    document.body.classList.toggle("more-menu-open", viewName === "more");
     document.body.classList.toggle("car-detail-open", viewName === "listing-detail" && state.selectedListing?.product_kind !== "account");
     document.body.classList.toggle("listing-native-back", Boolean(telegram?.initData && telegram?.BackButton?.show));
     elements.views.forEach((view) => {
@@ -981,13 +999,13 @@ function handleClick(event) {
       view.hidden = !active;
       view.classList.toggle("is-active", active);
     });
-    const navView = ["add", "account-editor", "deal-chat", "listing-detail"].includes(viewName) ? "market" : ["training-detail", "training-editor", "training-purchase"].includes(viewName) ? "training" : ["wallet", "topup", "withdraw", "admin", "support", "activity", "help"].includes(viewName) ? "profile" : viewName;
+    const navView = ["referrals", "seller-vip", "about"].includes(viewName) ? "more" : ["add", "account-editor", "deal-chat", "listing-detail"].includes(viewName) ? "market" : ["training-detail", "training-editor", "training-purchase"].includes(viewName) ? "training" : ["wallet", "topup", "withdraw", "admin", "support", "activity", "help"].includes(viewName) ? "profile" : viewName;
     elements.navButtons.forEach((button) => {
       const active = button.dataset.navTarget === navView;
       button.classList.toggle("is-active", active);
       active ? button.setAttribute("aria-current", "page") : button.removeAttribute("aria-current");
     });
-    elements.shell.classList.toggle("is-focused", ["add", "account-editor", "wallet", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin", "training-purchase", "help", "activity"].includes(viewName));
+    elements.shell.classList.toggle("is-focused", ["more", "about", "add", "account-editor", "wallet", "topup", "profile", "deal-chat", "withdraw", "support", "training-editor", "training-detail", "listing-detail", "admin", "training-purchase", "help", "activity"].includes(viewName));
     transition.phase = "visible";
     // Commit the visible destination before initializing or refreshing a section.
     try {
@@ -997,8 +1015,9 @@ function handleClick(event) {
     if (viewName === "deal-chat") updateChatViewport();
     if (viewName === "withdraw") void loadWithdrawalBalance();
     updateFloatingChatVisibility();
-    syncReferralHeader(viewName === "more");
+    syncReferralHeader(["referrals", "seller-vip"].includes(viewName));
     syncReferralsPage(viewName);
+    if (window.AutoFlowMore) getMorePages().setActive(viewName);
     syncBackNavigation();
     if (viewName === "profile") switchProfileTab("listings");
     if (viewName === "add") void loadPublicationOptions();
@@ -1300,6 +1319,10 @@ function handleClick(event) {
   }
 
   async function chooseInitialPromotion() {
+    if (vipPinning) {
+      const choice = await vipPinning.chooseInitial();
+      if (choice !== null && choice !== "paid") return choice === "cancel" ? false : { vipHours: choice };
+    }
     const modal = document.getElementById("promotionChoiceModal");
     const paid = document.getElementById("promotionChoicePaid");
     const free = document.getElementById("promotionChoiceFree");
@@ -1400,7 +1423,7 @@ function handleClick(event) {
   }
 
   function adminTabs() {
-    return state.me?.admin_access?.tabs || (state.me?.user.role === "admin" ? ["overview", "analytics", "users", "training", "listings", "deals", "withdrawals", "support", "audit", "advertisement", "broadcasts", "feedback"] : []);
+    return state.me?.admin_access?.tabs || (state.me?.user.role === "admin" ? ["overview", "analytics", "users", "training", "listings", "deals", "withdrawals", "support", "audit", "advertisement", "broadcasts", "feedback", "seller-vip"] : []);
   }
 
   async function loadAdminPlatformSummary() {
@@ -2177,8 +2200,10 @@ function handleClick(event) {
       if (state.photoFiles.length > 10) throw new Error("Можно добавить не более 10 фотографий");
       const promotionSelected = formData.get("promote_for_24h") === "on";
       let shouldPromote = promotionSelected;
+      let vipPinHours = null;
       if (promotionSelected && state.listingMode === "regular" && !state.editingListingId) {
         shouldPromote = await chooseInitialPromotion();
+        if (shouldPromote && typeof shouldPromote === "object") { vipPinHours = shouldPromote.vipHours; shouldPromote = false; }
       }
       const imageUrls = [];
       for (const [index, file] of state.photoFiles.entries()) {
@@ -2208,10 +2233,17 @@ function handleClick(event) {
         ? await publishWithQuota(payload, listingSubmission)
         : await api.request(path, { method: listingSubmission.method, body: JSON.stringify(payload) });
       if (!savedListing) return;
+      if (vipPinHours) {
+        let pinError = null;
+        try { await vipPinning.use(savedListing.id, vipPinHours); }
+        catch (error) { error.unconfirmed = !Number(error.status) || Number(error.status) >= 500; pinError = error; }
+        await finishListingSubmission(listingSubmission, pinError);
+        return;
+      }
       if (shouldPromote && !savedListing.pinned && state.editingListingId && state.listingMode === "regular") {
         // Editing is free; VIP has its own server-priced confirmation, including shortfall.
         await finishListingSubmission(listingSubmission);
-        return openListingPromotionTopup(null, null, savedListing.id);
+        return promoteListing(savedListing.id);
       }
       let promotionError = null;
       if (shouldPromote && !savedListing.pinned && (state.editingListingId || state.listingMode === "unique")) {
@@ -2246,12 +2278,13 @@ function handleClick(event) {
       const refreshed = await refreshMarketplace();
       await navigate(submission.targetView);
       if (refreshed?.some(item => item.status === "rejected")) throw new Error("refresh_incomplete");
-      if (promotionError) notify(`Объявление сохранено, но не закреплено: ${promotionError.message}`);
+      if (promotionError?.unconfirmed) notify("Объявление сохранено. Результат VIP-закрепления не удалось подтвердить. Проверьте его в профиле; повторно публиковать объявление не нужно.");
+      else if (promotionError) notify(`Объявление сохранено, но не закреплено: ${promotionError.message}`);
       else notify(submission.wasEditing ? "Объявление обновлено бесплатно" : "Объявление опубликовано");
       if (submission.publishedPaidListingId) await openListingDetails(submission.publishedPaidListingId);
     } catch (error) {
       reportClientError("listing_refresh_after_commit", error);
-      notify(`Объявление сохранено${promotionError ? ", но не закреплено" : ""}, но данные не удалось обновить. Откройте раздел заново. Повторная публикация не нужна.`);
+      notify(`Объявление сохранено${promotionError && !promotionError.unconfirmed ? ", но не закреплено" : ""}, но данные не удалось обновить. Откройте раздел заново. Повторная публикация не нужна.`);
     }
   }
 
@@ -2428,7 +2461,10 @@ function handleClick(event) {
     const source = findListing(id);
     if (source?.product_kind === "account") return void accountSales.pin(source);
     const freeAdminPromotion = state.me?.user.role === "admin" && source?.listing_type === "unique";
-    if (!freeAdminPromotion) return openListingPromotionTopup(null, null, id);
+    if (!freeAdminPromotion) {
+      if (vipPinning && await vipPinning.existing(id)) return;
+      return openListingPromotionTopup(null, null, id);
+    }
     try { const listing = await api.request(freeAdminPromotion ? `/admin/listings/${id}/promote` : `/listings/${id}/promote`, { method: "POST" }); await refreshMarketplace(); notify(`Объявление закреплено до ${formatDate(listing.pinned_until)}`); }
     catch (error) {
       if (!freeAdminPromotion && Number(error.status) === 402 && error.detail?.purpose === "listing_promotion") {
@@ -2762,6 +2798,7 @@ function handleClick(event) {
       sale_income: "💰 Продажа автомобиля",
       star_payment_credit: "⭐ Пополнение",
       referral_milestone: "👥 Награда за приглашения",
+      seller_vip_purchase: "👑 Покупка VIP-подписки",
       referral_commission: "👥 Реферальный бонус",
       refund: "↩️ Возврат",
       seller_timeout_refund: "↩️ Возврат",
@@ -2789,7 +2826,8 @@ function handleClick(event) {
       const copy = document.createElement("div");
       const title = document.createElement("strong"); title.textContent = `${item.public_id} · ${formatNumber(item.amount)} AF Coins · ${withdrawalStatusLabel(item.status)}`;
       const date = document.createElement("span"); date.textContent = formatDate(item.created_at); copy.append(title, date);
-      if (item.gift_plan) { const gifts = document.createElement("small"); gifts.textContent = `Подарки: ${item.gift_plan.map(gift => `${gift.quantity} × ${gift.star_count} Stars`).join(" + ")}. Комиссия: ${formatNumber(item.fee_af)} AF. Отправлено подарков стоимостью: ${item.gift_delivered_stars || 0} Stars; осталось: ${item.gift_remaining_stars ?? item.payout_stars} Stars. ${item.rejection_reason || ""}`; copy.append(gifts); }
+      if (item.payout_method === "manual_fragment") { const detail = document.createElement("small"); detail.textContent = `Fragment · к выплате ${item.payout_stars} Stars · комиссия ${formatNumber(item.fee_af)} AF. ${item.rejection_reason || ""}`; copy.append(detail); }
+      else if (item.gift_plan) { const gifts = document.createElement("small"); gifts.textContent = `Подарки: ${item.gift_plan.map(gift => `${gift.quantity} × ${gift.star_count} Stars`).join(" + ")}. Комиссия: ${formatNumber(item.fee_af)} AF. Отправлено подарков стоимостью: ${item.gift_delivered_stars || 0} Stars; осталось: ${item.gift_remaining_stars ?? item.payout_stars} Stars. ${item.rejection_reason || ""}`; copy.append(gifts); }
       row.append(copy);
       const support = document.createElement("button"); support.textContent = "Помощь по заявке";
       support.addEventListener("click", () => openWithdrawalSupport(item.id, false)); row.append(support);
@@ -3867,9 +3905,11 @@ async function hideCurrentConversation() {
     const title = document.createElement("h2"); title.textContent = "Расчёт вывода"; card.append(title);
     const values = [["Запрошенный бюджет", `${formatNumber(budget)} AF`], ["Комиссия (уже включена)", `${formatNumber(quote.fee_af)} AF`], ["Будет зарезервировано", `${formatNumber(quote.gross_af)} AF`]];
     if (Number(quote.unspent_af) > 0) values.push(["Останется на балансе", `${formatNumber(quote.unspent_af)} AF`]);
-    values.push(["К получению: подарки стоимостью", `${quote.payout_stars} Stars`]);
+    const fragment = quote.payout_method === "manual_fragment";
+    values.push(["Способ выплаты", fragment ? "Fragment" : "Telegram-подарок"]);
+    values.push([fragment ? "К получению" : "К получению: подарки стоимостью", `${quote.payout_stars} Stars`]);
     for (const [label,value] of values) { const row=document.createElement("div"); const text=document.createElement("span");text.textContent=label;const sum=document.createElement("strong");sum.textContent=value;row.append(text,sum);card.append(row); }
-    const gifts=document.createElement("p");gifts.textContent=quote.gift_plan.map(item=>`${item.quantity} × ${item.star_count} Stars`).join(" + ");card.append(gifts);
+    const gifts=document.createElement("p");gifts.textContent=fragment ? "Администратор вручную отправит указанное количество Stars через Fragment. Создание заявки ещё не означает выплату." : (quote.gift_plan || []).map(item=>`${item.quantity} × ${item.star_count} Stars`).join(" + ");card.append(gifts);
     if (Number(quote.unspent_af) > 0) { const note=document.createElement("p");note.textContent="Неиспользованная часть суммы не резервируется и остаётся на балансе AutoFlow Market. Это не потерянные средства — они доступны в приложении согласно действующим условиям.";card.append(note); }
     output.append(card);
   }
@@ -3888,7 +3928,7 @@ async function hideCurrentConversation() {
         if (version!==(state.withdrawalQuoteVersion||0) || amount!==elements.withdrawForm.elements.amount.value) return false;
         state.withdrawalQuote=quote;state.withdrawalQuoteAmount=amount;renderWithdrawalQuote(quote,amount);button.textContent="Подтвердить заявку";return true;
       } catch(error) {
-        if (version===(state.withdrawalQuoteVersion||0)) { state.withdrawalQuote=null;output.textContent=`Не удалось рассчитать вывод. ${error.message} Нажмите «Рассчитать подарки», чтобы повторить.`;button.textContent="Рассчитать подарки"; }
+        if (version===(state.withdrawalQuoteVersion||0)) { state.withdrawalQuote=null;output.textContent=`Не удалось рассчитать вывод. ${error.message} Нажмите «Рассчитать вывод», чтобы повторить.`;button.textContent="Рассчитать вывод"; }
         return false;
       } finally { if(state.withdrawalQuoteLoading?.version===version) state.withdrawalQuoteLoading=null; }
     })();
@@ -3914,21 +3954,21 @@ async function hideCurrentConversation() {
         const request = await api.request("/withdrawals", { method: "POST", body: JSON.stringify({ quote_id: state.withdrawalQuote.quote_id, details: form.get("details") }) });
         state.withdrawalQuote = null; window.clearTimeout(state.withdrawalQuoteTimer); elements.withdrawForm.reset();
         output.textContent = withdrawalSubmissionText(request);
-        button.textContent = "Рассчитать подарки";
+        button.textContent = "Рассчитать вывод";
         try { await refreshMarketplace(); } catch (error) { notify("Заявка сохранена. Баланс временно не удалось обновить."); }
       }
     } catch (error) {
       // Keep the quote after an uncertain POST: retry uses the same server idempotency key.
       const message = error.status === 409 ? "Расчёт устарел или каталог изменился. Измените сумму и рассчитайте заново." : error.message;
       if (error.status === 409) { state.withdrawalQuote = null; output.textContent=message; }
-      notify(message); button.textContent = state.withdrawalQuote ? "Повторить подтверждение" : "Рассчитать подарки";
+      notify(message); button.textContent = state.withdrawalQuote ? "Повторить подтверждение" : "Рассчитать вывод";
     } finally { state.withdrawalBusy = false; controls.forEach(control => { control.disabled = false; }); }
   }
 
   function withdrawalSubmissionText(request) {
     const status = withdrawalStatusLabel(request.status);
     const detail = ["pending", "approved"].includes(request.status)
-      ? `Зарезервировано ${formatNumber(request.amount)} AF Coins. Ожидает ручной отправки подарков; выплата ещё не завершена.`
+      ? `Зарезервировано ${formatNumber(request.amount)} AF Coins. ${request.payout_method === "manual_fragment" ? "Ожидает ручной выплаты через Fragment" : "Ожидает ручной отправки подарков"}; выплата ещё не завершена.`
       : request.status === "paid" ? "Администратор подтвердил выполнение выплаты."
       : ["rejected", "cancelled"].includes(request.status) ? "Резерв возвращён на баланс." : "Обновите данные заявки в кошельке.";
     return `Заявка ${request.public_id}: ${status}. ${detail} Вывод в течение 24 часов.`;
@@ -4063,7 +4103,7 @@ async function hideCurrentConversation() {
     state.referralHeaderObserver?.disconnect();
     if (!active) { document.getElementById("headerAvatarName").style.removeProperty("max-width"); return; }
     state.layoutReferralHeader ||= () => {
-      if (state.currentView !== "more") return;
+      if (!["referrals", "seller-vip"].includes(state.currentView)) return;
       const name = document.getElementById("headerAvatarName"), balance = document.querySelector(".header-balance");
       // Both offsets are relative to appHeader. Reserve the real wallet width,
       // not a guessed width that fails for a long name or a large balance.
@@ -5083,13 +5123,15 @@ async function hideCurrentConversation() {
       const search = document.createElement("input"); search.name = "q"; search.placeholder = "Номер заявки: #000057"; search.setAttribute("aria-label", "Номер заявки");
       const status = document.createElement("select"); status.name = "status"; status.setAttribute("aria-label", "Статус заявки");
       [["", "Все статусы"], ["pending", "Новые"], ["approved", "В обработке"], ["paid", "Выплачены"], ["rejected", "Отклонены"], ["cancelled", "Отменены"]].forEach(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; status.append(option); });
+      const priority = document.createElement("select"); priority.name = "vip_priority"; priority.setAttribute("aria-label", "Приоритет заявки");
+      [["", "Все пользователи"], ["true", "👑 Только VIP"], ["false", "Обычные"]].forEach(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; priority.append(option); });
       const submit = document.createElement("button"); submit.textContent = "Найти / обновить"; submit.type = "submit";
-      filters.append(search, status, submit); elements.adminWithdrawals.before(filters);
+      filters.append(search, status, priority, submit); elements.adminWithdrawals.before(filters);
       filters.addEventListener("submit", event => { event.preventDefault(); void loadAdminWithdrawals(); });
     }
     const params = new URLSearchParams({ limit: "50", offset: String(offset) });
     if (withdrawalId) params.set("withdrawal_id", withdrawalId);
-    else { const data = new FormData(filters); if (data.get("q")) params.set("q", data.get("q")); if (data.get("status")) params.set("status", data.get("status")); }
+    else { const data = new FormData(filters); if (data.get("q")) params.set("q", data.get("q")); if (data.get("status")) params.set("status", data.get("status")); if (data.get("vip_priority")) params.set("vip_priority", data.get("vip_priority")); }
     elements.adminWithdrawals.textContent = "Загрузка заявок…";
     try {
       const items = await api.request(`/admin/withdrawals?${params}`); renderAdminWithdrawals(items);
@@ -5752,6 +5794,7 @@ async function hideCurrentConversation() {
       users: () => Promise.all([loadAdminUsers(), loadAdminPlatformSummary()]), listings: loadAdminListings,
       deals: loadAdminDeals, withdrawals: loadAdminWithdrawals, support: loadAdminSupport, feedback: loadAdminFeedback,
       advertisement: loadAdvertisementAdmin, training: () => loadAdminTraining(state.adminTrainingFilter), broadcasts: loadAdminBroadcasts,
+      "seller-vip": () => getMorePages().loadAdmin(),
     };
     const panel = document.querySelector(`[data-admin-panel="${tab}"]`);
     panel?.querySelector(".admin-load-error")?.remove(); panel?.setAttribute("aria-busy", "true");
@@ -5772,10 +5815,11 @@ async function hideCurrentConversation() {
     ...withdrawals.map((item) => {
       const card = document.createElement("div");
       card.className = "admin-withdrawal";
+      card.classList.toggle("admin-withdrawal--vip", Boolean(item.vip_priority));
       card.dataset.withdrawalId = item.id; card.tabIndex = -1;
 
       const title = document.createElement("strong");
-      title.textContent = `Вывод ${item.public_id} · ${withdrawalStatusLabel(item.status)}`;
+      title.textContent = `${item.vip_priority ? "👑 VIP — приоритетный вывод · " : ""}Вывод ${item.public_id} · ${withdrawalStatusLabel(item.status)}`;
 
       const user = document.createElement("span");
       const username = item.user_username
@@ -5789,11 +5833,13 @@ async function hideCurrentConversation() {
       const details = document.createElement("small");
       details.textContent =
         `${item.payout_method} · ${item.details}`;
-      if (item.gift_plan) details.textContent = `Отправить: ${item.gift_plan.map(gift => `${gift.quantity} × ${gift.star_count} Stars (ID ${gift.gift_id})`).join(" + ")}. Всего: ${item.payout_stars} Stars. Комиссия: ${formatNumber(item.fee_af)} AF. ${item.details}`;
+      if (item.payout_method === "manual_fragment") details.textContent = `Способ выплаты: Fragment (вручную). К выплате: ${item.payout_stars} Stars. Списание: ${formatNumber(item.amount)} AF. Комиссия: ${formatNumber(item.fee_af)} AF. ${item.details}`;
+      else if (item.gift_plan) details.textContent = `Способ выплаты: Telegram-подарок. Отправить: ${item.gift_plan.map(gift => `${gift.quantity} × ${gift.star_count} Stars (ID ${gift.gift_id})`).join(" + ")}. Всего: ${item.payout_stars} Stars. Комиссия: ${formatNumber(item.fee_af)} AF. ${item.details}`;
       const technical = document.createElement("details"); const summary = document.createElement("summary"); summary.textContent = "Подробности и аудит";
       const ids = document.createElement("small"); ids.textContent = `Заявка: ${item.id} · Telegram ID: ${item.user_telegram_id} · Резерв: ${formatNumber(item.amount)} AF · Ссылка выплаты: ${item.payout_reference || "не указана"}`;
       technical.append(summary, details, ids);
-      if (item.status === "approved") { const label = document.createElement("label"); label.textContent = "Ссылка/номер отправки (необязательно)"; const reference = document.createElement("input"); reference.name = "payout_reference"; reference.maxLength = 200; label.append(reference); technical.append(label); }
+      if (item.vip_snapshot?.plan_code) { const vip = document.createElement("small"); vip.textContent = `VIP при создании: ${item.vip_snapshot.plan_code} · действовал до ${item.vip_snapshot.expires_at} · приоритет сохранён`; technical.append(vip); }
+      if (item.status === "approved") { const label = document.createElement("label"); label.textContent = item.payout_method === "manual_fragment" ? "Подтверждение выплаты Fragment (обязательно)" : "Ссылка/номер отправки (необязательно)"; const reference = document.createElement("input"); reference.name = "payout_reference"; reference.maxLength = 200; reference.required = item.payout_method === "manual_fragment"; label.append(reference); technical.append(label); }
 
       const actions = document.createElement("div");
       actions.className = "admin-withdrawal__actions";
@@ -5862,6 +5908,7 @@ async function hideCurrentConversation() {
       const profile = document.createElement("a"); profile.textContent = "Открыть пользователя"; profile.href = item.profile_url; profile.target = "_blank"; profile.rel = "noopener noreferrer"; actions.append(profile);
       const contact = document.createElement("button"); contact.textContent = "Связаться через бота"; contact.onclick = () => openWithdrawalSupport(item.id, true); actions.append(contact);
       const delivery = document.createElement("small"); delivery.textContent = item.contact_delivery_status ? `Доставка сообщения поддержки: ${({ sent: "Отправлено", pending: "В очереди", sending: "Отправляется", blocked: "Пользователь заблокировал бота", failed: "Ошибка доставки", unknown: "Доставка не подтверждена — проверьте перед повтором", suppressed: "Бот недоступен пользователю" })[item.contact_delivery_status] || item.contact_delivery_status}` : "Без username открытие профиля зависит от приватности. Ответить поддержке можно в связанном обращении.";
+      card.dataset.payoutMethod = item.payout_method;
       card.append(title, payout, user, timing, technical, delivery, actions);
       return card;
     })
@@ -5876,7 +5923,8 @@ async function hideCurrentConversation() {
     let reason = null;
     try {
       if (button.dataset.withdrawalAction === "reject") { reason = window.prompt("Причина отклонения. Если часть подарков уже отправлена — не отклоняйте заявку: сначала завершите ручную сверку."); if (!reason) return; }
-      if (button.dataset.withdrawalAction === "paid" && !(await confirmCriticalAction("Подтверждаете, что ВСЕ подарки по этой заявке уже отправлены нужному пользователю? Зарезервированные AF Coins будут списаны окончательно.", "Да, все подарки отправлены"))) return;
+      const fragment = button.closest(".admin-withdrawal")?.dataset.payoutMethod === "manual_fragment";
+      if (button.dataset.withdrawalAction === "paid" && !(await confirmCriticalAction(fragment ? "Подтверждаете, что указанное количество Stars уже отправлено нужному пользователю через Fragment? Кнопка не выполняет перевод. Зарезервированные AF Coins будут списаны окончательно." : "Подтверждаете, что ВСЕ подарки по этой заявке уже отправлены нужному пользователю? Зарезервированные AF Coins будут списаны окончательно.", fragment ? "Да, выплата выполнена" : "Да, все подарки отправлены"))) return;
       const payoutReference = button.closest(".admin-withdrawal")?.querySelector('[name="payout_reference"]')?.value?.trim();
       await api.request(`/admin/withdrawals/${button.dataset.withdrawalId}/${button.dataset.withdrawalAction}`, { method: "POST", body: JSON.stringify({ reason, payout_reference: payoutReference || null }) });
       await loadAdminWithdrawals(); notify("Статус заявки обновлён");
@@ -5954,7 +6002,7 @@ async function hideCurrentConversation() {
     const value = Number(state.me?.wallet.available_balance || 0).toFixed(2);
     document.querySelectorAll("[data-balance]").forEach((node) => { node.textContent = value; });
     document.querySelector(".profile-wallet")?.classList.toggle("is-large-balance", value.length > 9);
-    if (state.currentView === "more") state.layoutReferralHeader?.();
+    if (["referrals", "seller-vip"].includes(state.currentView)) state.layoutReferralHeader?.();
   }
 
   function renderUser() {

@@ -72,6 +72,17 @@ test('publication refresh failure does not escape as a failed POST and clears su
   assert.match(notices[0], /Объявление сохранено.*не удалось обновить/);
 });
 
+test('lost free-pin response never falsely reports that the committed listing is not pinned', async () => {
+  const notices = [];
+  const c = load('async function finishListingSubmission', 'async function openListingPromotionTopup', {
+    state: {}, elements: {carForm: {reset() {}}}, renderPhotoPreviews() {},
+    refreshMarketplace: async () => [], navigate: async () => {}, notify: s => notices.push(s), reportClientError() {},
+  });
+  await c.finishListingSubmission({targetView: 'market'}, {unconfirmed: true, message: 'network'});
+  assert.match(notices[0], /Результат VIP-закрепления не удалось подтвердить/);
+  assert.doesNotMatch(notices[0], /но не закреплено/);
+});
+
 test('pending VIP after paid publication keeps form and does not throw a technical error', async () => {
   const c = load('async function publishWithQuota', 'function confirmPublication', {
     state: {}, payPublication: async () => null,

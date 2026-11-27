@@ -70,7 +70,9 @@ def configuration(monkeypatch):
 @pytest.fixture
 def account_db(configuration):
     engine = create_engine("sqlite://")
+    from app.models import SellerVipSubscription
     models = (
+        SellerVipSubscription,
         User,
         Wallet,
         AccountVideo,
