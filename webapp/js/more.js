@@ -43,13 +43,16 @@
     let purchasing = false, retryKey = null;
     const get = id => document.getElementById(id);
     function dialog(title) {
+      // A replacement shares the original lock. Native dialog close events are
+      // asynchronous: the outgoing dialog must not unlock its new successor.
+      if (!modal) lastOverflow = document.body.style.overflow;
       modal?.close();
       const el = node("dialog", null, "modal more-modal"); el.setAttribute("aria-label", title);
       const heading = node("h2", title); el.append(heading); document.body.append(el); modal = el;
-      lastOverflow = document.body.style.overflow; document.body.style.overflow = "hidden";
+      document.body.style.overflow = "hidden";
       el.addEventListener("cancel", event => { if (purchasing) event.preventDefault(); });
       el.addEventListener("click", event => { if (event.target !== el || purchasing) return; const r = el.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) el.close(); });
-      el.addEventListener("close", () => { document.body.style.overflow = lastOverflow; if (modal === el) modal = null; el.remove(); }, { once: true });
+      el.addEventListener("close", () => { if (modal === el) { document.body.style.overflow = lastOverflow; modal = null; } el.remove(); }, { once: true });
       el.showModal(); return el;
     }
     function message(title, text) { const el = dialog(title); el.append(node("p", text), button("Понятно", () => el.close(), "publish-button")); }
@@ -138,7 +141,7 @@
       try { localStorage.setItem(key, JSON.stringify({ id, fingerprint, quote: originalQuote })); } catch (_) { /* Backend still protects an active subscription. */ } return { key, id, code: plan.code, fingerprint, quote: originalQuote };
     }
     async function confirmPurchase(plan) {
-      if (purchasing || modal) return;
+      if (purchasing || modal?.open) return;
       const el = dialog("Покупка VIP"), status = node("p", "Проверяем стоимость и баланс…", "more-status"); el.append(status);
       try {
         let quote = await api.request("/seller-vip/quote", { method: "POST", body: JSON.stringify({ plan_code: plan.code }), retries: 0 });
