@@ -297,3 +297,25 @@ async def test_expiry_worker_recipient_first_avoids_outbox_user_notice_lock_inve
             assert row.status == "expired"
             assert (await session.get(Notification, warning_id)).delivery_status == "suppressed"
             assert await session.scalar(select(func.count()).select_from(Notification).where(Notification.notification_type == "seller_vip_expired")) == 1
+
+
+@pytest.mark.asyncio
+async def test_subscription_debit_appears_once_in_existing_owner_finance_without_inventing_cash_profit():
+    from app import owner_finance
+
+    async with isolated_pg() as (_, sessions):
+        user = await signed_login(sessions, 99891)
+        await seed(sessions, user.id)
+        payload = start(funding=(29, 0, 50))
+        for _ in range(2):
+            async with sessions() as session:
+                await vip.purchase(session, user.id, payload)
+        async with sessions() as session:
+            report = await owner_finance.report_data(session, user.id, all_time=True)
+            source = next(row for row in report["sources"] if row["key"] == "vip")
+            assert source["amount"] == "79.00" and source["count"] == 1 and source["unit"] == "AF"
+            assert report["summary"]["platform_income_af"] == "79.00"
+            assert report["summary"]["stars_received"] == "0.00"
+            assert report["summary"]["net_profit"] is None
+            assert len(report["operations"]) == 1
+            assert await session.scalar(select(func.count()).select_from(WalletTransaction)) == 1

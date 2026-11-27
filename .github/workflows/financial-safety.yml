@@ -34,7 +34,7 @@ jobs:
           node-version: '22'
       - run: pip install -r backend/requirements-dev.txt
       - name: Seller VIP, quota, public facts and manual withdrawal lint
-        run: python -m ruff check app/about.py app/seller_vip.py app/gift_withdrawals.py app/publication_quota.py app/listing_details.py app/message_notifications.py tests/test_more_integrations.py tests/test_seller_vip.py tests/test_seller_vip_postgres.py tests/test_withdrawal_fragment_vip.py tests/test_withdrawal_fragment_postgres.py
+        run: python -m ruff check app/about.py app/seller_vip.py app/gift_withdrawals.py app/publication_quota.py app/listing_details.py app/message_notifications.py app/owner_finance.py tests/test_more_integrations.py tests/test_seller_vip.py tests/test_seller_vip_postgres.py tests/test_withdrawal_fragment_vip.py tests/test_withdrawal_fragment_postgres.py
         working-directory: backend
       - name: Private photo authorization, limits and migration safety
         run: python -m pytest -q tests/test_private_chat_photos.py
@@ -50,6 +50,10 @@ jobs:
         run: node webapp/tests/more-vip-browser.cjs
       - name: Car detail reference, gallery, seller context, actions and nested Back history (fixtures only)
         run: node webapp/tests/listing-detail-browser.cjs
+      - name: Repeated navigation, request limits and outage recovery with 50 to 500 listings (fixtures only)
+        run: node webapp/tests/catalog-navigation-browser.cjs
+      - name: Navigation races, populated sections, resume and withdrawal help (fixtures only)
+        run: node webapp/tests/navigation-resilience-browser.cjs
       - name: Private chat photos, signed participants and real isolated PostgreSQL
         run: python -m pytest -q -s tests/test_chat_media_browser_postgres.py
         working-directory: backend
@@ -79,10 +83,6 @@ jobs:
         run: node webapp/tests/profile-reference-browser.cjs
       - name: Referral references, confirmed rewards, native share and mobile modal lifecycle (fixtures only)
         run: node webapp/tests/referral-reference-browser.cjs
-      - name: Repeated navigation, request limits and outage recovery with 50 to 500 listings (fixtures only)
-        run: node webapp/tests/catalog-navigation-browser.cjs
-      - name: Navigation races, populated sections, resume and withdrawal help (fixtures only)
-        run: node webapp/tests/navigation-resilience-browser.cjs
       - name: Automatic withdrawal quote and separate feedback admin UI (fixtures only)
         run: node webapp/tests/feedback-withdrawal-browser.cjs
       - name: Seller references, confirmation protection and owner finance (fixtures only)
