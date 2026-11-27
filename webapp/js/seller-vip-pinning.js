@@ -14,7 +14,8 @@
         const finish = value => { if (settled) return; settled = true; modal.close(); modal.remove(); dialog = null; resolve(value); };
         for (const option of options) {
           if (!(option.remaining > 0)) continue;
-          const button = node("button", `Использовать VIP: ${option.duration_hours === 72 ? "3 дня" : "1 день"} · ${option.remaining} из ${option.total} · 0 AF`, "publish-button"); button.type = "button";
+          const button = node("button", `Использовать VIP · ${option.duration_hours === 72 ? "3 дня" : "1 день"}`, "publish-button"); button.type = "button";
+          button.append(node("small", `${option.remaining} из ${option.total} · 0 AF`));
           button.onclick = () => finish(option.duration_hours); modal.append(button);
         }
         const paid = node("button", "Обычное платное закрепление", "ghost-button"); paid.type = "button"; paid.onclick = () => finish("paid"); modal.append(paid);

@@ -128,6 +128,18 @@ const server=http.createServer((req,res)=>{
    await shared.goto(url+'/?startapp=listing_'+sharedId);await shared.locator('#listingPageTitle').filter({hasText:'Объявление по ссылке'}).waitFor();
    assert.equal(await shared.locator('#listingPageBuy').innerText(),'Купить за 25 AF');await shared.evaluate(()=>testBack());await shared.locator('[data-view="market"]').waitFor({state:'visible'});await shared.close();
   }
-  assert.deepEqual(errors,[]);await context.close();console.log(`PASS car detail ${width}px: gallery/fullscreen, real server context, favorite/share/likes, pagination, A→B→C→B→A→catalog, scroll restore, missing media, retry and stale response`);
+  // The actual pinning module uses the existing modal CSS; fixtures never send AF.
+  await page.evaluate(()=>{
+   window.testPinRequests=[];window.testPinDone=false;
+   const pinning=window.AutoFlowVipPinning.create({api:{async request(url,options){if(!options)return {options:[{duration_hours:72,remaining:1,total:10,cost_af:0}],already_pinned:false};window.testPinRequests.push(JSON.parse(options.body));return {pinned_until:'2026-12-01T10:00:00Z'};}},openDialog:modal=>modal.showModal(),notify(){},requestId:()=>crypto.randomUUID(),formatDate:value=>value,refresh:async()=>{}});
+   void pinning.existing('isolated-car').then(()=>window.testPinDone=true);
+  });
+  const pinModal=page.getByRole('dialog',{name:'Закрепить объявление',exact:true});await pinModal.waitFor();
+  assert((await pinModal.innerText()).includes('1 из 10 · 0 AF'));
+  const pinBounds=await pinModal.boundingBox();assert(pinBounds.x>=0&&pinBounds.x+pinBounds.width<=width+1);
+  await page.screenshot({path:path.join(out,`seller-vip-pin-${width}.png`),fullPage:false});
+  await pinModal.getByRole('button',{name:/Использовать VIP/}).click();await page.waitForFunction(()=>window.testPinDone);
+  assert.equal(await page.evaluate(()=>window.testPinRequests.length),1);
+  assert.deepEqual(errors,[]);await context.close();console.log(`PASS car detail ${width}px: gallery/fullscreen, real server context, favorite/share/likes, pagination, A→B→C→B→A→catalog, scroll restore, missing media, retry, VIP badge/modal/free pin and stale response`);
  }}finally{await browser.close();server.close();}
 })().catch(e=>{console.error(e);server.close();process.exitCode=1;});

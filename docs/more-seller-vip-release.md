@@ -49,6 +49,7 @@
 - Локально: 635 backend tests passed, 223 skipped (нет отдельной PostgreSQL/часть браузерных интеграций запускается только CI); 255 Node tests passed. Новые SQL-тесты проверяют реальные таблицы/rollback, не mock финансовых сервисов.
 - Ruff новых серверных файлов и compileall проходят. TypeScript в проекте нет; отдельная проверка TS неприменима.
 - Реальный frontend в изолированном браузере: More/VIP/About, рефералка, существующая карточка авто/галочка и вывод на мобильных ширинах. Для More выполнены 30 последовательных переходов на каждом размере; исключений JS/горизонтального переполнения не обнаружено. Это не физический Telegram WebView на iPhone/Android.
+- Дополнительно: настоящий touch-свайп тарифов в обе стороны через CDP на 390 px; админ-GUI на 430 px — выдача 90 дней, продление на 5 дней, потерянный ответ и повтор с тем же UUID (один эффект), отключение и фильтр. Обычный пользователь не видит админ-вход. Окно бесплатного закрепления проверено визуально на 320/390/430 px.
 - PostgreSQL-тесты гонок покупки, последнего закрепления, последнего места объявления, повторного вывода/settlement, signed auth/RBAC, миграций и API включены в общий GitHub CI. Окончательный результат CI фиксируется в PR после завершения.
 - Производственный Docker build остаётся обязательным gate, без публикации/Deploy. Новые browser/Node/PG gates добавлены, прежние не удалены.
 - Полный offline Alembic SQL с самого начала упирается в старую `0033`, читающую строки через `.mappings()`; это не ошибка новых миграций. Проверять новые миграции на реальной отдельной PostgreSQL и диапазонами. SQL новой `0057` генерируется.
@@ -75,6 +76,6 @@
 - Backend: `app/about.py`, `seller_vip.py`, `models.py`, `config.py`, `main.py`, `admin_access.py`, `message_notifications.py`, `listing_details.py`, `publication_quota.py`, `publications.py`, `account_sales.py`, `gift_withdrawals.py`, `routes.py`, `services.py`, `schemas.py`.
 - Миграции: `0057_seller_vip.py`, `0058_withdrawal_methods_vip.py`.
 - Frontend: `index.html`, `js/more.js`, `js/seller-vip-pinning.js`, `js/app.js`, `js/listing-detail.js`, `js/referrals.js`, `js/help.js`, `css/more.css`, `css/listing-detail.css`, `css/style.css`.
-- Сборка/CI: `backend/scripts/build_webapp.py`, `.github/workflows/financial-safety.yml`.
+- Сборка/CI: `backend/scripts/build_webapp.py`, `backend/requirements-dev.txt` (Ruff для CI), `.github/workflows/financial-safety.yml`.
 - Новые тесты: `backend/tests/test_seller_vip.py`, `test_seller_vip_postgres.py`, `test_more_integrations.py`, `test_withdrawal_fragment_vip.py`, `test_withdrawal_fragment_postgres.py`; `webapp/tests/more-vip.test.cjs`, `more-vip-browser.cjs`, `seller-vip-pinning.test.cjs`, `withdrawal-fragment.test.cjs`.
 - Старые тестовые fixtures и проверки навигации/реферальной страницы/карточки/вывода/сборки обновлены под новые таблицы и внутренние маршруты; старые сценарии и финансовые проверки сохранены.
