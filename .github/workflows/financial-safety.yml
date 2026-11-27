@@ -54,6 +54,11 @@ jobs:
         run: node webapp/tests/catalog-navigation-browser.cjs
       - name: Navigation races, populated sections, resume and withdrawal help (fixtures only)
         run: node webapp/tests/navigation-resilience-browser.cjs
+      - name: Real publication UI, signed API and isolated PostgreSQL (no payments)
+        run: python -m pytest -q -s tests/test_publication_browser_postgres.py
+        working-directory: backend
+        env:
+          RUN_PUBLICATION_BROWSER: '1'
       - name: Private chat photos, signed participants and real isolated PostgreSQL
         run: python -m pytest -q -s tests/test_chat_media_browser_postgres.py
         working-directory: backend
@@ -90,11 +95,6 @@ jobs:
           node webapp/tests/seller-reference-browser.cjs
           node webapp/tests/deal-lifecycle-browser.cjs
           node webapp/tests/owner-finance-browser.cjs
-      - name: Real publication UI, signed API and isolated PostgreSQL (no payments)
-        run: python -m pytest -q -s tests/test_publication_browser_postgres.py
-        working-directory: backend
-        env:
-          RUN_PUBLICATION_BROWSER: '1'
       - name: Publication browser evidence
         if: always()
         uses: actions/upload-artifact@v4

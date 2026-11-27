@@ -28,6 +28,8 @@ async def test_real_publication_browser(scenario):
         seller = await signed_login(sessions, 99801)
         buyer = await signed_login(sessions, 99802)
         application = app(sessions)
+        from app.seller_vip import router as seller_vip_router
+        application.include_router(seller_vip_router)
         extra_env = {}
         if scenario == "vip-admin":
             from app import promotions, admin_operations
