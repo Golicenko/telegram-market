@@ -464,12 +464,26 @@ async def process_expiries(session, *, now=None):
     """Durable once-per-expiry outbox rows, also recovered after server downtime."""
     now = now or now_utc()
     async with session.begin():
-        subscriptions = list((await session.scalars(select(SellerVipSubscription).where(
+        candidates = (await session.execute(select(SellerVipSubscription.id, SellerVipSubscription.user_id).where(
             SellerVipSubscription.status == "active", SellerVipSubscription.expires_at <= now + timedelta(hours=24),
             (SellerVipSubscription.warning_notification_id.is_(None)) | (SellerVipSubscription.expires_at <= now),
-        ).order_by(SellerVipSubscription.expires_at, SellerVipSubscription.id).limit(100)
-            .with_for_update(skip_locked=True))).all())
-        for subscription in subscriptions:
+        ).order_by(SellerVipSubscription.expires_at, SellerVipSubscription.id).limit(100))).all()
+        for subscription_id, user_id in candidates:
+            # The generic Telegram outbox locks User -> Notification. Lock the
+            # same recipient before Subscription/old warning/new notice FK, or
+            # expiry and delivery can each wait for the other's row. Skip busy
+            # recipients and recheck next poll, including after a server restart.
+            user = await session.scalar(select(User.id).where(User.id == user_id)
+                                        .with_for_update(key_share=True, skip_locked=True))
+            if user is None:
+                continue
+            subscription = await session.scalar(select(SellerVipSubscription).where(
+                SellerVipSubscription.id == subscription_id, SellerVipSubscription.status == "active",
+                SellerVipSubscription.expires_at <= now + timedelta(hours=24),
+                (SellerVipSubscription.warning_notification_id.is_(None)) | (SellerVipSubscription.expires_at <= now),
+            ).with_for_update(skip_locked=True).execution_options(populate_existing=True))
+            if not subscription:
+                continue
             if utc(subscription.expires_at) <= now:
                 await mark_expired(session, subscription)
             elif not subscription.warning_notification_id:

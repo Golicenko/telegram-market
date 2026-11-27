@@ -245,3 +245,55 @@ async def test_about_signed_http_real_counts_no_screenshot_offsets_or_visitor_fo
             async with sessions() as session, session.begin():
                 (await session.get(Deal, deal.id)).cancelled_at = vip.now_utc()
             assert (await client.get("/api/about", headers=headers(buyer))).json()["completed_deals"] == 0
+
+
+@pytest.mark.asyncio
+async def test_expiry_worker_recipient_first_avoids_outbox_user_notice_lock_inversion():
+    from app.message_notifications import claim_delivery
+
+    async with isolated_pg() as (_, sessions):
+        user = await signed_login(sessions, 99881)
+        await seed(sessions, user.id)
+        async with sessions() as session:
+            subscription, _ = await vip.purchase(session, user.id, start(funding=(29, 0, 50)))
+        async with sessions() as session, session.begin():
+            (await session.get(User, user.id)).bot_started = True
+            row = await session.get(SellerVipSubscription, subscription.id)
+            row.starts_at = vip.now_utc() - timedelta(days=29)
+            row.expires_at = vip.now_utc() + timedelta(hours=23)
+            for notice in (await session.scalars(select(Notification))).all():
+                notice.delivery_status = "sent"
+        async with sessions() as session:
+            await vip.process_expiries(session)
+        async with sessions() as session, session.begin():
+            row = await session.get(SellerVipSubscription, subscription.id)
+            warning_id = row.warning_notification_id
+            row.expires_at = vip.now_utc() - timedelta(seconds=1)
+
+        # Simulate the generic outbox's first lock. Expiry must SKIP this user,
+        # not lock their pending warning then wait for this User FK indefinitely.
+        async with sessions() as busy, busy.begin():
+            await busy.scalar(select(User).where(User.id == user.id).with_for_update())
+            async with sessions() as worker:
+                await asyncio.wait_for(vip.process_expiries(worker), timeout=3)
+            async with sessions() as verifier:
+                assert (await verifier.get(SellerVipSubscription, subscription.id)).status == "active"
+                assert (await verifier.get(Notification, warning_id)).delivery_status == "pending"
+
+        async def expire():
+            async with sessions() as session:
+                await vip.process_expiries(session)
+
+        async def claim():
+            async with sessions() as session:
+                return await claim_delivery(session, user.id, vip.now_utc())
+
+        await asyncio.wait_for(asyncio.gather(expire(), claim(), expire()), timeout=10)
+        # A delivery claim may win the skip-locked recipient. The next poll must
+        # recover the expiry; already-suppressed warning must not be sent again.
+        await expire()
+        async with sessions() as session:
+            row = await session.get(SellerVipSubscription, subscription.id)
+            assert row.status == "expired"
+            assert (await session.get(Notification, warning_id)).delivery_status == "suppressed"
+            assert await session.scalar(select(func.count()).select_from(Notification).where(Notification.notification_type == "seller_vip_expired")) == 1
