@@ -20,4 +20,4 @@ def upgrade():
 def downgrade():
     # Money-bearing historical snapshots/quotes must not be destructively removed
     # by a code rollback. The prior application ignores these additive columns.
-    pass
+    raise RuntimeError("Roll back application code only: preserve withdrawal quotes and historical VIP snapshots.")

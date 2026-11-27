@@ -2236,7 +2236,7 @@ function handleClick(event) {
       if (vipPinHours) {
         let pinError = null;
         try { await vipPinning.use(savedListing.id, vipPinHours); }
-        catch (error) { pinError = error; }
+        catch (error) { error.unconfirmed = !Number(error.status) || Number(error.status) >= 500; pinError = error; }
         await finishListingSubmission(listingSubmission, pinError);
         return;
       }
@@ -2278,12 +2278,13 @@ function handleClick(event) {
       const refreshed = await refreshMarketplace();
       await navigate(submission.targetView);
       if (refreshed?.some(item => item.status === "rejected")) throw new Error("refresh_incomplete");
-      if (promotionError) notify(`Объявление сохранено, но не закреплено: ${promotionError.message}`);
+      if (promotionError?.unconfirmed) notify("Объявление сохранено. Результат VIP-закрепления не удалось подтвердить. Проверьте его в профиле; повторно публиковать объявление не нужно.");
+      else if (promotionError) notify(`Объявление сохранено, но не закреплено: ${promotionError.message}`);
       else notify(submission.wasEditing ? "Объявление обновлено бесплатно" : "Объявление опубликовано");
       if (submission.publishedPaidListingId) await openListingDetails(submission.publishedPaidListingId);
     } catch (error) {
       reportClientError("listing_refresh_after_commit", error);
-      notify(`Объявление сохранено${promotionError ? ", но не закреплено" : ""}, но данные не удалось обновить. Откройте раздел заново. Повторная публикация не нужна.`);
+      notify(`Объявление сохранено${promotionError && !promotionError.unconfirmed ? ", но не закреплено" : ""}, но данные не удалось обновить. Откройте раздел заново. Повторная публикация не нужна.`);
     }
   }
 
